@@ -889,11 +889,30 @@ export default function App() {
         setMesaControlStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
         return;
       }
-      persist({ ...data, mesaControl: registros });
+
+      const next = { ...(data || defaultData()), mesaControl: registros };
+      setData(next);
+
+      // Guardar directo en Supabase y mostrar el resultado real
+      const { error } = await supabase
+        .from("ventas_app_state")
+        .upsert({
+          id: STATE_ID,
+          data: next,
+          updated_at: new Date().toISOString(),
+        })
+        .select();
+
       const fechas = [...new Set(registros.map((r) => r.fecha))];
-      setMesaControlStatus(`Mesa de control cargada: ${registros.length} visitas para ${fechas.join(", ")}.`);
+      if (error) {
+        console.error("Error guardando mesa de control:", error);
+        setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
+      } else {
+        setMesaControlStatus(`Mesa de control cargada y guardada: ${registros.length} visitas para ${fechas.join(", ")}.`);
+      }
     } catch (err) {
-      setMesaControlStatus("No se pudo leer el archivo. Verifica que tenga las columnas vendedor, fecha, cliente, inicio, final, Tiempo_estancia, tipoinicio, tipofin, volumen y descuento.");
+      console.error(err);
+      setMesaControlStatus(`No se pudo procesar el archivo: ${err?.message || "revisa columnas vendedor, fecha, cliente, inicio, final, Tiempo_estancia, tipoinicio, tipofin, volumen y descuento."}`);
     }
   }
 
