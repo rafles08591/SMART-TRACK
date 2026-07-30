@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
@@ -11,8 +10,8 @@ import {
 import { createClient } from "@supabase/supabase-js";
 
 // ====== SUPABASE ======
-const SUPABASE_URL = "https://nzbsmkscvzttekwgkqz.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU";
+const SUPABASE_URL = "https://jxyosutthiuzbrmdznoa.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable__ar93u3tGlT6qILWxGTZdw_B1gt699R";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const STATE_ID = "main";
 // ======================
@@ -87,7 +86,7 @@ const USERS = [
   ...RUTAS.map((u) => ({ username: u, password: "1234", role: "vendedor" })),
   { username: "SUPERVISOR-1", password: "3030", role: "staff", puesto: "supervisor" },
   { username: "SUPERVISOR-2", password: "3030", role: "staff", puesto: "supervisor2" },
-  { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
+  { username: "GERENTE", password: "3030", role: "staff", puesto: "gerente" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -242,7 +241,8 @@ export default function App() {
           .single();
 
         if (error) {
-          console.warn("Supabase load error:", error.message);
+          console.warn("Supabase load error:", error);
+          setStatus(`Error al cargar: ${error.message} (${error.code || "?"})`);
           setData(defaultData());
           return;
         }
@@ -271,18 +271,25 @@ export default function App() {
   async function persist(next) {
     setData(next);
     try {
-      const { error } = await supabase.from("ventas_app_state").upsert({
-        id: STATE_ID,
-        data: next,
-        updated_at: new Date().toISOString(),
-      });
+      const { data: saved, error } = await supabase
+        .from("ventas_app_state")
+        .upsert({
+          id: STATE_ID,
+          data: next,
+          updated_at: new Date().toISOString(),
+        })
+        .select();
+
       if (error) {
-        console.error("Supabase save error:", error.message);
-        setStatus("Error al guardar en la nube. Intenta de nuevo.");
+        console.error("Supabase save error:", error);
+        setStatus(`Error Supabase: ${error.message} | code: ${error.code || "?"} | details: ${error.details || error.hint || "-"}`);
+      } else {
+        console.log("Guardado OK en Supabase", saved);
+        setStatus("");
       }
     } catch (err) {
-      console.error(err);
-      setStatus("Error al guardar en la nube. Intenta de nuevo.");
+      console.error("Error de red al guardar:", err);
+      setStatus(`Error de red: ${err?.message || String(err)}`);
     }
   }
 
