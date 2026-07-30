@@ -233,6 +233,8 @@ export default function App() {
   const mesaControlFileInputRef = useRef(null);
 
   useEffect(() => {
+    let channel = null;
+
     async function loadData() {
       try {
         const { data: row, error } = await supabase
@@ -249,7 +251,6 @@ export default function App() {
         }
 
         if (row && row.data && Object.keys(row.data).length > 0) {
-          // Asegura que mesaControl exista aunque venga de una versión anterior
           const loaded = { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
           setData(loaded);
         } else {
@@ -266,7 +267,33 @@ export default function App() {
         setData(defaultData());
       }
     }
+
     loadData();
+
+    // Actualización automática: cuando alguien más guarda, recibimos el cambio
+    channel = supabase
+      .channel("ventas_app_state_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ventas_app_state",
+          filter: `id=eq.${STATE_ID}`,
+        },
+        (payload) => {
+          const nuevo = payload.new?.data;
+          if (nuevo && typeof nuevo === "object") {
+            const loaded = { ...defaultData(), ...nuevo, mesaControl: nuevo.mesaControl || [] };
+            setData(loaded);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
 
   async function persist(next) {
