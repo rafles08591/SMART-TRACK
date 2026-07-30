@@ -879,21 +879,30 @@ export default function App() {
 
 
   async function handleMesaControlFile(e) {
-    const file = e.target.files?.[0];
+    // Hasta 7 archivos a la vez (uno por ruta)
+    const files = Array.from(e.target.files || []).slice(0, 7);
     e.target.value = "";
-    if (!file) return;
+    if (files.length === 0) return;
     try {
-      const filas = await parsearArchivoComoFilas(file);
-      const registros = convertirFilasMesaControl(filas);
+      setMesaControlStatus(`Procesando ${files.length} archivo${files.length > 1 ? "s" : ""}...`);
+
+      const filasPorArchivo = await Promise.all(files.map(parsearArchivoComoFilas));
+      const registros = convertirFilasMesaControl(filasPorArchivo.flat());
       if (registros.length === 0) {
-        setMesaControlStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
+        setMesaControlStatus("No se encontraron filas válidas. Revisa el formato de los archivos.");
         return;
       }
 
-      const next = { ...(data || defaultData()), mesaControl: registros };
+      // Combina con lo ya guardado: solo reemplaza la misma ruta + misma fecha.
+      const keysNuevos = new Set(registros.map((r) => `${r.vendedor}|${r.fecha}`));
+      const conservados = (data?.mesaControl || []).filter(
+        (r) => !keysNuevos.has(`${r.vendedor}|${r.fecha}`)
+      );
+      const mesaControlMerged = [...conservados, ...registros];
+
+      const next = { ...(data || defaultData()), mesaControl: mesaControlMerged };
       setData(next);
 
-      // Guardar directo en Supabase y mostrar el resultado real
       const { error } = await supabase
         .from("ventas_app_state")
         .upsert({
@@ -904,11 +913,14 @@ export default function App() {
         .select();
 
       const fechas = [...new Set(registros.map((r) => r.fecha))];
+      const rutas = [...new Set(registros.map((r) => r.vendedor))];
       if (error) {
         console.error("Error guardando mesa de control:", error);
         setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
       } else {
-        setMesaControlStatus(`Mesa de control cargada y guardada: ${registros.length} visitas para ${fechas.join(", ")}.`);
+        setMesaControlStatus(
+          `Mesa de control guardada: ${files.length} archivo${files.length > 1 ? "s" : ""}, ${registros.length} visitas (${rutas.join(", ")}) para ${fechas.join(", ")}. Total acumulado: ${mesaControlMerged.length} visitas.`
+        );
       }
     } catch (err) {
       console.error(err);
@@ -1566,7 +1578,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                   ))}
                 </select>
                 <button className="btn" onClick={() => mesaControlFileInputRef.current?.click()}>
-                  <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir mesa de control
+                  <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir mesa de control (hasta 7)
                 </button>
                 <button
                   className="btn-ghost"
@@ -1581,10 +1593,13 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                   Descargar Excel
                 </button>
               </div>
-              <input ref={mesaControlFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onMesaControlFile} />
+              <p style={{ fontSize: 12, color: "#9AA7BD", marginTop: 0, marginBottom: 12 }}>
+                Puedes seleccionar hasta 7 archivos a la vez (uno por ruta). Se combinan sin borrar las otras rutas.
+              </p>
+              <input ref={mesaControlFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onMesaControlFile} />
               {mesaControlStatus && (
-                <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: mesaControlStatus.startsWith("Mesa de control cargada") ? "#3DDC97" : "#FF6B6B" }}>
-                  {mesaControlStatus.startsWith("Mesa de control cargada") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {mesaControlStatus}
+                <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: (mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? "#3DDC97" : "#FF6B6B" }}>
+                  {(mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {mesaControlStatus}
                 </div>
               )}
               <MesaControlView
