@@ -86,8 +86,8 @@ const OTC_SIN_VUALA_MINIMO = 2;
 const USERS = [
   ...RUTAS.map((u) => ({ username: u, password: "1234", role: "vendedor" })),
   { username: "SUPERVISOR-1", password: "3030", role: "staff", puesto: "supervisor" },
-  { username: "SUPERVISOR-2", password: "3030", role: "staff", puesto: "supervisor2" },
-  { username: "GERENTE", password: "3030", role: "staff", puesto: "gerente" },
+  { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
+  { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
