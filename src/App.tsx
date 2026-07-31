@@ -114,7 +114,8 @@ function multiplicadorComision(tabla, promedio) {
   return tabla[tabla.length - 1].mult;
 }
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () =>
+  new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 
 function firstOfMonthISO() {
   const d = new Date();
