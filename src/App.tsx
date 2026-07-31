@@ -1354,6 +1354,111 @@ function DiaKpis({ hoy, mensajeDia }) {
   );
 }
 
+function TablaPorRutaHoy({ porVendedor }) {
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: 720 }}>
+      <thead>
+        <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+          <th style={{ padding: "8px 16px" }}>Vendedor</th>
+          <th>Volumen</th>
+          {MARCAS_DIA.map((m) => <th key={m.key}>{m.label}</th>)}
+          <th>OTC</th>
+          <th>Sin Vuala</th>
+          <th>Visitas</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {porVendedor.map((v) => (
+          <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
+            <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
+            <td style={{ color: metaColor(v.hoy.volumen.vendido, v.hoy.volumen.objetivo) }}>{unidades(v.hoy.volumen.vendido)}</td>
+            {MARCAS_DIA.map((m) => (
+              <td key={m.key} style={{ color: metaColor(v.hoy.marcas[m.key].vendido, v.hoy.marcas[m.key].objetivo) }}>
+                {unidades(v.hoy.marcas[m.key].vendido)}
+              </td>
+            ))}
+            <td style={{ color: metaColor(v.hoy.otc.vendido, v.hoy.otc.objetivo) }}>{money(v.hoy.otc.vendido)}</td>
+            <td>
+              <span style={{
+                display: "inline-block", minWidth: 28, textAlign: "center", borderRadius: 6, padding: "2px 6px",
+                background: v.hoy.otcSinVuala.cumple ? "#3DDC9733" : "#FF6B6B33",
+                color: v.hoy.otcSinVuala.cumple ? "#3DDC97" : "#FF6B6B",
+                fontWeight: 600,
+              }}>
+                {v.hoy.otcSinVuala.piezas}
+              </span>
+            </td>
+            <td>{v.hoy.visitasEfectivas}</td>
+            <td>{v.hoy.bajoDesempeno && <AlertCircle size={14} color="#FF6B6B" />}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Modal de pantalla completa que reescala automáticamente su contenido (con
+// CSS transform: scale) para que quepa entero en el ancho disponible, sin
+// importar el tamaño de pantalla ni la orientación. Pensado para poder tomar
+// un screenshot limpio de una tabla completa, sin que se corte nada a los
+// lados. Se recalcula al rotar el teléfono o cambiar el tamaño de ventana.
+function ModalTablaCompleta({ titulo, onClose, children }) {
+  const contenedorRef = useRef(null);
+  const contenidoRef = useRef(null);
+  const [escala, setEscala] = useState(1);
+  const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
+
+  useEffect(() => {
+    function recalcular() {
+      const contenedor = contenedorRef.current;
+      const contenido = contenidoRef.current;
+      if (!contenedor || !contenido) return;
+      // Se mide el contenido a tamaño natural (sin escalar) para calcular el factor correcto.
+      contenido.style.transform = "none";
+      const anchoDisponible = contenedor.clientWidth - 16;
+      const anchoNatural = contenido.scrollWidth;
+      const altoNatural = contenido.scrollHeight;
+      const nuevaEscala = anchoNatural > 0 ? Math.min(anchoDisponible / anchoNatural, 1) : 1;
+      setEscala(nuevaEscala);
+      setDimensiones({ ancho: anchoNatural * nuevaEscala, alto: altoNatural * nuevaEscala });
+    }
+    recalcular();
+    window.addEventListener("resize", recalcular);
+    window.addEventListener("orientationchange", recalcular);
+    return () => {
+      window.removeEventListener("resize", recalcular);
+      window.removeEventListener("orientationchange", recalcular);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [children]);
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "#0B1220", zIndex: 9999,
+        display: "flex", flexDirection: "column", padding: 14, boxSizing: "border-box",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexShrink: 0 }}>
+        <span className="display" style={{ fontSize: 15, color: "#E8EDF5" }}>{titulo}</span>
+        <button className="btn-ghost" onClick={onClose}>Cerrar</button>
+      </div>
+      <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8, flexShrink: 0 }}>
+        Gira tu teléfono en horizontal para verla más grande. La tabla se ajusta sola para que quepa completa en la pantalla — lista para tomarle screenshot.
+      </div>
+      <div ref={contenedorRef} style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
+        <div style={{ width: dimensiones.ancho || "auto", height: dimensiones.alto || "auto" }}>
+          <div ref={contenidoRef} style={{ transform: `scale(${escala})`, transformOrigin: "top left", width: "max-content" }}>
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor }) {
   const { fecha, horaInicio, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, todos } = analisis;
   const gps = tipoInicioConteo["GPS"] || 0;
@@ -1645,6 +1750,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
   const [textoMensaje, setTextoMensaje] = useState("");
   const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
   const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
+  const [verTablaHoyCompleta, setVerTablaHoyCompleta] = useState(false);
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -1860,49 +1966,22 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               )}
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>POR RUTA · HOY</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px 0", flexWrap: "wrap", gap: 8 }}>
+                  <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>POR RUTA · HOY</div>
+                  <button className="btn-ghost" onClick={() => setVerTablaHoyCompleta(true)}>
+                    Ver tabla completa (pantalla)
+                  </button>
+                </div>
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: 720 }}>
-                    <thead>
-                      <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                        <th style={{ padding: "8px 16px" }}>Vendedor</th>
-                        <th>Volumen</th>
-                        {MARCAS_DIA.map((m) => <th key={m.key}>{m.label}</th>)}
-                        <th>OTC</th>
-                        <th>Sin Vuala</th>
-                        <th>Visitas</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.porVendedor.map((v) => (
-                        <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                          <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                          <td style={{ color: metaColor(v.hoy.volumen.vendido, v.hoy.volumen.objetivo) }}>{unidades(v.hoy.volumen.vendido)}</td>
-                          {MARCAS_DIA.map((m) => (
-                            <td key={m.key} style={{ color: metaColor(v.hoy.marcas[m.key].vendido, v.hoy.marcas[m.key].objetivo) }}>
-                              {unidades(v.hoy.marcas[m.key].vendido)}
-                            </td>
-                          ))}
-                          <td style={{ color: metaColor(v.hoy.otc.vendido, v.hoy.otc.objetivo) }}>{money(v.hoy.otc.vendido)}</td>
-                          <td>
-                            <span style={{
-                              display: "inline-block", minWidth: 28, textAlign: "center", borderRadius: 6, padding: "2px 6px",
-                              background: v.hoy.otcSinVuala.cumple ? "#3DDC9733" : "#FF6B6B33",
-                              color: v.hoy.otcSinVuala.cumple ? "#3DDC97" : "#FF6B6B",
-                              fontWeight: 600,
-                            }}>
-                              {v.hoy.otcSinVuala.piezas}
-                            </span>
-                          </td>
-                          <td>{v.hoy.visitasEfectivas}</td>
-                          <td>{v.hoy.bajoDesempeno && <AlertCircle size={14} color="#FF6B6B" />}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <TablaPorRutaHoy porVendedor={stats.porVendedor} />
                 </div>
               </div>
+
+              {verTablaHoyCompleta && (
+                <ModalTablaCompleta titulo="POR RUTA · HOY" onClose={() => setVerTablaHoyCompleta(false)}>
+                  <TablaPorRutaHoy porVendedor={stats.porVendedor} />
+                </ModalTablaCompleta>
+              )}
             </>
           ) : objTab === "mesa" ? (
             <>
