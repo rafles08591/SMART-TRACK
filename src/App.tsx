@@ -997,8 +997,58 @@ export default function App() {
   }
 
 
+  // Fusiona la mesa de control ruta por ruta:
+  // - Si la ruta ya tenía registros de la MISMA fecha que trae la carga nueva,
+  //   se SUMAN (se acumulan las visitas nuevas a las existentes). Esto permite
+  //   subir un archivo por ruta, uno a la vez, y que se vayan sumando durante
+  //   el día sin perder lo que ya se había cargado.
+  // - Si la ruta tenía registros de OTRA fecha distinta a la nueva, se asume
+  //   que es un nuevo día para esa ruta y se REEMPLAZA todo lo anterior de
+  //   esa ruta por los registros nuevos.
+  // Aplica igual si se sube 1 archivo (una ruta) o hasta 7 (varias rutas).
+  // Identifica una visita de forma única (misma ruta, fecha, cliente y
+  // horario) para poder detectar si ya estaba registrada y no contarla dos
+  // veces al sumar (por ejemplo si se resube el mismo archivo sin querer).
+  function claveVisitaMesaControl(r) {
+    return `${r.vendedor}|${r.fecha}|${r.cliente}|${r.inicio}|${r.final}`;
+  }
+
+  function fusionarMesaControlPorRuta(historialActual, registrosNuevos) {
+    const porRuta = {};
+    registrosNuevos.forEach((r) => {
+      if (!porRuta[r.vendedor]) porRuta[r.vendedor] = [];
+      porRuta[r.vendedor].push(r);
+    });
+
+    let resultado = [...(historialActual || [])];
+    const resumen = [];
+
+    Object.entries(porRuta).forEach(([ruta, nuevos]) => {
+      const fechaNueva = nuevos[0]?.fecha;
+      const existentesRuta = resultado.filter((r) => r.vendedor === ruta);
+      const fechaExistente = existentesRuta[0]?.fecha;
+
+      if (existentesRuta.length === 0 || fechaExistente === fechaNueva) {
+        // No había nada de esa ruta, o es la misma fecha: se suma, pero
+        // ignorando visitas que ya estuvieran registradas exactamente igual
+        // (mismo cliente + mismo horario) para no duplicar por accidente.
+        const clavesExistentes = new Set(existentesRuta.map(claveVisitaMesaControl));
+        const nuevosSinDuplicar = nuevos.filter((r) => !clavesExistentes.has(claveVisitaMesaControl(r)));
+        const duplicados = nuevos.length - nuevosSinDuplicar.length;
+        resultado = [...resultado, ...nuevosSinDuplicar];
+        resumen.push({ ruta, fecha: fechaNueva, accion: "sumado", agregados: nuevosSinDuplicar.length, duplicados });
+      } else {
+        // Fecha distinta a la que ya había para esa ruta: se reemplaza.
+        resultado = resultado.filter((r) => r.vendedor !== ruta).concat(nuevos);
+        resumen.push({ ruta, fecha: fechaNueva, accion: "reemplazado", agregados: nuevos.length, duplicados: 0 });
+      }
+    });
+
+    return { historial: resultado, resumen };
+  }
+
   async function handleMesaControlFile(e) {
-    // Hasta 7 archivos a la vez (uno por ruta)
+    // Hasta 7 archivos a la vez (uno por ruta), o se puede subir de 1 en 1.
     const files = Array.from(e.target.files || []).slice(0, 7);
     e.target.value = "";
     if (files.length === 0) return;
@@ -1012,12 +1062,7 @@ export default function App() {
         return;
       }
 
-      // Combina con lo ya guardado: solo reemplaza la misma ruta + misma fecha.
-      const keysNuevos = new Set(registros.map((r) => `${r.vendedor}|${r.fecha}`));
-      const conservados = (data?.mesaControl || []).filter(
-        (r) => !keysNuevos.has(`${r.vendedor}|${r.fecha}`)
-      );
-      const mesaControlMerged = [...conservados, ...registros];
+      const { historial: mesaControlMerged, resumen } = fusionarMesaControlPorRuta(data?.mesaControl || [], registros);
 
       const next = { ...(data || defaultData()), mesaControl: mesaControlMerged };
       setData(next);
@@ -1031,14 +1076,21 @@ export default function App() {
         })
         .select();
 
-      const fechas = [...new Set(registros.map((r) => r.fecha))];
-      const rutas = [...new Set(registros.map((r) => r.vendedor))];
       if (error) {
         console.error("Error guardando mesa de control:", error);
         setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
       } else {
+        const detalle = resumen
+          .map((r) => {
+            if (r.accion === "sumado") {
+              const nota = r.duplicados > 0 ? ` (se ignoraron ${r.duplicados} ya registradas)` : "";
+              return `${r.ruta} ${r.fecha}: +${r.agregados} sumadas${nota}`;
+            }
+            return `${r.ruta} ${r.fecha}: reemplazó datos anteriores de la ruta (${r.agregados} visitas)`;
+          })
+          .join(" · ");
         setMesaControlStatus(
-          `Mesa de control guardada: ${files.length} archivo${files.length > 1 ? "s" : ""}, ${registros.length} visitas (${rutas.join(", ")}) para ${fechas.join(", ")}. Total acumulado: ${mesaControlMerged.length} visitas.`
+          `Mesa de control guardada: ${files.length} archivo${files.length > 1 ? "s" : ""}. ${detalle}. Total acumulado: ${mesaControlMerged.length} visitas.`
         );
       }
     } catch (err) {
