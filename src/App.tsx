@@ -231,8 +231,14 @@ function defaultData() {
     mesaControl: [],
     mensajesDia: {},
     mensajesSupervisores: {},
-    cuponera: { imagen: null, descripcion: "", actualizadoPor: null, actualizadoFecha: null },
-    canjesCupones: {},
+    // Listado de promociones (antes era una sola imagen/descripción). Cada
+    // promoción tiene su propio código, que debe coincidir exactamente con
+    // el QR escaneado para considerarse un cupón válido.
+    promociones: [],
+    // Log de cada canje válido (no un simple contador), para poder mostrar
+    // cantidad Y descripción de la promoción canjeada en el Excel. Se
+    // reinicia cada vez que arranca un nuevo periodo (ver updatePeriodo).
+    cuponesRedimidos: [],
     periodo: { inicio: firstOfMonthISO(), fin: lastOfMonthISO() },
   };
 }
@@ -1770,7 +1776,15 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
     });
   }
   function updatePeriodo(field, val) {
-    persist({ ...data, periodo: { ...data.periodo, [field]: val } });
+    // Al iniciar/editar el periodo se reinicia el conteo de cupones
+    // canjeados por ruta (data.cuponesRedimidos), para que la información
+    // de un periodo anterior no se mezcle con la del nuevo. Por eso conviene
+    // descargar el Excel de canjes ANTES de cambiar las fechas del periodo.
+    persist({
+      ...data,
+      periodo: { ...data.periodo, [field]: val },
+      cuponesRedimidos: [],
+    });
   }
   function agregarDiaNoLaborable(fecha) {
     if (!fecha) return;
