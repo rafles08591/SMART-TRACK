@@ -6,6 +6,11 @@ import { Html5QrcodeScanner } from "html5-qrcode";
 const todayISO = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 
+// Límite de tamaño de imagen para no inflar el JSON que se guarda en Supabase
+// (la imagen viaja en base64 dentro de "data", y "data" se reenvía completo
+// en cada persist() de cualquier pantalla de la app).
+const MAX_IMAGEN_MB = 3;
+
 function LectorQR({ onResult, onClose }) {
   const contenedorId = "qr-reader-cuponera";
   const scannerRef = useRef(null);
@@ -19,10 +24,15 @@ function LectorQR({ onResult, onClose }) {
     scannerRef.current = scanner;
     scanner.render(
       (decodedText) => {
-        try { scanner.clear(); } catch { /* ignorar */ }
+        // clear() es asíncrono: se maneja con .catch() en vez de try/catch síncrono.
+        scanner.clear().catch(() => {
+          /* ignorar error de limpieza, ya se va a desmontar */
+        });
         onResult(decodedText);
       },
-      () => { /* frame sin código */ }
+      () => {
+        /* frame sin código, no hacer nada */
+      }
     );
 
     return () => {
@@ -52,16 +62,31 @@ function LectorQR({ onResult, onClose }) {
  */
 export default function CuponeraView({ data, persist, puesto, rol, rutaActual, revisorNombre, nombres = {} }) {
   const [escaneando, setEscaneando] = useState(false);
-  const [cuponLeido, setCuponLeido] = useState(null);
+  const [cuponLeido, setCuponLeido] = useState(null); // { texto, valido, motivo? }
   const [descTemp, setDescTemp] = useState(data.cuponera?.descripcion || "");
   const fileRef = useRef(null);
   const puedeSubir = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
   const cupon = data.cuponera || {};
 
+  // FIX: useState solo toma el valor inicial una vez. Si otro dispositivo/usuario
+  // actualiza la promoción vía Supabase realtime, sin este efecto el textarea
+  // se queda con el texto viejo y un "Guardar descripción" local lo pisaría.
+  useEffect(() => {
+    setDescTemp(data.cuponera?.descripcion || "");
+    // Se resincroniza cuando cambia el registro remoto (fecha/autor de actualización).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.cuponera?.actualizadoFecha, data.cuponera?.actualizadoPor]);
+
   function handleSubirImagen(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+
+    if (file.size > MAX_IMAGEN_MB * 1024 * 1024) {
+      alert(`La imagen pesa más de ${MAX_IMAGEN_MB}MB. Usa una imagen más ligera (se guarda en la base de datos compartida).`);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       persist({
@@ -97,13 +122,33 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
     });
   }
 
+  // FIX: antes cualquier texto de QR se marcaba como "CUPÓN VÁLIDO" y sumaba
+  // canje sin control. Ahora se valida contra un registro de códigos ya
+  // canjeados (data.cuponesCanjeados) para evitar doble conteo del mismo código.
   function onQrResult(texto) {
     setEscaneando(false);
-    setCuponLeido(texto);
+    const codigo = (texto || "").trim();
+    const yaCanjeado = (data.cuponesCanjeados || {})[codigo];
+
+    if (yaCanjeado) {
+      setCuponLeido({
+        texto: codigo,
+        valido: false,
+        motivo: `Este cupón ya fue canjeado el ${yaCanjeado.fecha} por ${yaCanjeado.ruta}.`,
+      });
+      return;
+    }
+
+    setCuponLeido({ texto: codigo, valido: true });
+
     if (rol === "vendedor" && rutaActual) {
       const actuales = data.canjesCupones || {};
-      const nuevo = { ...actuales, [rutaActual]: (actuales[rutaActual] || 0) + 1 };
-      persist({ ...data, canjesCupones: nuevo });
+      const nuevoCanjes = { ...actuales, [rutaActual]: (actuales[rutaActual] || 0) + 1 };
+      const nuevosCodigos = {
+        ...(data.cuponesCanjeados || {}),
+        [codigo]: { ruta: rutaActual, fecha: todayISO() },
+      };
+      persist({ ...data, canjesCupones: nuevoCanjes, cuponesCanjeados: nuevosCodigos });
     }
   }
 
@@ -171,14 +216,34 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
         )}
 
         {cuponLeido && (
-          <div style={{ marginTop: 16, padding: 14, border: "1px solid #3DDC97", borderRadius: 10 }}>
+          <div
+            style={{
+              marginTop: 16,
+              padding: 14,
+              border: `1px solid ${cuponLeido.valido ? "#3DDC97" : "#FF6B6B"}`,
+              borderRadius: 10,
+            }}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <CheckCircle2 size={16} color="#3DDC97" />
-              <span className="display" style={{ fontSize: 13, color: "#3DDC97" }}>CUPÓN VÁLIDO</span>
+              {cuponLeido.valido ? (
+                <CheckCircle2 size={16} color="#3DDC97" />
+              ) : (
+                <Ban size={16} color="#FF6B6B" />
+              )}
+              <span className="display" style={{ fontSize: 13, color: cuponLeido.valido ? "#3DDC97" : "#FF6B6B" }}>
+                {cuponLeido.valido ? "CUPÓN VÁLIDO" : "CUPÓN YA CANJEADO"}
+              </span>
             </div>
-            {cupon.imagen && <img src={cupon.imagen} alt="Promoción" style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 8 }} />}
-            {cupon.descripcion && <p style={{ fontSize: 13, color: "#E8EDF5" }}>{cupon.descripcion}</p>}
-            <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>Código leído: {cuponLeido}</div>
+            {cuponLeido.valido && cupon.imagen && (
+              <img src={cupon.imagen} alt="Promoción" style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 8 }} />
+            )}
+            {cuponLeido.valido && cupon.descripcion && (
+              <p style={{ fontSize: 13, color: "#E8EDF5" }}>{cupon.descripcion}</p>
+            )}
+            {!cuponLeido.valido && (
+              <p style={{ fontSize: 13, color: "#E8EDF5" }}>{cuponLeido.motivo}</p>
+            )}
+            <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>Código leído: {cuponLeido.texto}</div>
           </div>
         )}
       </div>
