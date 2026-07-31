@@ -6,17 +6,14 @@ import {
 } from "recharts";
 import {
   Truck, Target, Users, Upload, LogOut, Star, MapPin, Flag,
-  Plus, Trash2, Calendar, ChevronRight, AlertCircle, CheckCircle2, Clock, MessageSquare,
+  Plus, Trash2, Calendar, ChevronRight, AlertCircle, CheckCircle2, Clock,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
 // ====== SUPABASE ======
-// Reemplaza estos dos valores por los de tu propio proyecto de Supabase.
 const SUPABASE_URL = "https://jxyosutthiuzbrmdznoa.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable__ar93u3tGlT6qILWxGTZdw_B1gt699R";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// Requiere una tabla "ventas_app_state" con columnas: id (text, PK), data (jsonb), updated_at (timestamptz)
-// y Realtime habilitado sobre esa tabla para la sincronización instantánea entre usuarios.
 const STATE_ID = "main";
 // ======================
 
@@ -89,8 +86,8 @@ const OTC_SIN_VUALA_MINIMO = 2;
 const USERS = [
   ...RUTAS.map((u) => ({ username: u, password: "1234", role: "vendedor" })),
   { username: "SUPERVISOR-1", password: "3030", role: "staff", puesto: "supervisor" },
-  { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
-  { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
+  { username: "SUPERVISOR-2", password: "3030", role: "staff", puesto: "supervisor2" },
+  { username: "GERENTE", password: "3030", role: "staff", puesto: "gerente" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -114,40 +111,43 @@ function multiplicadorComision(tabla, promedio) {
   return tabla[tabla.length - 1].mult;
 }
 
-const todayISO = () =>
-  new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+// Fecha en zona horaria de México (no UTC), para que el día cambie a las 12:00 am local
+const TZ_MX = "America/Mexico_City";
+const todayISO = () => new Date().toLocaleDateString("en-CA", { timeZone: TZ_MX });
 
 function firstOfMonthISO() {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
+  const [y, m] = todayISO().split("-").map(Number);
+  return `${y}-${String(m).padStart(2, "0")}-01`;
 }
 function lastOfMonthISO() {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const [y, m] = todayISO().split("-").map(Number);
+  const last = new Date(y, m, 0); // día 0 del mes siguiente = último del mes actual
+  const dd = String(last.getDate()).padStart(2, "0");
+  return `${y}-${String(m).padStart(2, "0")}-${dd}`;
 }
 
-// Cuenta días hábiles (Lun-Sáb, excluyendo domingos y festivos/descansos) entre
-// "inicio" y "fin", inclusive en ambos extremos.
-function diasHabilesEntre(inicio, fin, diasNoLaborables) {
-  const excluidos = new Set(diasNoLaborables || []);
-  const start = new Date(inicio + "T00:00:00");
-  const end = new Date(fin + "T00:00:00");
-  if (start > end) return 0;
-  let count = 0;
-  const cur = new Date(start);
-  while (cur <= end) {
-    const iso = cur.toISOString().slice(0, 10);
-    if (cur.getDay() !== 0 && !excluidos.has(iso)) count++;
-    cur.setDate(cur.getDate() + 1);
-  }
-  return count;
+function toISODateLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 // Cuenta días hábiles (Lun-Sáb, excluyendo domingos) entre hoy y "fin", inclusive.
 // diasNoLaborables: array de fechas "YYYY-MM-DD" (festivos o descansos extraordinarios)
-// que también se descuentan del conteo, aunque caigan en Lun-Sáb.
 function diasRestantes(fin, diasNoLaborables) {
-  return diasHabilesEntre(todayISO(), fin, diasNoLaborables);
+  const excluidos = new Set(diasNoLaborables || []);
+  const end = new Date(fin + "T12:00:00");
+  const start = new Date(todayISO() + "T12:00:00");
+  if (start > end) return 0;
+  let count = 0;
+  const cur = new Date(start);
+  while (cur <= end) {
+    const iso = toISODateLocal(cur);
+    if (cur.getDay() !== 0 && !excluidos.has(iso)) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
 }
 
 const money = (n) =>
@@ -219,8 +219,6 @@ function defaultData() {
     diasNoLaborables: [],
     otcSemanal: [],
     mesaControl: [],
-    mensajesDia: {},
-    mensajesSupervisores: {},
     periodo: { inicio: firstOfMonthISO(), fin: lastOfMonthISO() },
   };
 }
@@ -282,7 +280,7 @@ export default function App() {
 
     loadData();
 
-    // Actualización automática: cuando alguien más guarda, recibimos el cambio en tiempo real
+    // Actualización automática: cuando alguien más guarda, recibimos el cambio
     channel = supabase
       .channel("ventas_app_state_changes")
       .on(
@@ -339,18 +337,11 @@ export default function App() {
   const otcDia = data?.otcDia || [];
   const otcSemanal = data?.otcSemanal || [];
   const mesaControl = data?.mesaControl || [];
-  const mensajesDia = data?.mensajesDia || {};
   const diasNoLaborables = data?.diasNoLaborables || [];
   const periodo = data?.periodo || { inicio: firstOfMonthISO(), fin: lastOfMonthISO() };
 
   const stats = useMemo(() => {
     const restantes = diasRestantes(periodo.fin, diasNoLaborables);
-    const diasLaborablesTotal = diasHabilesEntre(periodo.inicio, periodo.fin, diasNoLaborables);
-    const hoyCapado = todayISO() > periodo.fin ? periodo.fin : todayISO();
-    const diasTranscurridos = diasHabilesEntre(periodo.inicio, hoyCapado, diasNoLaborables);
-    function proyectar(avance) {
-      return diasTranscurridos > 0 ? (avance / diasTranscurridos) * diasLaborablesTotal : avance;
-    }
     const fechasRef = [...avanceDia.map((r) => r.fecha), ...otcDia.map((r) => r.fecha)];
     const fechaHoyRef = fechasRef.length
       ? fechasRef.reduce((max, f) => (f > max ? f : max), fechasRef[0])
@@ -428,26 +419,6 @@ export default function App() {
         champions: tabMetrics(champions, paquetesTotal),
       };
 
-      // Proyección al cierre de mes: avance ÷ días transcurridos × días laborables del periodo
-      const proyectadoPaquetes = proyectar(paquetesTotal);
-      const proyeccionMarcasOpen = {};
-      MARCAS_OPEN.forEach((m) => {
-        const proyectado = proyectar(marcasOpen[m.key].vendido);
-        proyeccionMarcasOpen[m.key] = { objetivo: marcasOpen[m.key].objetivo, proyectado, cumple: proyectado >= marcasOpen[m.key].objetivo };
-      });
-      const proyeccionMarcasChampions = {};
-      MARCAS_CHAMPIONS.forEach((m) => {
-        const proyectado = proyectar(marcasChampions[m.key].vendido);
-        proyeccionMarcasChampions[m.key] = { objetivo: marcasChampions[m.key].objetivo, proyectado, cumple: proyectado >= marcasChampions[m.key].objetivo };
-      });
-      const proyeccion = {
-        max: { objetivo: maxObjetivo, proyectado: proyectadoPaquetes, cumple: proyectadoPaquetes >= maxObjetivo },
-        open: { objetivo: open, proyectado: proyectadoPaquetes, cumple: proyectadoPaquetes >= open },
-        champions: { objetivo: champions, proyectado: proyectadoPaquetes, cumple: proyectadoPaquetes >= champions },
-        marcasOpen: proyeccionMarcasOpen,
-        marcasChampions: proyeccionMarcasChampions,
-      };
-
       // Avance del día — viene exclusivamente de avanceDia y otcDia, nunca de las ventas de OPEN/CHAMPIONS/MAX
       const propiasAvanceDia = avanceDia.filter(
         (r) => r.fecha === fechaHoyRef && r.vendedor.trim().toLowerCase() === v.name.trim().toLowerCase()
@@ -499,7 +470,7 @@ export default function App() {
         .sort(([a], [b]) => (a > b ? 1 : -1))
         .map(([fecha, paquetes]) => ({ fecha: fecha.slice(5), paquetes }));
 
-      return { ...v, volumenVentas, paquetesTotal, visitasEfectivas, volumenEstrategicas, marcasOpen, marcasChampions, champVendido, marcaOtc, ventaOtcSemanal, tasaComisionOtc, comisionOtc, hoy, tabs, proyeccion, ventaPorDia, ventaPorDiaUnidades };
+      return { ...v, volumenVentas, paquetesTotal, visitasEfectivas, volumenEstrategicas, marcasOpen, marcasChampions, champVendido, marcaOtc, ventaOtcSemanal, tasaComisionOtc, comisionOtc, hoy, tabs, ventaPorDia, ventaPorDiaUnidades };
     });
 
     const totalTabs = {};
@@ -598,30 +569,7 @@ export default function App() {
       .sort(([a], [b]) => (a > b ? 1 : -1))
       .map(([fecha, paquetes]) => ({ fecha: fecha.slice(5), paquetes }));
 
-    // Proyección de equipo (suma de proyecciones individuales vs. suma de objetivos)
-    const totalProyeccion = {};
-    ["max", "open", "champions"].forEach((tabKey) => {
-      const objetivo = porVendedor.reduce((s, v) => s + v.proyeccion[tabKey].objetivo, 0);
-      const proyectado = porVendedor.reduce((s, v) => s + v.proyeccion[tabKey].proyectado, 0);
-      totalProyeccion[tabKey] = { objetivo, proyectado, cumple: proyectado >= objetivo };
-    });
-    const totalProyeccionMarcasOpen = {};
-    MARCAS_OPEN.forEach((m) => {
-      const objetivo = porVendedor.reduce((s, v) => s + v.proyeccion.marcasOpen[m.key].objetivo, 0);
-      const proyectado = porVendedor.reduce((s, v) => s + v.proyeccion.marcasOpen[m.key].proyectado, 0);
-      totalProyeccionMarcasOpen[m.key] = { objetivo, proyectado, cumple: proyectado >= objetivo };
-    });
-    const totalProyeccionMarcasChampions = {};
-    MARCAS_CHAMPIONS.forEach((m) => {
-      const objetivo = porVendedor.reduce((s, v) => s + v.proyeccion.marcasChampions[m.key].objetivo, 0);
-      const proyectado = porVendedor.reduce((s, v) => s + v.proyeccion.marcasChampions[m.key].proyectado, 0);
-      totalProyeccionMarcasChampions[m.key] = { objetivo, proyectado, cumple: proyectado >= objetivo };
-    });
-    totalProyeccion.marcasOpen = totalProyeccionMarcasOpen;
-    totalProyeccion.marcasChampions = totalProyeccionMarcasChampions;
-    total.proyeccion = totalProyeccion;
-
-    return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal };
+    return { porVendedor, total, restantes };
   }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo]);
 
   async function handleOtcSemanalFile(e) {
@@ -1087,7 +1035,6 @@ export default function App() {
           periodo={periodo}
           restantes={stats.restantes}
           mesaControl={mesaControl}
-          mensajeDia={mensajesDia[stats.porVendedor.find((v) => v.id === currentVendorId)?.name]}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
         />
       )}
@@ -1218,22 +1165,10 @@ function MarcasBreakdown({ titulo, marcas, data }) {
   );
 }
 
-function DiaKpis({ hoy, mensajeDia }) {
+function DiaKpis({ hoy }) {
   return (
     <>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {hoy.fecha}</div>
-      {mensajeDia && mensajeDia.texto && (
-        <div className="card" style={{ padding: 14, marginBottom: 16, border: "1px solid #F2B134" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <MessageSquare size={16} color="#F2B134" />
-            <span className="display" style={{ fontSize: 13, color: "#F2B134" }}>MENSAJE DEL SUPERVISOR</span>
-          </div>
-          <div style={{ fontSize: 14, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{mensajeDia.texto}</div>
-          <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
-            {mensajeDia.autor ? `${mensajeDia.autor} · ` : ""}{mensajeDia.fecha}
-          </div>
-        </div>
-      )}
       {hoy.bajoDesempeno && (
         <div className="card" style={{ padding: 14, marginBottom: 16, border: "1px solid #FF6B6B", display: "flex", alignItems: "center", gap: 8 }}>
           <AlertCircle size={16} color="#FF6B6B" />
@@ -1441,7 +1376,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
   );
 }
 
-function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, onLogout }) {
+function VendorView({ vendedor, periodo, restantes, mesaControl, onLogout }) {
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
@@ -1460,7 +1395,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, onL
       <ObjetivoTabs tab={tab} setTab={setTab} />
 
       {tab === "dia" ? (
-        <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} />
+        <DiaKpis hoy={vendedor.hoy} />
       ) : tab === "mesa" ? (
         <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} />
       ) : (
@@ -1528,10 +1463,6 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
   const [newChampions, setNewChampions] = useState("");
   const [nuevoFestivo, setNuevoFestivo] = useState("");
   const [rutaMesaSeleccionada, setRutaMesaSeleccionada] = useState(data.vendedores[0]?.name || "");
-  const [rutaMensajeSeleccionada, setRutaMensajeSeleccionada] = useState(data.vendedores[0]?.name || "");
-  const [textoMensaje, setTextoMensaje] = useState("");
-  const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
-  const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -1565,38 +1496,6 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
 
   const revisorNombre = NOMBRES[staffUsername] || staffUsername || "Staff";
 
-  function enviarMensajeDia(vendedorName, texto) {
-    if (!texto.trim()) return;
-    persist({
-      ...data,
-      mensajesDia: {
-        ...(data.mensajesDia || {}),
-        [vendedorName]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
-      },
-    });
-  }
-  function quitarMensajeDia(vendedorName) {
-    const copia = { ...(data.mensajesDia || {}) };
-    delete copia[vendedorName];
-    persist({ ...data, mensajesDia: copia });
-  }
-
-  function enviarMensajeSupervisor(username, texto) {
-    if (!texto.trim()) return;
-    persist({
-      ...data,
-      mensajesSupervisores: {
-        ...(data.mensajesSupervisores || {}),
-        [username]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
-      },
-    });
-  }
-  function quitarMensajeSupervisor(username) {
-    const copia = { ...(data.mensajesSupervisores || {}) };
-    delete copia[username];
-    persist({ ...data, mensajesSupervisores: copia });
-  }
-
   function descargarExcelMesaControl(analisis, rutaNombre, vendedorNombre, revisor) {
     if (!analisis) return;
     const encabezado = [
@@ -1625,7 +1524,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
       <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} />
 
       <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
-        {(esSupervisor2 ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
+        {(esSupervisor2 ? [["resumen","Resumen"]] : [["resumen","Resumen"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={tab===k ? "btn" : "btn-ghost"} style={{ fontSize: 13 }}>{l}</button>
         ))}
@@ -1661,90 +1560,6 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                 <KpiCard icon={<Star size={14} />} label="OTC sin Vuala" value={`${stats.total.hoy.otcSinVuala.rutasQueCumplen} / ${stats.total.hoy.otcSinVuala.totalRutas} rutas`} accent={stats.total.hoy.otcSinVuala.rutasQueCumplen === stats.total.hoy.otcSinVuala.totalRutas ? "#3DDC97" : "#FF6B6B"} />
                 <KpiCard icon={<MapPin size={14} />} label="VISITAS EFECTIVAS" value={stats.total.hoy.visitasEfectivas} />
               </div>
-
-              <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                  <MessageSquare size={16} color="#F2B134" />
-                  <span className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>MENSAJE PARA LA RUTA</span>
-                </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-                  <select value={rutaMensajeSeleccionada} onChange={(e) => { setRutaMensajeSeleccionada(e.target.value); setTextoMensaje(""); }} style={{ flex: 1, minWidth: 200 }}>
-                    {data.vendedores.map((v) => (
-                      <option key={v.id} value={v.name}>{v.name}{NOMBRES[v.name] ? ` — ${NOMBRES[v.name]}` : ""}</option>
-                    ))}
-                  </select>
-                </div>
-                {data.mensajesDia?.[rutaMensajeSeleccionada] && (
-                  <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>
-                    Mensaje actual ({data.mensajesDia[rutaMensajeSeleccionada].fecha} · {data.mensajesDia[rutaMensajeSeleccionada].autor}):
-                    <div style={{ color: "#E8EDF5", marginTop: 4, whiteSpace: "pre-wrap" }}>{data.mensajesDia[rutaMensajeSeleccionada].texto}</div>
-                  </div>
-                )}
-                <textarea
-                  value={textoMensaje}
-                  onChange={(e) => setTextoMensaje(e.target.value)}
-                  placeholder="Escribe una indicación para esta ruta (se verá en su pestaña DÍA)..."
-                  rows={3}
-                  style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, resize: "vertical", color: "#000000", background: "#FFFFFF" }}
-                />
-                <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                  <button className="btn" onClick={() => { enviarMensajeDia(rutaMensajeSeleccionada, textoMensaje); setTextoMensaje(""); }}>
-                    Enviar mensaje
-                  </button>
-                  {data.mensajesDia?.[rutaMensajeSeleccionada] && (
-                    <button className="btn-ghost" onClick={() => quitarMensajeDia(rutaMensajeSeleccionada)}>Quitar mensaje</button>
-                  )}
-                </div>
-              </div>
-
-              {puesto === "gerente" && (
-                <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <MessageSquare size={16} color="#F2B134" />
-                    <span className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>MENSAJE PARA SUPERVISOR</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-                    <select value={supervisorMensajeSeleccionado} onChange={(e) => { setSupervisorMensajeSeleccionado(e.target.value); setTextoMensajeSupervisor(""); }} style={{ flex: 1, minWidth: 200 }}>
-                      <option value="SUPERVISOR-1">SUPERVISOR-1{NOMBRES["SUPERVISOR-1"] ? ` — ${NOMBRES["SUPERVISOR-1"]}` : ""}</option>
-                      <option value="SUPERVISOR-2">SUPERVISOR-2{NOMBRES["SUPERVISOR-2"] ? ` — ${NOMBRES["SUPERVISOR-2"]}` : ""}</option>
-                    </select>
-                  </div>
-                  {data.mensajesSupervisores?.[supervisorMensajeSeleccionado] && (
-                    <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>
-                      Mensaje actual ({data.mensajesSupervisores[supervisorMensajeSeleccionado].fecha} · {data.mensajesSupervisores[supervisorMensajeSeleccionado].autor}):
-                      <div style={{ color: "#E8EDF5", marginTop: 4, whiteSpace: "pre-wrap" }}>{data.mensajesSupervisores[supervisorMensajeSeleccionado].texto}</div>
-                    </div>
-                  )}
-                  <textarea
-                    value={textoMensajeSupervisor}
-                    onChange={(e) => setTextoMensajeSupervisor(e.target.value)}
-                    placeholder="Escribe una indicación para este supervisor (la verá al entrar a su pestaña DÍA)..."
-                    rows={3}
-                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, resize: "vertical", color: "#000000", background: "#FFFFFF" }}
-                  />
-                  <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                    <button className="btn" onClick={() => { enviarMensajeSupervisor(supervisorMensajeSeleccionado, textoMensajeSupervisor); setTextoMensajeSupervisor(""); }}>
-                      Enviar mensaje
-                    </button>
-                    {data.mensajesSupervisores?.[supervisorMensajeSeleccionado] && (
-                      <button className="btn-ghost" onClick={() => quitarMensajeSupervisor(supervisorMensajeSeleccionado)}>Quitar mensaje</button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {(puesto === "supervisor" || puesto === "supervisor2") && data.mensajesSupervisores?.[staffUsername] && (
-                <div className="card" style={{ padding: 14, marginBottom: 20, border: "1px solid #F2B134" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <MessageSquare size={16} color="#F2B134" />
-                    <span className="display" style={{ fontSize: 13, color: "#F2B134" }}>MENSAJE DEL GERENTE</span>
-                  </div>
-                  <div style={{ fontSize: 14, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{data.mensajesSupervisores[staffUsername].texto}</div>
-                  <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
-                    {data.mensajesSupervisores[staffUsername].autor} · {data.mensajesSupervisores[staffUsername].fecha}
-                  </div>
-                </div>
-              )}
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>POR RUTA · HOY</div>
@@ -1875,162 +1690,30 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>POR VENDEDOR ({OBJETIVO_TABS.find(t=>t.key===objTab).label})</div>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: (objTab === "open" || objTab === "champions") ? 760 : undefined }}>
-                    <thead>
-                      <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                        <th style={{ padding: "8px 16px" }}>Vendedor</th>
-                        <th>Avance</th>
-                        <th>Resta</th>
-                        <th>Necesario/día</th>
-                        {objTab === "open" && MARCAS_OPEN.map((m) => <th key={m.key}>{m.label}</th>)}
-                        {objTab === "champions" && MARCAS_CHAMPIONS.map((m) => <th key={m.key}>{m.label}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                  {stats.porVendedor.map((v) => (
-                    <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                      <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                      <td>{v.tabs[objTab].avancePct.toFixed(0)}%</td>
-                      <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
-                      <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
-                      {objTab === "open" && MARCAS_OPEN.map((m) => (
-                        <td key={m.key} style={{ color: metaColor(v.marcasOpen[m.key].vendido, v.marcasOpen[m.key].objetivo) }}>
-                          {unidades(v.marcasOpen[m.key].vendido)} / {unidades(v.marcasOpen[m.key].objetivo)}
-                        </td>
-                      ))}
-                      {objTab === "champions" && MARCAS_CHAMPIONS.map((m) => (
-                        <td key={m.key} style={{ color: metaColor(v.marcasChampions[m.key].vendido, v.marcasChampions[m.key].objetivo) }}>
-                          {unidades(v.marcasChampions[m.key].vendido)} / {unidades(v.marcasChampions[m.key].objetivo)}
-                        </td>
-                      ))}
-                    </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      {tab === "proyectado" && (
-        <div>
-          <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 6 }}>PROYECCIÓN AL CIERRE DE MES</div>
-            <p style={{ fontSize: 12, color: "#9AA7BD", margin: 0 }}>
-              Proyectado = avance ÷ días transcurridos × días laborables del periodo.
-              Días transcurridos: <span className="mono" style={{ color: "#E8EDF5" }}>{stats.diasTranscurridos}</span> de <span className="mono" style={{ color: "#E8EDF5" }}>{stats.diasLaborablesTotal}</span> días hábiles del periodo (Lun-Sáb).
-            </p>
-          </div>
-
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-            {OBJETIVO_TABS.filter((t) => ["max", "open", "champions"].includes(t.key)).map((t) => {
-              const p = stats.total.proyeccion[t.key];
-              return (
-                <KpiCard
-                  key={t.key}
-                  icon={<Target size={14} />}
-                  label={`Proyectado ${t.label}`}
-                  value={unidades(p.proyectado)}
-                  accent={p.cumple ? "#3DDC97" : "#FF6B6B"}
-                />
-              );
-            })}
-          </div>
-
-          {["max", "open", "champions"].map((tabKey) => {
-            const label = OBJETIVO_TABS.find((t) => t.key === tabKey).label;
-            const p = stats.total.proyeccion[tabKey];
-            return (
-              <div key={tabKey} className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 20 }}>
-                <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>
-                  {label} · PROYECTADO {unidades(p.proyectado)} DE {unidades(p.objetivo)}
-                </div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
                   <thead>
                     <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
                       <th style={{ padding: "8px 16px" }}>Vendedor</th>
-                      <th>Objetivo</th>
-                      <th>Proyectado</th>
-                      <th>Diferencia</th>
+                      <th>Avance</th>
+                      <th>Resta</th>
+                      <th>Necesario/día</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {stats.porVendedor.map((v) => {
-                      const vp = v.proyeccion[tabKey];
-                      const diferencia = vp.proyectado - vp.objetivo;
-                      return (
-                        <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                          <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                          <td>{unidades(vp.objetivo)}</td>
-                          <td style={{ color: vp.cumple ? "#3DDC97" : "#FF6B6B" }}>{unidades(vp.proyectado)}</td>
-                          <td style={{ color: diferencia >= 0 ? "#3DDC97" : "#FF6B6B" }}>
-                            {diferencia >= 0 ? "+" : ""}{unidades(diferencia)}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                {stats.porVendedor.map((v) => (
+                  <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
+                    <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
+                    <td>{v.tabs[objTab].avancePct.toFixed(0)}%</td>
+                    <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
+                    <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
+                  </tr>
+                    ))}
                   </tbody>
                 </table>
-
-                {(tabKey === "open" || tabKey === "champions") && (() => {
-                  const lista = tabKey === "open" ? MARCAS_OPEN : MARCAS_CHAMPIONS;
-                  const clave = tabKey === "open" ? "marcasOpen" : "marcasChampions";
-                  return (
-                    <div style={{ padding: 16, borderTop: "1px solid #1E2A42" }}>
-                      <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 12 }}>
-                        MARCAS PROYECTADAS · {label}
-                      </div>
-                      {lista.map((m) => {
-                        const tp = stats.total.proyeccion[clave][m.key];
-                        return (
-                          <div key={m.key} style={{ marginBottom: 18 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                              <span>{m.label} (equipo)</span>
-                              <span className="mono" style={{ color: tp.cumple ? "#3DDC97" : "#FF6B6B" }}>
-                                {unidades(tp.proyectado)} / {unidades(tp.objetivo)}
-                              </span>
-                            </div>
-                            <div style={{ overflowX: "auto" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
-                                <thead>
-                                  <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                                    <th style={{ padding: "4px 0" }}>Vendedor</th>
-                                    <th>Objetivo</th>
-                                    <th>Proyectado</th>
-                                    <th>Diferencia</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {stats.porVendedor.map((v) => {
-                                    const vp = v.proyeccion[clave][m.key];
-                                    const diferencia = vp.proyectado - vp.objetivo;
-                                    return (
-                                      <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                                        <td style={{ padding: "6px 0" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                                        <td>{unidades(vp.objetivo)}</td>
-                                        <td style={{ color: vp.cumple ? "#3DDC97" : "#FF6B6B" }}>{unidades(vp.proyectado)}</td>
-                                        <td style={{ color: diferencia >= 0 ? "#3DDC97" : "#FF6B6B" }}>
-                                          {diferencia >= 0 ? "+" : ""}{unidades(diferencia)}
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
               </div>
-            );
-          })}
-        </div>
+            </>
+          )}
+        </>
       )}
 
       {tab === "objetivos" && (
