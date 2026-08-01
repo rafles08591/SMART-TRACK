@@ -2266,7 +2266,7 @@ function RutasView({ stats }) {
 // Checklist de actividades (día/semana/mes). "Fija" reaparece siempre al
 // reiniciar el ciclo; "temporal" solo existe por este ciclo y se borra sola
 // al pasar el siguiente, a menos que se haya quedado pendiente.
-function ActividadesView({ ciclo, titulo, data, persist, revisorNombre }) {
+function ActividadesView({ ciclo, titulo, data, persist, revisorNombre, puedeEliminar }) {
   const [nuevoTexto, setNuevoTexto] = useState("");
   const [nuevoTipo, setNuevoTipo] = useState("temporal");
 
@@ -2319,7 +2319,9 @@ function ActividadesView({ ciclo, titulo, data, persist, revisorNombre }) {
                 {it.tipo === "fija" ? "Fija" : "Temporal"}{it.creadaPor ? ` · ${it.creadaPor}` : ""}
               </div>
             </div>
-            <button className="btn-ghost" onClick={() => eliminar(it.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+            {puedeEliminar && (
+              <button className="btn-ghost" onClick={() => eliminar(it.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+            )}
           </div>
         ))}
       </div>
@@ -2714,11 +2716,11 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
-            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} revisorNombre={revisorNombre} />
+            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "actividades_semana" ? (
-            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} revisorNombre={revisorNombre} />
+            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "actividades_mes" ? (
-            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} revisorNombre={revisorNombre} />
+            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
