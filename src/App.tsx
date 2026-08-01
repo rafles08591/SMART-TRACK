@@ -1043,10 +1043,12 @@ export default function App() {
   }
 
   // Carga acumulada del periodo: alimenta `ventas` (OPEN, CHAMPIONS y MAX).
-  // Acepta hasta 2 archivos (se combinan). Ahora se guarda directo en la
-  // tabla ventas_periodo: se borran las fechas que trae el archivo nuevo y
-  // se insertan de nuevo (mismo efecto de "reemplazar esas fechas" que
-  // antes, pero sin tener que reescribir un JSON gigante cada vez).
+  // Acepta hasta 2 archivos (se combinan). Se guarda directo en la tabla
+  // ventas_periodo. IMPORTANTE: primero se INSERTAN las filas nuevas y hasta
+  // que eso tiene éxito se BORRAN las filas viejas de esas mismas fechas.
+  // Así, si falla la conexión a medio camino, nunca se pierde el día
+  // anterior sin haber guardado el reemplazo (antes se borraba primero y,
+  // si el insert fallaba después, el día se quedaba vacío).
   async function handleVentasPeriodoFile(e) {
     const files = Array.from(e.target.files || []).slice(0, 2);
     e.target.value = "";
@@ -1062,14 +1064,11 @@ export default function App() {
       }
 
       const fechas = [...new Set(registros.map((r) => r.fecha))];
-
-      // Reemplaza esas fechas: primero borra lo que ya hubiera de esos días.
-      const { error: delError } = await supabase.from("ventas_periodo").delete().in("fecha", fechas);
-      if (delError) {
-        console.error("Error borrando ventas previas:", delError);
-        setVentasPeriodoStatus(`Error al guardar en la nube: ${delError.message} (code: ${delError.code || "?"})`);
-        return;
-      }
+      // Momento justo antes de insertar: al borrar después, solo se quitan
+      // las filas de esas fechas que ya existían ANTES de este momento (las
+      // recién insertadas quedan intactas, sin importar el orden en que
+      // Postgres procese cada fila).
+      const momentoAntes = new Date().toISOString();
 
       const filasParaInsertar = registros.map((r) => ({
         vendedor: r.vendedor,
@@ -1080,16 +1079,31 @@ export default function App() {
         cliente: r.cliente,
       }));
 
-      // Se inserta en lotes por seguridad (evita mandar un solo request enorme).
+      // 1) Insertar primero, en lotes por seguridad.
       const TAMANO_LOTE = 1000;
       for (let i = 0; i < filasParaInsertar.length; i += TAMANO_LOTE) {
         const lote = filasParaInsertar.slice(i, i + TAMANO_LOTE);
         const { error: insError } = await supabase.from("ventas_periodo").insert(lote);
         if (insError) {
           console.error("Error insertando ventas:", insError);
-          setVentasPeriodoStatus(`Error al guardar en la nube: ${insError.message} (code: ${insError.code || "?"})`);
+          setVentasPeriodoStatus(`Error al guardar en la nube: ${insError.message} (code: ${insError.code || "?"}). No se borró nada de lo anterior.`);
+          await cargarVentasPeriodo(data.periodo);
           return;
         }
+      }
+
+      // 2) Ya que el insert tuvo éxito, se borra lo viejo de esas fechas.
+      const { error: delError } = await supabase
+        .from("ventas_periodo")
+        .delete()
+        .in("fecha", fechas)
+        .lt("created_at", momentoAntes);
+
+      if (delError) {
+        console.error("Error borrando ventas previas:", delError);
+        setVentasPeriodoStatus(`Se guardaron los datos nuevos, pero no se pudo limpiar lo anterior de esas fechas: ${delError.message}. Puedes usar "Borrar todo" y volver a subir si ves duplicados.`);
+        await cargarVentasPeriodo(data.periodo);
+        return;
       }
 
       await cargarVentasPeriodo(data.periodo);
@@ -1097,6 +1111,30 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setVentasPeriodoStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha, Articulo, Paquetes y Total $.");
+    }
+  }
+
+  // Borra TODO lo guardado en ventas_periodo (todas las fechas, todas las
+  // rutas). Pensado como botón de "reiniciar" ante duplicados u otro
+  // problema, no se puede deshacer.
+  async function borrarTodoVentasPeriodo() {
+    const confirmado = window.confirm(
+      "¿Seguro que quieres borrar TODO el avance de ventas guardado (todas las fechas y rutas)? Esta acción no se puede deshacer."
+    );
+    if (!confirmado) return;
+    try {
+      setVentasPeriodoStatus("Borrando todo el avance de ventas...");
+      const { error } = await supabase.from("ventas_periodo").delete().gte("id", 0);
+      if (error) {
+        console.error("Error al borrar ventas_periodo:", error);
+        setVentasPeriodoStatus(`Error al borrar: ${error.message} (code: ${error.code || "?"})`);
+        return;
+      }
+      await cargarVentasPeriodo(data.periodo);
+      setVentasPeriodoStatus("Se borró todo el avance de ventas guardado.");
+    } catch (err) {
+      console.error(err);
+      setVentasPeriodoStatus(`Error de red al borrar: ${err?.message || String(err)}`);
     }
   }
 
@@ -1273,6 +1311,7 @@ export default function App() {
           onVentasPeriodoFile={handleVentasPeriodoFile}
           ventasPeriodoFileInputRef={ventasPeriodoFileInputRef}
           ventasPeriodoStatus={ventasPeriodoStatus}
+          onBorrarTodoVentasPeriodo={borrarTodoVentasPeriodo}
           onMesaControlFile={handleMesaControlFile}
           mesaControlFileInputRef={mesaControlFileInputRef}
           mesaControlStatus={mesaControlStatus}
@@ -1840,7 +1879,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
@@ -2460,6 +2499,9 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="btn" onClick={() => ventasPeriodoFileInputRef.current?.click()}>
                 <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir avance del periodo
+              </button>
+              <button className="btn-ghost" onClick={onBorrarTodoVentasPeriodo}>
+                <Trash2 size={14} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Borrar todo
               </button>
             </div>
             <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
