@@ -139,6 +139,29 @@ function todasCompletas(r) {
   });
 }
 
+// Completa de forma segura cualquier ruta que venga de datos guardados con
+// un esquema anterior (áreas distintas, como el viejo Ingreso/Ingreso
+// tarde/Almacén) — así nunca truena por leer un área que no existe.
+function normalizarRuta(r, ruta) {
+  const vacia = rutaVacia(ruta);
+  if (!r) return vacia;
+  const areas = {};
+  AREAS.forEach((a) => {
+    const existente = r.areas && r.areas[a.key];
+    areas[a.key] = existente ? existente : (a.tipo === "instante" ? areaVaciaInstante() : areaVaciaDuracion());
+  });
+  return { ...vacia, ...r, ruta, areas };
+}
+
+function normalizarAreas(areas) {
+  const resultado = {};
+  AREAS.forEach((a) => {
+    const existente = areas && areas[a.key];
+    resultado[a.key] = existente ? existente : (a.tipo === "instante" ? areaVaciaInstante() : areaVaciaDuracion());
+  });
+  return resultado;
+}
+
 const EMPTY_ACTIVO = { fecha: todayStr(), rutas: {} };
 
 /**
@@ -250,7 +273,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     const hoy = todayStr();
     let fresh = await fetchLatestActivo();
     if (fresh.fecha !== hoy) fresh = { fecha: hoy, rutas: {} };
-    const r = fresh.rutas[ruta] || rutaVacia(ruta);
+    const r = normalizarRuta(fresh.rutas[ruta], ruta);
     if (r.areas[areaKey].ts) return;
     const ts = Date.now();
     let areasNuevas = { ...r.areas, [areaKey]: { ts, usuario: identidad } };
@@ -281,7 +304,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     const hoy = todayStr();
     let fresh = await fetchLatestActivo();
     if (fresh.fecha !== hoy) fresh = { fecha: hoy, rutas: {} };
-    const r = fresh.rutas[ruta] || rutaVacia(ruta);
+    const r = normalizarRuta(fresh.rutas[ruta], ruta);
     if (r.areas[areaKey].entrada) return;
     const ts = Date.now();
     const nuevaRuta = { ...r, areas: { ...r.areas, [areaKey]: { entrada: ts, salida: null, usuario: identidad } } };
@@ -378,8 +401,8 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         return fila;
       };
 
-      const filasHoy = RUTAS_TIEMPOS.map((ruta) => construirFila(ruta, rutasHoy[ruta] || rutaVacia(ruta)));
-      const filasHistorial = historialOrdenado.map((reg) => construirFila(reg.ruta, { areas: reg.areas, __fecha: reg.fecha, finalizado: true }));
+      const filasHoy = RUTAS_TIEMPOS.map((ruta) => construirFila(ruta, normalizarRuta(rutasHoy[ruta], ruta)));
+      const filasHistorial = historialOrdenado.map((reg) => construirFila(reg.ruta, { areas: normalizarAreas(reg.areas), __fecha: reg.fecha, finalizado: true }));
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filasHoy), "Hoy");
@@ -455,7 +478,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
           {RUTAS_TIEMPOS.map((ruta) => {
-            const r = rutasHoy[ruta] || rutaVacia(ruta);
+            const r = normalizarRuta(rutasHoy[ruta], ruta);
             const iniciada = AREAS.some((a) => (a.tipo === "instante" ? r.areas[a.key].ts : r.areas[a.key].entrada));
             const minEnCLO = r.areas.ingreso_clo.ts && r.areas.salida_ruta.ts
               ? Math.round((r.areas.salida_ruta.ts - r.areas.ingreso_clo.ts) / 60000) : null;
@@ -642,7 +665,8 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                   <span style={{ marginLeft: "auto", fontSize: 11, color: "#9AA7BD" }}>terminó {formatHora(reg.finalizadoTs)}</span>
                 </div>
                 {AREAS.map((a) => {
-                  const area = reg.areas[a.key];
+                  const areasNormalizadas = normalizarAreas(reg.areas);
+                  const area = areasNormalizadas[a.key];
                   return (
                     <div key={a.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderTop: "1px solid #1E2A42", fontSize: 12 }}>
                       <a.Icon size={13} color="#9AA7BD" />
@@ -671,7 +695,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
 
 function TimelineBloque({ now, rutasHoy, calcularPistas }) {
   const areasDuracion = AREAS.filter((a) => a.tipo === "duracion");
-  const rutasActivas = RUTAS_TIEMPOS.map((ruta) => ({ ruta, r: rutasHoy[ruta] || rutaVacia(ruta) }))
+  const rutasActivas = RUTAS_TIEMPOS.map((ruta) => ({ ruta, r: normalizarRuta(rutasHoy[ruta], ruta) }))
     .map(({ ruta, r }) => ({ ruta, ...calcularPistas(r) }))
     .filter((x) => x.hayActividad);
 
@@ -689,7 +713,7 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
         <p style={{ fontSize: 13, color: "#9AA7BD", textAlign: "center", padding: 16 }}>Aún no hay rutas activas hoy.</p>
       ) : (
         rutasActivas.map(({ ruta, pistas }) => {
-          const r = rutasHoy[ruta] || rutaVacia(ruta);
+          const r = normalizarRuta(rutasHoy[ruta], ruta);
           const chips = AREAS.filter((a) => a.tipo === "instante" && r.areas[a.key].ts);
           return (
             <div key={ruta} style={{ marginBottom: 14 }}>
