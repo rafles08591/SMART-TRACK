@@ -769,7 +769,7 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
           const r = normalizarRuta(rutasHoy[ruta], ruta);
           const chips = AREAS.filter((a) => a.tipo === "instante" && r.areas[a.key].ts);
           return (
-            <div key={ruta} style={{ marginBottom: 18 }}>
+            <div key={ruta} className="card" style={{ padding: 16 }}>
               <div style={{ marginBottom: 8 }}>
                 <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>{ruta}</span>
               </div>
