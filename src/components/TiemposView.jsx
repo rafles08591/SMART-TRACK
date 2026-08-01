@@ -601,7 +601,12 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         <div className="display" style={{ fontSize: 14, color: "#9AA7BD", display: "flex", alignItems: "center", gap: 6 }}>
           <Clock size={14} /> LÍNEA DE TIEMPO · HOY (LIQUIDACIÓN Y ALMACÉN)
         </div>
-        <button className="btn-ghost" onClick={() => setTimelineFull(true)}>
+        <button className="btn-ghost" onClick={() => {
+          const el = document.documentElement;
+          const pedirFullscreen = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (pedirFullscreen) pedirFullscreen.call(el).catch(() => {});
+          setTimelineFull(true);
+        }}>
           <Maximize2 size={13} style={{ verticalAlign: "-2px" }} /> Pantalla completa
         </button>
       </div>
@@ -694,6 +699,23 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
   const [escala, setEscala] = useState(1);
   const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
 
+  function cerrar() {
+    const salirFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+    if (document.fullscreenElement && salirFullscreen) salirFullscreen.call(document).catch(() => {});
+    onClose();
+  }
+
+  // Si el usuario sale del fullscreen con Esc (en vez del botón "Cerrar"),
+  // se cierra igual esta pantalla para no dejarla "colgada".
+  useEffect(() => {
+    function onFullscreenChange() {
+      if (!document.fullscreenElement) onClose();
+    }
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     function recalcular() {
       const contenedor = contenedorRef.current;
@@ -730,7 +752,7 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
     <div style={{ position: "fixed", inset: 0, background: "#0B1220", zIndex: 9999, display: "flex", flexDirection: "column", padding: 14, boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexShrink: 0 }}>
         <div className="display" style={{ fontSize: 15, color: "#E8EDF5" }}>Línea de tiempo · {formatFecha(hoy)}</div>
-        <button className="btn-ghost" onClick={onClose}>
+        <button className="btn-ghost" onClick={cerrar}>
           <Minimize2 size={13} style={{ verticalAlign: "-2px" }} /> Cerrar
         </button>
       </div>
