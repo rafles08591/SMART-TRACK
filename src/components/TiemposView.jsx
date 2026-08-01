@@ -716,13 +716,28 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
           const r = normalizarRuta(rutasHoy[ruta], ruta);
           const chips = AREAS.filter((a) => a.tipo === "instante" && r.areas[a.key].ts);
           return (
-            <div key={ruta} style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-                <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: "#E8EDF5" }}>{ruta}</span>
+            <div key={ruta} style={{ marginBottom: 18 }}>
+              <div style={{ marginBottom: 8 }}>
+                <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>{ruta}</span>
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                 {chips.map((a) => (
-                  <span key={a.key} style={{ fontSize: 9, color: AREA_COLORS[a.key], border: `1px solid ${AREA_COLORS[a.key]}`, borderRadius: 5, padding: "1px 6px", display: "flex", alignItems: "center", gap: 3 }}>
-                    <a.Icon size={9} /> {formatHora(r.areas[a.key].ts)}
-                  </span>
+                  <div
+                    key={a.key}
+                    style={{
+                      display: "flex", flexDirection: "column", gap: 4,
+                      border: `1px solid ${AREA_COLORS[a.key]}`, borderRadius: 10,
+                      padding: "8px 16px", minWidth: 150, flex: "1 1 150px",
+                      background: "#0f1626",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: AREA_COLORS[a.key] }}>
+                      <a.Icon size={12} /> {a.nombre}
+                    </div>
+                    <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: "#E8EDF5" }}>
+                      {formatHora(r.areas[a.key].ts)}
+                    </div>
+                  </div>
                 ))}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
