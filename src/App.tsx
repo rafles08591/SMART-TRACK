@@ -369,22 +369,35 @@ export default function App() {
   // Carga las ventas del periodo directamente desde su propia tabla
   // (ventas_periodo), filtrando por rango de fechas en el servidor. Esto ya
   // no depende del tamaño del JSON grande de ventas_app_state.
+  // IMPORTANTE: Supabase/PostgREST solo regresa 1000 filas por consulta por
+  // default, sin avisar que hay más — por eso se pagina con .range() hasta
+  // traer todo, o si no, con miles de registros solo se veía un pedacito.
   async function cargarVentasPeriodo(periodoActual) {
     if (!periodoActual?.inicio || !periodoActual?.fin) return;
     try {
-      const { data: filas, error } = await supabase
-        .from("ventas_periodo")
-        .select("vendedor, fecha, marca, paquetes, monto, cliente")
-        .gte("fecha", periodoActual.inicio)
-        .lte("fecha", periodoActual.fin);
+      const TAMANO_PAGINA = 1000;
+      let todasLasFilas = [];
+      let desde = 0;
+      while (true) {
+        const { data: filas, error } = await supabase
+          .from("ventas_periodo")
+          .select("vendedor, fecha, marca, paquetes, monto, cliente")
+          .gte("fecha", periodoActual.inicio)
+          .lte("fecha", periodoActual.fin)
+          .range(desde, desde + TAMANO_PAGINA - 1);
 
-      if (error) {
-        console.error("Error cargando ventas_periodo:", error);
-        return;
+        if (error) {
+          console.error("Error cargando ventas_periodo:", error);
+          break;
+        }
+
+        todasLasFilas = todasLasFilas.concat(filas || []);
+        if (!filas || filas.length < TAMANO_PAGINA) break;
+        desde += TAMANO_PAGINA;
       }
 
       setVentasPeriodoState(
-        (filas || []).map((r) => ({
+        todasLasFilas.map((r) => ({
           fecha: r.fecha,
           vendedor: r.vendedor,
           marca: r.marca || "",
@@ -1049,6 +1062,22 @@ export default function App() {
   // Así, si falla la conexión a medio camino, nunca se pierde el día
   // anterior sin haber guardado el reemplazo (antes se borraba primero y,
   // si el insert fallaba después, el día se quedaba vacío).
+  // Reintenta una llamada a Supabase hasta 3 veces si falla por un problema
+  // de red (fetch), con una pequeña espera entre intento e intento. Ayuda a
+  // que un tropiezo momentáneo de wifi/datos no tire toda la carga.
+  async function conReintento(fn, intentos = 5, esperaMs = 1200) {
+    let ultimoError = null;
+    for (let intento = 1; intento <= intentos; intento++) {
+      const resultado = await fn();
+      if (!resultado.error) return resultado;
+      ultimoError = resultado.error;
+      const esErrorDeRed = /fetch|network|failed to fetch/i.test(resultado.error.message || "");
+      if (!esErrorDeRed || intento === intentos) return resultado;
+      await new Promise((r) => setTimeout(r, esperaMs * intento));
+    }
+    return { error: ultimoError };
+  }
+
   async function handleVentasPeriodoFile(e) {
     const files = Array.from(e.target.files || []).slice(0, 2);
     e.target.value = "";
@@ -1079,25 +1108,39 @@ export default function App() {
         cliente: r.cliente,
       }));
 
-      // 1) Insertar primero, en lotes por seguridad.
-      const TAMANO_LOTE = 1000;
+      // 1) Insertar primero, en lotes por seguridad (más chicos, con reintento
+      // automático si falla por un problema de red momentáneo). Si un lote
+      // falla incluso tras los reintentos, se sigue con los siguientes en
+      // vez de detener todo — así se aprovecha lo que sí logre pasar con una
+      // conexión inestable (datos móviles, por ejemplo).
+      const TAMANO_LOTE = 150;
+      let lotesConError = 0;
+      const totalLotes = Math.ceil(filasParaInsertar.length / TAMANO_LOTE);
       for (let i = 0; i < filasParaInsertar.length; i += TAMANO_LOTE) {
         const lote = filasParaInsertar.slice(i, i + TAMANO_LOTE);
-        const { error: insError } = await supabase.from("ventas_periodo").insert(lote);
+        const loteNum = Math.floor(i / TAMANO_LOTE) + 1;
+        setVentasPeriodoStatus(`Guardando lote ${loteNum} de ${totalLotes} (${Math.min(i + TAMANO_LOTE, filasParaInsertar.length)} de ${filasParaInsertar.length} registros)...`);
+        const { error: insError } = await conReintento(() => supabase.from("ventas_periodo").insert(lote));
         if (insError) {
-          console.error("Error insertando ventas:", insError);
-          setVentasPeriodoStatus(`Error al guardar en la nube: ${insError.message} (code: ${insError.code || "?"}). No se borró nada de lo anterior.`);
-          await cargarVentasPeriodo(data.periodo);
-          return;
+          console.error(`Error insertando lote ${loteNum}:`, insError);
+          lotesConError++;
         }
       }
 
-      // 2) Ya que el insert tuvo éxito, se borra lo viejo de esas fechas.
-      const { error: delError } = await supabase
-        .from("ventas_periodo")
-        .delete()
-        .in("fecha", fechas)
-        .lt("created_at", momentoAntes);
+      if (lotesConError > 0) {
+        setVentasPeriodoStatus(`Se guardó parte de la información, pero ${lotesConError} de ${totalLotes} lotes fallaron por la conexión. No se borró nada de lo anterior — vuelve a subir el mismo archivo para completar lo que falta (es seguro repetirlo).`);
+        await cargarVentasPeriodo(data.periodo);
+        return;
+      }
+
+      // 2) Ya que TODO el insert tuvo éxito, se borra lo viejo de esas fechas.
+      const { error: delError } = await conReintento(() =>
+        supabase
+          .from("ventas_periodo")
+          .delete()
+          .in("fecha", fechas)
+          .lt("created_at", momentoAntes)
+      );
 
       if (delError) {
         console.error("Error borrando ventas previas:", delError);
