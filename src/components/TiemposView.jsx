@@ -734,16 +734,31 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
       setEscala(nuevaEscala);
       setDimensiones({ ancho: anchoNatural * nuevaEscala, alto: altoNatural * nuevaEscala });
     }
-    // Se recalcula un par de veces al abrir (el layout puede tardar un
-    // instante en asentarse) y luego en cada cambio relevante.
+    // Se recalcula al abrir, y varias veces más con retraso por si la
+    // transición a pantalla completa del navegador tarda un poco en
+    // terminar (si no, se mide el tamaño "viejo" antes de que la ventana
+    // realmente haya crecido).
     recalcular();
-    const t = setTimeout(recalcular, 50);
+    const timers = [50, 150, 300, 600, 1000].map((ms) => setTimeout(recalcular, ms));
+
+    // ResizeObserver: reacciona en el instante exacto en que el contenedor
+    // cambia de tamaño, sin importar la causa (fullscreen, resize, rotar el
+    // teléfono) — más confiable que solo escuchar el evento "resize".
+    let observer;
+    if (contenedorRef.current && "ResizeObserver" in window) {
+      observer = new ResizeObserver(() => recalcular());
+      observer.observe(contenedorRef.current);
+    }
+
     window.addEventListener("resize", recalcular);
     window.addEventListener("orientationchange", recalcular);
+    document.addEventListener("fullscreenchange", recalcular);
     return () => {
-      clearTimeout(t);
+      timers.forEach(clearTimeout);
+      if (observer) observer.disconnect();
       window.removeEventListener("resize", recalcular);
       window.removeEventListener("orientationchange", recalcular);
+      document.removeEventListener("fullscreenchange", recalcular);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rutasHoy]);
