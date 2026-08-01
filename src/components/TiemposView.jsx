@@ -609,17 +609,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
       <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
 
       {timelineFull && (
-        <div style={{ position: "fixed", inset: 0, background: "#0B1220", zIndex: 9999, display: "flex", flexDirection: "column", padding: 16, boxSizing: "border-box" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div className="display" style={{ fontSize: 15, color: "#E8EDF5" }}>Línea de tiempo · {formatFecha(hoy)}</div>
-            <button className="btn-ghost" onClick={() => setTimelineFull(false)}>
-              <Minimize2 size={13} style={{ verticalAlign: "-2px" }} /> Cerrar
-            </button>
-          </div>
-          <div style={{ flex: 1, overflow: "auto" }}>
-            <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
-          </div>
-        </div>
+        <TimelineFullscreen now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} onClose={() => setTimelineFull(false)} hoy={hoy} />
       )}
 
       {confirmReset && (
@@ -689,6 +679,68 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
           </div>
         )
       )}
+    </div>
+  );
+}
+
+// Pantalla completa que reescala automáticamente todo el contenido (con CSS
+// transform: scale) para que las 7 rutas (o las que estén activas) quepan
+// enteras en la pantalla, sin cortarse ni dejar espacio vacío de más. Se
+// recalcula solo cuando cambian los datos, el tamaño de ventana o al girar
+// el teléfono.
+function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
+  const contenedorRef = useRef(null);
+  const contenidoRef = useRef(null);
+  const [escala, setEscala] = useState(1);
+  const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
+
+  useEffect(() => {
+    function recalcular() {
+      const contenedor = contenedorRef.current;
+      const contenido = contenidoRef.current;
+      if (!contenedor || !contenido) return;
+      // Se mide a tamaño natural (sin escalar) para calcular el factor correcto.
+      contenido.style.transform = "none";
+      const anchoDisponible = contenedor.clientWidth - 8;
+      const altoDisponible = contenedor.clientHeight - 8;
+      const anchoNatural = contenido.scrollWidth;
+      const altoNatural = contenido.scrollHeight;
+      const escalaX = anchoNatural > 0 ? anchoDisponible / anchoNatural : 1;
+      const escalaY = altoNatural > 0 ? altoDisponible / altoNatural : 1;
+      // No agranda de más si hay pocas rutas; solo encoge si hace falta.
+      const nuevaEscala = Math.min(escalaX, escalaY, 1);
+      setEscala(nuevaEscala);
+      setDimensiones({ ancho: anchoNatural * nuevaEscala, alto: altoNatural * nuevaEscala });
+    }
+    // Se recalcula un par de veces al abrir (el layout puede tardar un
+    // instante en asentarse) y luego en cada cambio relevante.
+    recalcular();
+    const t = setTimeout(recalcular, 50);
+    window.addEventListener("resize", recalcular);
+    window.addEventListener("orientationchange", recalcular);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("resize", recalcular);
+      window.removeEventListener("orientationchange", recalcular);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rutasHoy]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#0B1220", zIndex: 9999, display: "flex", flexDirection: "column", padding: 14, boxSizing: "border-box" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexShrink: 0 }}>
+        <div className="display" style={{ fontSize: 15, color: "#E8EDF5" }}>Línea de tiempo · {formatFecha(hoy)}</div>
+        <button className="btn-ghost" onClick={onClose}>
+          <Minimize2 size={13} style={{ verticalAlign: "-2px" }} /> Cerrar
+        </button>
+      </div>
+      <div ref={contenedorRef} style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
+        <div style={{ width: dimensiones.ancho || "auto", height: dimensiones.alto || "auto" }}>
+          <div ref={contenidoRef} style={{ transform: `scale(${escala})`, transformOrigin: "top left", width: 1300 }}>
+            <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
