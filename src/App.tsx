@@ -1544,10 +1544,72 @@ function MarcasBreakdown({ titulo, marcas, data }) {
   );
 }
 
-function DiaKpis({ hoy, mensajeDia }) {
+function formatCrono(ms) {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function DiaKpis({ hoy, mensajeDia, rutaCodigo }) {
+  const [tiempos, setTiempos] = useState(null);
+  const [ahora, setAhora] = useState(Date.now());
+
+  // Consulta el panel de Tiempos (otro proyecto de Supabase) para esta ruta,
+  // hoy. Se refresca cada 20s (no hace falta tiempo real estricto aquí).
+  useEffect(() => {
+    if (!rutaCodigo) return;
+    let activo = true;
+    async function cargar() {
+      try {
+        const fechaHoy = new Date().toLocaleDateString("en-CA");
+        const { data: row } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "board-activo").maybeSingle();
+        if (!activo) return;
+        setTiempos(row?.value?.fecha === fechaHoy ? row.value.rutas?.[rutaCodigo]?.areas || null : null);
+      } catch (e) {
+        console.error("Error consultando Tiempos:", e);
+      }
+    }
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => { activo = false; clearInterval(intervalo); };
+  }, [rutaCodigo]);
+
+  // Reloj que avanza cada segundo, para el cronómetro de "tiempo en ruta".
+  useEffect(() => {
+    const t = setInterval(() => setAhora(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const horaIngresoClo = tiempos?.ingreso_clo?.ts
+    ? new Date(tiempos.ingreso_clo.ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : null;
+  const salidaRutaTs = tiempos?.salida_ruta?.ts || null;
+  const yaRegreso = !!tiempos?.ingreso_clo_fin?.ts;
+  // El cronómetro solo corre mientras está en ruta: desde que salió hasta
+  // que regresa a CLO (ingreso_clo_fin). Si ya regresó, se congela ahí.
+  const msEnRuta = salidaRutaTs ? (yaRegreso ? tiempos.ingreso_clo_fin.ts - salidaRutaTs : ahora - salidaRutaTs) : null;
+
   return (
     <>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {hoy.fecha}</div>
+      {(horaIngresoClo || msEnRuta != null) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+          {horaIngresoClo && (
+            <KpiCard icon={<Truck size={14} />} label="Llegada a CLO" value={horaIngresoClo} />
+          )}
+          {msEnRuta != null && (
+            <KpiCard
+              icon={<Clock size={14} />}
+              label={yaRegreso ? "Tiempo total en ruta" : "Tiempo en ruta (en vivo)"}
+              value={formatCrono(msEnRuta)}
+              accent={yaRegreso ? "#3DDC97" : "#F2B134"}
+            />
+          )}
+        </div>
+      )}
       {mensajeDia && mensajeDia.texto && (
         <div className="card" style={{ padding: 14, marginBottom: 16, border: "1px solid #F2B134" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -1980,7 +2042,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => t.key !== "tiempos")} />
 
       {tab === "dia" ? (
-        <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} />
+        <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} rutaCodigo={vendedor.name.replace("RUTA ", "").trim()} />
       ) : tab === "mesa" ? (
         <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} />
       ) : tab === "cuponera" ? (

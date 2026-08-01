@@ -694,10 +694,10 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
 // recalcula solo cuando cambian los datos, el tamaño de ventana o al girar
 // el teléfono.
 function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
-  const contenedorRef = useRef(null);
   const contenidoRef = useRef(null);
   const [escala, setEscala] = useState(1);
   const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
+  const ENCABEZADO_ALTO = 50; // alto aprox. del título + botón "Cerrar" + paddings
 
   function cerrar() {
     const salirFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
@@ -718,44 +718,41 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
 
   useEffect(() => {
     function recalcular() {
-      const contenedor = contenedorRef.current;
       const contenido = contenidoRef.current;
-      if (!contenedor || !contenido) return;
+      if (!contenido) return;
       // Se mide a tamaño natural (sin escalar) para calcular el factor correcto.
       contenido.style.transform = "none";
-      const anchoDisponible = contenedor.clientWidth - 8;
-      const altoDisponible = contenedor.clientHeight - 8;
+      // Se usa window.innerWidth/innerHeight directamente (en vez del tamaño
+      // de un contenedor propio): son los que de verdad reflejan el tamaño
+      // real de la pantalla apenas el navegador entra a fullscreen, sin
+      // depender de que algún div intermedio "se entere" del cambio.
+      const anchoDisponible = window.innerWidth - 28;
+      const altoDisponible = window.innerHeight - ENCABEZADO_ALTO - 28;
       const anchoNatural = contenido.scrollWidth;
       const altoNatural = contenido.scrollHeight;
       const escalaX = anchoNatural > 0 ? anchoDisponible / anchoNatural : 1;
       const escalaY = altoNatural > 0 ? altoDisponible / altoNatural : 1;
       // No agranda de más si hay pocas rutas; solo encoge si hace falta.
-      const nuevaEscala = Math.min(escalaX, escalaY, 1);
+      const nuevaEscala = Math.max(0.15, Math.min(escalaX, escalaY, 1));
       setEscala(nuevaEscala);
       setDimensiones({ ancho: anchoNatural * nuevaEscala, alto: altoNatural * nuevaEscala });
     }
-    // Se recalcula al abrir, y varias veces más con retraso por si la
-    // transición a pantalla completa del navegador tarda un poco en
-    // terminar (si no, se mide el tamaño "viejo" antes de que la ventana
-    // realmente haya crecido).
-    recalcular();
-    const timers = [50, 150, 300, 600, 1000].map((ms) => setTimeout(recalcular, ms));
 
-    // ResizeObserver: reacciona en el instante exacto en que el contenedor
-    // cambia de tamaño, sin importar la causa (fullscreen, resize, rotar el
-    // teléfono) — más confiable que solo escuchar el evento "resize".
-    let observer;
-    if (contenedorRef.current && "ResizeObserver" in window) {
-      observer = new ResizeObserver(() => recalcular());
-      observer.observe(contenedorRef.current);
-    }
+    recalcular();
+    // Varios reintentos con retraso, más un sondeo corto de respaldo: cubre
+    // navegadores donde la transición a fullscreen tarda en terminar y no
+    // dispara ningún evento a tiempo.
+    const timers = [30, 100, 200, 400, 700, 1100, 1600, 2500].map((ms) => setTimeout(recalcular, ms));
+    const intervalo = setInterval(recalcular, 400);
+    const detenerIntervalo = setTimeout(() => clearInterval(intervalo), 4000);
 
     window.addEventListener("resize", recalcular);
     window.addEventListener("orientationchange", recalcular);
     document.addEventListener("fullscreenchange", recalcular);
     return () => {
       timers.forEach(clearTimeout);
-      if (observer) observer.disconnect();
+      clearInterval(intervalo);
+      clearTimeout(detenerIntervalo);
       window.removeEventListener("resize", recalcular);
       window.removeEventListener("orientationchange", recalcular);
       document.removeEventListener("fullscreenchange", recalcular);
@@ -771,7 +768,7 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
           <Minimize2 size={13} style={{ verticalAlign: "-2px" }} /> Cerrar
         </button>
       </div>
-      <div ref={contenedorRef} style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
+      <div style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
         <div style={{ width: dimensiones.ancho || "auto", height: dimensiones.alto || "auto" }}>
           <div ref={contenidoRef} style={{ transform: `scale(${escala})`, transformOrigin: "top left", width: 1300 }}>
             <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
