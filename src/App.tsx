@@ -262,6 +262,11 @@ export default function App() {
   // Ventas del periodo: ahora viven en su propia tabla de Postgres
   // (ventas_periodo), no dentro del JSON grande de ventas_app_state.
   const [ventasPeriodo, setVentasPeriodoState] = useState([]);
+  // Contador de secuencia: durante una carga masiva se disparan muchas
+  // llamadas a cargarVentasPeriodo casi al mismo tiempo (una por cada evento
+  // de tiempo real). Sin esto, una llamada vieja que tarde más podría
+  // terminar DESPUÉS de la buena y pisarla con datos incompletos.
+  const secuenciaVentasPeriodoRef = useRef(0);
   const mesaControlFileInputRef = useRef(null);
 
   useEffect(() => {
@@ -374,6 +379,7 @@ export default function App() {
   // traer todo, o si no, con miles de registros solo se veía un pedacito.
   async function cargarVentasPeriodo(periodoActual) {
     if (!periodoActual?.inicio || !periodoActual?.fin) return;
+    const miSecuencia = ++secuenciaVentasPeriodoRef.current;
     try {
       const TAMANO_PAGINA = 1000;
       let todasLasFilas = [];
@@ -381,9 +387,10 @@ export default function App() {
       while (true) {
         const { data: filas, error } = await supabase
           .from("ventas_periodo")
-          .select("vendedor, fecha, marca, paquetes, monto, cliente")
+          .select("id, vendedor, fecha, marca, paquetes, monto, cliente")
           .gte("fecha", periodoActual.inicio)
           .lte("fecha", periodoActual.fin)
+          .order("id", { ascending: true })
           .range(desde, desde + TAMANO_PAGINA - 1);
 
         if (error) {
@@ -391,10 +398,19 @@ export default function App() {
           break;
         }
 
-        todasLasFilas = todasLasFilas.concat(filas || []);
-        if (!filas || filas.length < TAMANO_PAGINA) break;
-        desde += TAMANO_PAGINA;
+        if (!filas || filas.length === 0) break;
+        todasLasFilas = todasLasFilas.concat(filas);
+        // Avanza exactamente lo que llegó (no asume que el servidor siempre
+        // regresa el tamaño de página completo), y se detiene solo cuando
+        // una página llega vacía — así funciona sin importar si Supabase
+        // tiene configurado un límite de filas distinto al que pedimos.
+        desde += filas.length;
       }
+
+      // Si mientras se cargaba esto se disparó una carga MÁS nueva (otro
+      // evento de tiempo real u otra llamada), esta respuesta ya quedó
+      // obsoleta: se descarta en vez de pisar el resultado más reciente.
+      if (miSecuencia !== secuenciaVentasPeriodoRef.current) return;
 
       setVentasPeriodoState(
         todasLasFilas.map((r) => ({
@@ -421,16 +437,25 @@ export default function App() {
 
     cargarVentasPeriodo(periodoActual);
 
+    // Debounce: durante una carga masiva llegan decenas de eventos de tiempo
+    // real casi de inmediato. En vez de recargar en cada uno (lo que dispara
+    // muchas consultas superpuestas), se espera un momento sin nuevos
+    // eventos antes de recargar una sola vez.
+    let temporizador = null;
     const canal = supabase
       .channel(`ventas_periodo_changes_${periodoActual.inicio}_${periodoActual.fin}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "ventas_periodo" },
-        () => cargarVentasPeriodo(periodoActual)
+        () => {
+          if (temporizador) clearTimeout(temporizador);
+          temporizador = setTimeout(() => cargarVentasPeriodo(periodoActual), 800);
+        }
       )
       .subscribe();
 
     return () => {
+      if (temporizador) clearTimeout(temporizador);
       supabase.removeChannel(canal);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
