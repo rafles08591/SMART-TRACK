@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Camera, Image as ImageIcon, Ban, CheckCircle2, Trash2, Download, Plus } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import * as XLSX from "xlsx";
+import { supabase } from "../supabaseClient";
 
 const todayISO = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
@@ -117,9 +118,11 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
   const fileRef = useRef(null);
 
   // Formulario para nueva promoción (solo gerente)
-  const [nuevaImagen, setNuevaImagen] = useState(null); // base64, se guarda junto con el resto al dar "Guardar"
+  const [nuevaImagenFile, setNuevaImagenFile] = useState(null); // File real, se sube a Storage al guardar
+  const [nuevaImagenPreview, setNuevaImagenPreview] = useState(null); // base64 SOLO para la vista previa local, nunca se guarda
   const [nuevaDescripcion, setNuevaDescripcion] = useState("");
   const [nuevoCodigo, setNuevoCodigo] = useState("");
+  const [guardandoPromocion, setGuardandoPromocion] = useState(false);
 
   const esGerente = rol === "staff" && puesto === "gerente";
   const promociones = data.promociones || [];
@@ -133,36 +136,69 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
       alert(`La imagen pesa más de ${MAX_IMAGEN_MB}MB. Usa una imagen más ligera.`);
       return;
     }
+    setNuevaImagenFile(file);
     const reader = new FileReader();
-    reader.onload = (evt) => setNuevaImagen(evt.target.result);
+    reader.onload = (evt) => setNuevaImagenPreview(evt.target.result);
     reader.readAsDataURL(file);
   }
 
-  function agregarPromocion() {
+  // La imagen se sube al bucket "promociones" de Supabase Storage y solo se
+  // guarda la URL pública (un texto corto) en el registro de la promoción —
+  // así el renglón de la base de datos ya no crece con cada imagen que se sube.
+  async function agregarPromocion() {
     if (!nuevoCodigo.trim()) {
       alert("Escribe el código que debe coincidir con el QR de esta promoción.");
       return;
     }
-    if (!nuevaImagen) {
+    if (!nuevaImagenFile) {
       alert("Selecciona una imagen para la promoción.");
       return;
     }
-    const nueva = {
-      id: "promo_" + Date.now(),
-      imagen: nuevaImagen,
-      descripcion: nuevaDescripcion.trim(),
-      codigo: nuevoCodigo.trim(),
-      creadaPor: revisorNombre || "Gerente",
-      creadaFecha: todayISO(),
-    };
-    persist({ ...data, promociones: [...promociones, nueva] });
-    setNuevaImagen(null);
-    setNuevaDescripcion("");
-    setNuevoCodigo("");
+    setGuardandoPromocion(true);
+    try {
+      const extension = (nuevaImagenFile.name.split(".").pop() || "jpg").toLowerCase();
+      const nombreArchivo = `promo_${Date.now()}.${extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("promociones")
+        .upload(nombreArchivo, nuevaImagenFile, { cacheControl: "3600", upsert: false });
+
+      if (uploadError) {
+        alert(`No se pudo subir la imagen: ${uploadError.message}`);
+        return;
+      }
+
+      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
+
+      const nueva = {
+        id: "promo_" + Date.now(),
+        imagen: urlData.publicUrl,
+        archivoStorage: nombreArchivo, // para poder borrar el archivo del bucket si se elimina la promoción
+        descripcion: nuevaDescripcion.trim(),
+        codigo: nuevoCodigo.trim(),
+        creadaPor: revisorNombre || "Gerente",
+        creadaFecha: todayISO(),
+      };
+      persist({ ...data, promociones: [...promociones, nueva] });
+      setNuevaImagenFile(null);
+      setNuevaImagenPreview(null);
+      setNuevaDescripcion("");
+      setNuevoCodigo("");
+    } finally {
+      setGuardandoPromocion(false);
+    }
   }
 
-  function eliminarPromocion(id) {
+  async function eliminarPromocion(id) {
+    const promo = promociones.find((p) => p.id === id);
     persist({ ...data, promociones: promociones.filter((p) => p.id !== id) });
+    if (promo?.archivoStorage) {
+      try {
+        await supabase.storage.from("promociones").remove([promo.archivoStorage]);
+      } catch (err) {
+        console.warn("No se pudo borrar el archivo del bucket:", err);
+      }
+    }
   }
 
   // El QR se compara de forma ESTRICTA (exacta, sensible a mayúsculas) contra
@@ -227,24 +263,25 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 10 }}>AGREGAR PROMOCIÓN</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            <button className="btn" onClick={() => fileRef.current?.click()}>
-              <ImageIcon size={14} style={{ verticalAlign: "-2px" }} /> {nuevaImagen ? "Cambiar imagen" : "Elegir imagen"}
+            <button className="btn" onClick={() => fileRef.current?.click()} disabled={guardandoPromocion}>
+              <ImageIcon size={14} style={{ verticalAlign: "-2px" }} /> {nuevaImagenPreview ? "Cambiar imagen" : "Elegir imagen"}
             </button>
-            {nuevaImagen && (
-              <button className="btn-ghost" onClick={() => setNuevaImagen(null)}>
+            {nuevaImagenPreview && (
+              <button className="btn-ghost" onClick={() => { setNuevaImagenFile(null); setNuevaImagenPreview(null); }} disabled={guardandoPromocion}>
                 <Ban size={14} style={{ verticalAlign: "-2px" }} /> Quitar imagen
               </button>
             )}
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImagenNuevaPromo} />
-          {nuevaImagen && (
-            <img src={nuevaImagen} alt="Vista previa" style={{ maxWidth: 200, borderRadius: 10, marginBottom: 10, display: "block" }} />
+          {nuevaImagenPreview && (
+            <img src={nuevaImagenPreview} alt="Vista previa" style={{ maxWidth: 200, borderRadius: 10, marginBottom: 10, display: "block" }} />
           )}
           <textarea
             value={nuevaDescripcion}
             onChange={(e) => setNuevaDescripcion(e.target.value)}
             placeholder="Descripción / vigencia de la promoción (opcional)..."
             rows={2}
+            disabled={guardandoPromocion}
             style={{
               width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13,
               color: "#000000", background: "#FFFFFF", marginBottom: 8,
@@ -255,13 +292,14 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
             value={nuevoCodigo}
             onChange={(e) => setNuevoCodigo(e.target.value)}
             placeholder="Código exacto que traerá el QR de esta promoción (obligatorio)"
+            disabled={guardandoPromocion}
             style={{
               width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13,
               color: "#000000", background: "#FFFFFF", marginBottom: 10, padding: "8px 10px",
             }}
           />
-          <button className="btn" onClick={agregarPromocion}>
-            <Plus size={14} style={{ verticalAlign: "-2px" }} /> Guardar promoción
+          <button className="btn" onClick={agregarPromocion} disabled={guardandoPromocion}>
+            <Plus size={14} style={{ verticalAlign: "-2px" }} /> {guardandoPromocion ? "Guardando..." : "Guardar promoción"}
           </button>
         </div>
       )}

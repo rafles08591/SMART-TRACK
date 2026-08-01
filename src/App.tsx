@@ -9,15 +9,13 @@ import {
   Plus, Trash2, Calendar, ChevronRight, AlertCircle, CheckCircle2, Clock, MessageSquare,
   RefreshCw, Ticket, Camera, Image as ImageIcon, Ban,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
 import html2canvas from "html2canvas"; // npm install html2canvas
 import CuponeraView from "./components/CuponeraView";
+import { supabase } from "./supabaseClient";
 
 // ====== SUPABASE ======
-// Reemplaza estos dos valores por los de tu propio proyecto de Supabase.
-const SUPABASE_URL = "https://jxyosutthiuzbrmdznoa.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable__ar93u3tGlT6qILWxGTZdw_B1gt699R";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// El cliente de Supabase ahora vive en ./supabaseClient.js (compartido con
+// CuponeraView.jsx, que también necesita subir imágenes a Storage).
 // Requiere una tabla "ventas_app_state" con columnas: id (text, PK), data (jsonb), updated_at (timestamptz)
 // y Realtime habilitado sobre esa tabla para la sincronización instantánea entre usuarios.
 const STATE_ID = "main";
@@ -223,7 +221,7 @@ function defaultData() {
       name: r,
       objetivos: { ...blankObjetivos(), open: 150000, champions: 200000, max: 200000, otc: 1600 * 6, otcDiario: 1600 },
     })),
-    ventas: [],
+    ventas: [], // OBSOLETO: las ventas del periodo ahora viven en la tabla ventas_periodo, ya no aquí.
     avanceDia: [],
     otcDia: [],
     diasNoLaborables: [],
@@ -261,6 +259,9 @@ export default function App() {
   const avanceDiaFileInputRef = useRef(null);
   const otcDiaFileInputRef = useRef(null);
   const ventasPeriodoFileInputRef = useRef(null);
+  // Ventas del periodo: ahora viven en su propia tabla de Postgres
+  // (ventas_periodo), no dentro del JSON grande de ventas_app_state.
+  const [ventasPeriodo, setVentasPeriodoState] = useState([]);
   const mesaControlFileInputRef = useRef(null);
 
   useEffect(() => {
@@ -365,8 +366,65 @@ export default function App() {
     }
   }
 
+  // Carga las ventas del periodo directamente desde su propia tabla
+  // (ventas_periodo), filtrando por rango de fechas en el servidor. Esto ya
+  // no depende del tamaño del JSON grande de ventas_app_state.
+  async function cargarVentasPeriodo(periodoActual) {
+    if (!periodoActual?.inicio || !periodoActual?.fin) return;
+    try {
+      const { data: filas, error } = await supabase
+        .from("ventas_periodo")
+        .select("vendedor, fecha, marca, paquetes, monto, cliente")
+        .gte("fecha", periodoActual.inicio)
+        .lte("fecha", periodoActual.fin);
+
+      if (error) {
+        console.error("Error cargando ventas_periodo:", error);
+        return;
+      }
+
+      setVentasPeriodoState(
+        (filas || []).map((r) => ({
+          fecha: r.fecha,
+          vendedor: r.vendedor,
+          marca: r.marca || "",
+          estrategica: false,
+          monto: Number(r.monto) || 0,
+          paquetes: Number(r.paquetes) || 0,
+          visitaEfectiva: false,
+          cliente: r.cliente || "",
+        }))
+      );
+    } catch (err) {
+      console.error("Error de red cargando ventas_periodo:", err);
+    }
+  }
+
+  // Se recarga cada vez que cambia el rango del periodo, y se mantiene
+  // sincronizada en tiempo real entre dispositivos.
+  useEffect(() => {
+    const periodoActual = data?.periodo;
+    if (!periodoActual?.inicio || !periodoActual?.fin) return;
+
+    cargarVentasPeriodo(periodoActual);
+
+    const canal = supabase
+      .channel(`ventas_periodo_changes_${periodoActual.inicio}_${periodoActual.fin}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "ventas_periodo" },
+        () => cargarVentasPeriodo(periodoActual)
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(canal);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.periodo?.inicio, data?.periodo?.fin]);
+
   const vendedores = data?.vendedores || [];
-  const ventas = data?.ventas || [];
+  const ventas = ventasPeriodo;
   const avanceDia = data?.avanceDia || [];
   const otcDia = data?.otcDia || [];
   const otcSemanal = data?.otcSemanal || [];
@@ -402,8 +460,13 @@ export default function App() {
     }
 
     const porVendedor = vendedores.map((v) => {
+      // Solo se cuentan ventas dentro del rango del periodo actual. Antes se
+      // sumaba TODO el historial guardado en data.ventas sin importar la
+      // fecha, lo cual inflaba los totales con meses/periodos anteriores y
+      // hacía crecer el renglón de la base de datos sin límite.
       const propias = ventas.filter(
         (r) => r.vendedor.trim().toLowerCase() === v.name.trim().toLowerCase()
+          && r.fecha >= periodo.inicio && r.fecha <= periodo.fin
       );
       const volumenVentas = propias.reduce((s, r) => s + (Number(r.monto) || 0), 0);
       const paquetesTotal = propias.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
@@ -932,9 +995,9 @@ export default function App() {
     return parseTextoDelimitado(contenido);
   }
 
-  // Fusiona los nuevos registros en el historial guardado: reemplaza solo las
-  // fechas que vengan en la carga (permite corregir un día) y conserva intacto
-  // el resto del historial acumulado día a día.
+  // YA NO SE USA: se dejó por si acaso, pero handleVentasPeriodoFile ahora
+  // guarda directo en la tabla ventas_periodo (borra+inserta por fecha) en
+  // vez de fusionar un historial dentro del JSON grande.
   function fusionarPorFecha(historialActual, registrosNuevos) {
     const fechasNuevas = new Set(registrosNuevos.map((r) => r.fecha));
     const historialSinEsasFechas = (historialActual || []).filter((r) => !fechasNuevas.has(r.fecha));
@@ -979,25 +1042,60 @@ export default function App() {
     }
   }
 
-  // Carga acumulada del periodo: alimenta `ventas` (OPEN, CHAMPIONS, MAX).
-  // Acepta hasta 2 archivos (se combinan) y guarda el historial completo:
-  // cada carga solo reemplaza las fechas que traiga, el resto de días ya
-  // guardados se conserva, para que el avance se vaya sumando día a día.
+  // Carga acumulada del periodo: alimenta `ventas` (OPEN, CHAMPIONS y MAX).
+  // Acepta hasta 2 archivos (se combinan). Ahora se guarda directo en la
+  // tabla ventas_periodo: se borran las fechas que trae el archivo nuevo y
+  // se insertan de nuevo (mismo efecto de "reemplazar esas fechas" que
+  // antes, pero sin tener que reescribir un JSON gigante cada vez).
   async function handleVentasPeriodoFile(e) {
     const files = Array.from(e.target.files || []).slice(0, 2);
     e.target.value = "";
     if (files.length === 0) return;
     try {
+      setVentasPeriodoStatus(`Procesando ${files.length} archivo${files.length > 1 ? "s" : ""}...`);
+
       const filasPorArchivo = await Promise.all(files.map(parsearArchivoComoFilas));
       const registros = convertirFilasVentasPeriodo(filasPorArchivo.flat());
       if (registros.length === 0) {
         setVentasPeriodoStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
         return;
       }
-      const { historial, fechas } = fusionarPorFecha(data.ventas, registros);
-      persist({ ...data, ventas: historial });
-      setVentasPeriodoStatus(`Periodo actualizado: ${registros.length} registros (${files.length} archivo${files.length > 1 ? "s" : ""}) para ${fechas.join(", ")}. Historial acumulado: ${historial.length} registros.`);
+
+      const fechas = [...new Set(registros.map((r) => r.fecha))];
+
+      // Reemplaza esas fechas: primero borra lo que ya hubiera de esos días.
+      const { error: delError } = await supabase.from("ventas_periodo").delete().in("fecha", fechas);
+      if (delError) {
+        console.error("Error borrando ventas previas:", delError);
+        setVentasPeriodoStatus(`Error al guardar en la nube: ${delError.message} (code: ${delError.code || "?"})`);
+        return;
+      }
+
+      const filasParaInsertar = registros.map((r) => ({
+        vendedor: r.vendedor,
+        fecha: r.fecha,
+        marca: r.marca,
+        paquetes: r.paquetes,
+        monto: r.monto,
+        cliente: r.cliente,
+      }));
+
+      // Se inserta en lotes por seguridad (evita mandar un solo request enorme).
+      const TAMANO_LOTE = 1000;
+      for (let i = 0; i < filasParaInsertar.length; i += TAMANO_LOTE) {
+        const lote = filasParaInsertar.slice(i, i + TAMANO_LOTE);
+        const { error: insError } = await supabase.from("ventas_periodo").insert(lote);
+        if (insError) {
+          console.error("Error insertando ventas:", insError);
+          setVentasPeriodoStatus(`Error al guardar en la nube: ${insError.message} (code: ${insError.code || "?"})`);
+          return;
+        }
+      }
+
+      await cargarVentasPeriodo(data.periodo);
+      setVentasPeriodoStatus(`Periodo actualizado: ${registros.length} registros (${files.length} archivo${files.length > 1 ? "s" : ""}) para ${fechas.join(", ")}.`);
     } catch (err) {
+      console.error(err);
       setVentasPeriodoStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha, Articulo, Paquetes y Total $.");
     }
   }
@@ -1776,13 +1874,14 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
     });
   }
   function updatePeriodo(field, val) {
-    // Al iniciar/editar el periodo se reinicia el conteo de cupones
-    // canjeados por ruta (data.cuponesRedimidos), para que la información
-    // de un periodo anterior no se mezcle con la del nuevo. Por eso conviene
-    // descargar el Excel de canjes ANTES de cambiar las fechas del periodo.
+    const nuevoPeriodo = { ...data.periodo, [field]: val };
+    // Las ventas del periodo ya viven en su propia tabla (ventas_periodo) y
+    // se recargan solas cuando cambia data.periodo (ver useEffect de
+    // cargarVentasPeriodo). Aquí solo se reinicia el conteo de cupones
+    // canjeados por ruta, para que no se mezcle con el periodo nuevo.
     persist({
       ...data,
-      periodo: { ...data.periodo, [field]: val },
+      periodo: nuevoPeriodo,
       cuponesRedimidos: [],
     });
   }
