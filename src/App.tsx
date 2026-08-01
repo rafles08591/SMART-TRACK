@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import html2canvas from "html2canvas"; // npm install html2canvas
 import CuponeraView from "./components/CuponeraView";
-import TiemposView from "./components/TiemposView";
+import TiemposView, { supabaseTiempos } from "./components/TiemposView";
 import { supabase } from "./supabaseClient";
 
 // ====== SUPABASE ======
@@ -36,7 +36,7 @@ const NOMBRES = {
   "SUPERVISOR-1": "Christian Velasco",
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
-  "LIQUIDACION": "Sulema Ponce",
+  "LIQUIDACION- SULEMA PONCE": "Sulema Ponce",
 };
 const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
@@ -1740,8 +1740,66 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
   );
 }
 
+// Busca, en el panel de Tiempos (otro proyecto de Supabase), los horarios de
+// "Ingreso a CLO" y "Salida a ruta" para una ruta y fecha dadas. Primero
+// revisa el día activo; si no coincide, busca en el historial de Tiempos.
+async function buscarTiemposParaRutaFecha(rutaCodigo, fecha) {
+  try {
+    const { data: activoRow } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "board-activo").maybeSingle();
+    if (activoRow?.value?.fecha === fecha && activoRow.value.rutas?.[rutaCodigo]) {
+      return activoRow.value.rutas[rutaCodigo].areas;
+    }
+    const { data: histRow } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "historial-rutas").maybeSingle();
+    const historial = Array.isArray(histRow?.value) ? histRow.value : [];
+    const encontrado = historial.find((h) => h.fecha === fecha && h.ruta === rutaCodigo);
+    return encontrado ? encontrado.areas : null;
+  } catch (e) {
+    console.error("Error consultando Tiempos:", e);
+    return null;
+  }
+}
+
+function formatHoraTiempos(ts) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// Compara dos horas en formato "HH:MM:SS" / "HH:MM" y regresa la diferencia
+// en minutos (positivo = la segunda es más tarde que la primera).
+function diferenciaMinutos(horaA, horaB) {
+  if (!horaA || !horaB) return null;
+  const aParts = horaA.split(":").map(Number);
+  const bParts = horaB.split(":").map(Number);
+  if (aParts.some(isNaN) || bParts.some(isNaN)) return null;
+  const aMin = aParts[0] * 60 + aParts[1] + (aParts[2] || 0) / 60;
+  const bMin = bParts[0] * 60 + bParts[1] + (bParts[2] || 0) / 60;
+  return Math.round(bMin - aMin);
+}
+
 function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
   const [modoCaptura, setModoCaptura] = useState(false);
+  const [tiempos, setTiempos] = useState(null);
+  const [tiemposCargando, setTiemposCargando] = useState(true);
+
+  useEffect(() => {
+    let activo = true;
+    setTiemposCargando(true);
+    const codigo = (nombreRuta || "").replace("RUTA ", "").trim();
+    const fecha = analisis?.fecha;
+    if (!codigo || !fecha) {
+      setTiempos(null);
+      setTiemposCargando(false);
+      return;
+    }
+    buscarTiemposParaRutaFecha(codigo, fecha).then((areas) => {
+      if (activo) {
+        setTiempos(areas);
+        setTiemposCargando(false);
+      }
+    });
+    return () => { activo = false; };
+  }, [nombreRuta, analisis?.fecha]);
+
   if (!analisis) {
     return (
       <div>
@@ -1778,6 +1836,34 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
         <KpiCard icon={<Clock size={14} />} label="Hora de inicio" value={horaInicio || "—"} />
         <KpiCard icon={<Target size={14} />} label="Volumen total" value={unidades(volumenTotal)} accent="#F2B134" />
         <KpiCard icon={<AlertCircle size={14} />} label="Visitas < 3 min" value={menores3.length} accent={menores3.length > 0 ? "#FF6B6B" : "#3DDC97"} />
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+        <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>TIEMPOS · INGRESO Y SALIDA A RUTA</div>
+        {tiemposCargando ? (
+          <div style={{ fontSize: 13, color: "#9AA7BD" }}>Consultando panel de Tiempos...</div>
+        ) : !tiempos ? (
+          <div style={{ fontSize: 13, color: "#9AA7BD" }}>No hay registro de Tiempos para esta ruta en esta fecha.</div>
+        ) : (() => {
+          const horaIngresoClo = formatHoraTiempos(tiempos.ingreso_clo?.ts);
+          const horaSalidaRuta = formatHoraTiempos(tiempos.salida_ruta?.ts);
+          const diffMin = diferenciaMinutos(horaInicio, horaSalidaRuta);
+          return (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              <KpiCard icon={<Truck size={14} />} label="Ingreso a CLO" value={horaIngresoClo || "—"} />
+              <KpiCard icon={<Clock size={14} />} label="Salida a ruta" value={horaSalidaRuta || "—"} />
+              <KpiCard
+                icon={<AlertCircle size={14} />}
+                label="Salida a ruta vs. inicio de ruta"
+                value={diffMin == null ? "—" : `${diffMin > 0 ? "+" : ""}${diffMin} min`}
+                accent={diffMin == null ? undefined : diffMin > 10 ? "#FF6B6B" : "#3DDC97"}
+              />
+            </div>
+          );
+        })()}
+        <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
+          El número de la comparación es cuántos minutos después (positivo) o antes (negativo) de "Salida a ruta" se registró la primera visita del día.
+        </div>
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
@@ -2260,7 +2346,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
           ) : objTab === "cuponera" ? (
             <CuponeraView data={data} persist={persist} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
           ) : objTab === "tiempos" ? (
-            <TiemposView identidad={revisorNombre} misAreas={["Ingreso", "Ingreso tarde"]} />
+            <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />

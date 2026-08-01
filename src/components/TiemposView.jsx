@@ -2,6 +2,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Truck,
+  Navigation,
+  Undo2,
+  LogOut,
   Receipt,
   Warehouse,
   CheckCircle2,
@@ -10,6 +13,7 @@ import {
   History,
   Play,
   Square,
+  Check,
   ChevronRight,
   Download,
   Clock,
@@ -27,7 +31,7 @@ import { createClient } from "@supabase/supabase-js";
 const TIEMPOS_SUPABASE_URL = "https://nzbsmkscvzttekkwgkqz.supabase.co";
 const TIEMPOS_SUPABASE_ANON_KEY = "sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU";
 
-const supabaseTiempos = createClient(TIEMPOS_SUPABASE_URL, TIEMPOS_SUPABASE_ANON_KEY);
+export const supabaseTiempos = createClient(TIEMPOS_SUPABASE_URL, TIEMPOS_SUPABASE_ANON_KEY);
 
 const storage = {
   async get(key) {
@@ -52,27 +56,32 @@ const storage = {
   },
 };
 
-const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
+export const RUTAS_TIEMPOS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 
-// "Almacén" ya no es un área manual: se activa y se cierra sola (ver más abajo).
-const AREAS = [
-  { key: "ingreso", nombre: "Ingreso", Icon: Truck, manual: true },
-  { key: "ingreso_tarde", nombre: "Ingreso tarde", Icon: Clock, manual: true },
-  { key: "liquidacion", nombre: "Liquidación", Icon: Receipt, manual: true },
-  { key: "almacen", nombre: "Almacén", Icon: Warehouse, manual: false },
+// Secuencia del día: Ingreso a CLO -> Salida a ruta -> Ingreso a CLO (fin de
+// ruta) -> Liquidación -> Almacén (automático) -> Salida de CLO final.
+// "instante": se marca una sola vez (un solo timestamp, sin entrada/salida).
+// "duracion": tiene entrada y salida, como antes.
+export const AREAS = [
+  { key: "ingreso_clo", nombre: "Ingreso a CLO", Icon: Truck, tipo: "instante", manual: true },
+  { key: "salida_ruta", nombre: "Salida a ruta", Icon: Navigation, tipo: "instante", manual: true },
+  { key: "ingreso_clo_fin", nombre: "Ingreso a CLO (fin de ruta)", Icon: Undo2, tipo: "instante", manual: true },
+  { key: "liquidacion", nombre: "Liquidación", Icon: Receipt, tipo: "duracion", manual: true },
+  { key: "almacen", nombre: "Almacén", Icon: Warehouse, tipo: "duracion", manual: false },
+  { key: "salida_clo_final", nombre: "Salida de CLO final", Icon: LogOut, tipo: "instante", manual: true },
 ];
 
-const AREAS_INGRESO = ["ingreso", "ingreso_tarde"];
+const AREA_COLORS = {
+  ingreso_clo: "#f59e0b",
+  salida_ruta: "#38bdf8",
+  ingreso_clo_fin: "#a78bfa",
+  liquidacion: "#6366f1",
+  almacen: "#15803d",
+  salida_clo_final: "#ef4444",
+};
 
 const UMBRAL_ALERTA_MS = 20 * 60 * 1000;
 const VENTANA_MIN = 300;
-
-const AREA_COLORS = {
-  ingreso: "#f59e0b",
-  ingreso_tarde: "#ea580c",
-  liquidacion: "#6366f1",
-  almacen: "#15803d",
-};
 
 function formatDuration(ms) {
   if (ms == null || ms < 0) ms = 0;
@@ -100,7 +109,10 @@ function todayStr() {
   return new Date().toLocaleDateString("en-CA");
 }
 
-function areaVacia() {
+function areaVaciaInstante() {
+  return { ts: null, usuario: null };
+}
+function areaVaciaDuracion() {
   return { entrada: null, salida: null, usuario: null };
 }
 
@@ -108,14 +120,23 @@ function rutaVacia(ruta) {
   return {
     ruta,
     areas: {
-      ingreso: areaVacia(),
-      ingreso_tarde: areaVacia(),
-      liquidacion: areaVacia(),
-      almacen: areaVacia(),
+      ingreso_clo: areaVaciaInstante(),
+      salida_ruta: areaVaciaInstante(),
+      ingreso_clo_fin: areaVaciaInstante(),
+      liquidacion: areaVaciaDuracion(),
+      almacen: areaVaciaDuracion(),
+      salida_clo_final: areaVaciaInstante(),
     },
     finalizado: false,
     finalizadoTs: null,
   };
+}
+
+function todasCompletas(r) {
+  return AREAS.every((a) => {
+    const ar = r.areas[a.key];
+    return a.tipo === "instante" ? !!ar.ts : !!(ar.entrada && ar.salida);
+  });
 }
 
 const EMPTY_ACTIVO = { fecha: todayStr(), rutas: {} };
@@ -124,11 +145,11 @@ const EMPTY_ACTIVO = { fecha: todayStr(), rutas: {} };
  * Panel de Tiempos, embebido dentro de SMART-TRACK.
  *
  * Props:
- * - identidad: texto a mostrar como "usuario" en cada marca (ej. "Gerente" o "Sulema Ponce").
+ * - identidad: texto a mostrar como "usuario" en cada marca.
  * - misAreas: arreglo con los nombres de área que esta identidad puede marcar
- *   (ej. ["Ingreso", "Ingreso tarde"] para staff, ["Liquidación"] para Sulema).
- * - onLogout: opcional, si se debe mostrar un botón de salir dentro del propio panel
- *   (para la vista exclusiva de Sulema; el staff normal ya tiene su logout aparte).
+ *   (ej. ["Ingreso a CLO","Salida a ruta","Ingreso a CLO (fin de ruta)","Salida de CLO final"]
+ *   para staff, ["Liquidación"] para Sulema).
+ * - onLogout: opcional, botón de salir dentro del propio panel (vista exclusiva de Sulema).
  */
 export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const [activo, setActivo] = useState(EMPTY_ACTIVO);
@@ -222,32 +243,39 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     await storage.set("historial-rutas", JSON.stringify(nuevo));
   }, []);
 
-  // Revisa si, tras cerrar un área de ingreso, ya se puede cerrar Almacén
-  // automáticamente (cuando TODAS las áreas de ingreso que sí se usaron ese
-  // día ya tienen salida marcada).
-  function intentarCerrarAlmacenAuto(r, ts) {
-    const almacen = r.areas.almacen;
-    if (!almacen.entrada || almacen.salida) return r; // no está abierto, nada que hacer
+  // Marca un checkpoint de una sola vez (ingreso_clo, salida_ruta,
+  // ingreso_clo_fin, salida_clo_final).
+  const marcarInstante = async (ruta, areaKey, areaNombre) => {
+    if (!misAreas.includes(areaNombre)) return;
+    const hoy = todayStr();
+    let fresh = await fetchLatestActivo();
+    if (fresh.fecha !== hoy) fresh = { fecha: hoy, rutas: {} };
+    const r = fresh.rutas[ruta] || rutaVacia(ruta);
+    if (r.areas[areaKey].ts) return;
+    const ts = Date.now();
+    let areasNuevas = { ...r.areas, [areaKey]: { ts, usuario: identidad } };
+    let rutaActualizada = { ...r, areas: areasNuevas };
 
-    const todasIngresoCerradas = AREAS_INGRESO.every((k) => {
-      const a = r.areas[k];
-      return !a.entrada || a.salida; // si no se usó, no bloquea; si se usó, debe estar cerrada
-    });
-    const algunaSeUso = AREAS_INGRESO.some((k) => r.areas[k].entrada);
-
-    if (todasIngresoCerradas && algunaSeUso) {
-      return {
-        ...r,
-        areas: { ...r.areas, almacen: { ...almacen, salida: ts, usuario: almacen.usuario || "Automático" } },
+    // "Salida de CLO final" cierra Almacén automáticamente en ese instante.
+    if (areaKey === "salida_clo_final" && rutaActualizada.areas.almacen.entrada && !rutaActualizada.areas.almacen.salida) {
+      rutaActualizada = {
+        ...rutaActualizada,
+        areas: { ...rutaActualizada.areas, almacen: { ...rutaActualizada.areas.almacen, salida: ts, usuario: rutaActualizada.areas.almacen.usuario || "Automático" } },
       };
     }
-    return r;
-  }
 
-  function todasCompletas(r) {
-    return AREAS.every((a) => r.areas[a.key].entrada && r.areas[a.key].salida);
-  }
+    const completas = todasCompletas(rutaActualizada);
+    rutaActualizada = { ...rutaActualizada, finalizado: completas, finalizadoTs: completas ? ts : rutaActualizada.finalizadoTs };
 
+    await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: rutaActualizada } });
+
+    if (completas) {
+      const freshHist = await fetchLatestHistorial();
+      await guardarHistorial([{ fecha: hoy, ruta, areas: rutaActualizada.areas, finalizadoTs: ts }, ...freshHist].slice(0, 300));
+    }
+  };
+
+  // Marca entrada de una zona de duración (solo Liquidación es manual; Almacén nunca).
   const marcarEntrada = async (ruta, areaKey, areaNombre) => {
     if (!misAreas.includes(areaNombre)) return;
     const hoy = todayStr();
@@ -256,10 +284,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     const r = fresh.rutas[ruta] || rutaVacia(ruta);
     if (r.areas[areaKey].entrada) return;
     const ts = Date.now();
-    const nuevaRuta = {
-      ...r,
-      areas: { ...r.areas, [areaKey]: { entrada: ts, salida: null, usuario: identidad } },
-    };
+    const nuevaRuta = { ...r, areas: { ...r.areas, [areaKey]: { entrada: ts, salida: null, usuario: identidad } } };
     await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: nuevaRuta } });
   };
 
@@ -275,36 +300,22 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     let areasNuevas = { ...r.areas, [areaKey]: { ...r.areas[areaKey], salida: ts } };
     let rutaActualizada = { ...r, areas: areasNuevas };
 
-    // Automatismo 1: si se acaba de cerrar Liquidación, Almacén arranca solo.
+    // Al cerrar Liquidación, Almacén arranca solo.
     if (areaKey === "liquidacion" && !rutaActualizada.areas.almacen.entrada) {
       rutaActualizada = {
         ...rutaActualizada,
-        areas: {
-          ...rutaActualizada.areas,
-          almacen: { entrada: ts, salida: null, usuario: "Automático" },
-        },
+        areas: { ...rutaActualizada.areas, almacen: { entrada: ts, salida: null, usuario: "Automático" } },
       };
     }
 
-    // Automatismo 2: si se acaba de cerrar Ingreso o Ingreso tarde, revisa si
-    // eso ya permite cerrar Almacén solo.
-    if (AREAS_INGRESO.includes(areaKey)) {
-      rutaActualizada = intentarCerrarAlmacenAuto(rutaActualizada, ts);
-    }
-
     const completas = todasCompletas(rutaActualizada);
-    rutaActualizada = {
-      ...rutaActualizada,
-      finalizado: completas,
-      finalizadoTs: completas ? ts : rutaActualizada.finalizadoTs,
-    };
+    rutaActualizada = { ...rutaActualizada, finalizado: completas, finalizadoTs: completas ? ts : rutaActualizada.finalizadoTs };
 
     await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: rutaActualizada } });
 
     if (completas) {
       const freshHist = await fetchLatestHistorial();
-      const registro = { fecha: hoy, ruta, areas: rutaActualizada.areas, finalizadoTs: ts };
-      await guardarHistorial([registro, ...freshHist].slice(0, 300));
+      await guardarHistorial([{ fecha: hoy, ruta, areas: rutaActualizada.areas, finalizadoTs: ts }, ...freshHist].slice(0, 300));
     }
   };
 
@@ -316,13 +327,17 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     .slice()
     .sort((a, b) => (b.fecha === a.fecha ? b.finalizadoTs - a.finalizadoTs : b.fecha.localeCompare(a.fecha)));
 
+  // Solo Liquidación y Almacén se dibujan como barras de duración en la
+  // línea de tiempo; los 4 checkpoints instantáneos se muestran como chips.
   const calcularPistas = (r) => {
-    const entradas = AREAS.map((a) => r.areas[a.key].entrada).filter(Boolean);
-    if (entradas.length === 0) return { pistas: [], hayActividad: false };
+    const areasDuracion = AREAS.filter((a) => a.tipo === "duracion");
+    const entradas = areasDuracion.map((a) => r.areas[a.key].entrada).filter(Boolean);
+    const hayInstantes = AREAS.some((a) => a.tipo === "instante" && r.areas[a.key].ts);
+    if (entradas.length === 0 && !hayInstantes) return { pistas: [], hayActividad: false };
     const ventanaMs = VENTANA_MIN * 60000;
     const finVentana = now;
     const inicioVentana = finVentana - ventanaMs;
-    const pistas = AREAS.map((a) => {
+    const pistas = areasDuracion.map((a) => {
       const ar = r.areas[a.key];
       if (!ar.entrada) return { key: a.key, nombre: a.nombre, activa: false };
       const finReal = ar.salida || now;
@@ -338,34 +353,33 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
 
   const exportarExcel = () => {
     try {
-      const filasHoy = RUTAS.map((ruta) => {
-        const r = rutasHoy[ruta] || rutaVacia(ruta);
-        const estado = r.finalizado ? "Completa" : AREAS.some((a) => r.areas[a.key].entrada) ? "En proceso" : "Sin registrar";
-        const fila = { Fecha: formatFecha(hoy), Ruta: ruta, Estado: estado };
+      const construirFila = (ruta, r) => {
+        const estado = r.finalizado ? "Completa" : AREAS.some((a) => (a.tipo === "instante" ? r.areas[a.key].ts : r.areas[a.key].entrada)) ? "En proceso" : "Sin registrar";
+        const fila = { Fecha: formatFecha(r.__fecha || hoy), Ruta: ruta, Estado: estado };
         AREAS.forEach((a) => {
           const ar = r.areas[a.key];
-          const mins = ar.entrada ? Math.round(((ar.salida || now) - ar.entrada) / 60000) : "";
-          fila[`${a.nombre} entrada`] = formatHora(ar.entrada);
-          fila[`${a.nombre} salida`] = formatHora(ar.salida);
-          fila[`${a.nombre} min`] = mins;
-          fila[`${a.nombre} usuario`] = ar.usuario || "";
+          if (a.tipo === "instante") {
+            fila[`${a.nombre}`] = formatHora(ar.ts);
+            fila[`${a.nombre} usuario`] = ar.usuario || "";
+          } else {
+            const mins = ar.entrada ? Math.round(((ar.salida || now) - ar.entrada) / 60000) : "";
+            fila[`${a.nombre} entrada`] = formatHora(ar.entrada);
+            fila[`${a.nombre} salida`] = formatHora(ar.salida);
+            fila[`${a.nombre} min`] = mins;
+            fila[`${a.nombre} usuario`] = ar.usuario || "";
+          }
         });
+        if (r.areas.ingreso_clo.ts && r.areas.salida_ruta.ts) {
+          fila["Minutos en CLO (antes de salir)"] = Math.round((r.areas.salida_ruta.ts - r.areas.ingreso_clo.ts) / 60000);
+        }
+        if (r.areas.salida_ruta.ts && r.areas.ingreso_clo_fin.ts) {
+          fila["Minutos en ruta"] = Math.round((r.areas.ingreso_clo_fin.ts - r.areas.salida_ruta.ts) / 60000);
+        }
         return fila;
-      });
+      };
 
-      const filasHistorial = historialOrdenado.map((reg) => {
-        const fila = { Fecha: formatFecha(reg.fecha), Ruta: reg.ruta };
-        AREAS.forEach((a) => {
-          const ar = reg.areas[a.key];
-          const mins = ar.entrada && ar.salida ? Math.round((ar.salida - ar.entrada) / 60000) : "";
-          fila[`${a.nombre} entrada`] = formatHora(ar.entrada);
-          fila[`${a.nombre} salida`] = formatHora(ar.salida);
-          fila[`${a.nombre} min`] = mins;
-          fila[`${a.nombre} usuario`] = ar.usuario || "";
-        });
-        fila["Finalizó"] = formatHora(reg.finalizadoTs);
-        return fila;
-      });
+      const filasHoy = RUTAS_TIEMPOS.map((ruta) => construirFila(ruta, rutasHoy[ruta] || rutaVacia(ruta)));
+      const filasHistorial = historialOrdenado.map((reg) => construirFila(reg.ruta, { areas: reg.areas, __fecha: reg.fecha, finalizado: true }));
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filasHoy), "Hoy");
@@ -397,7 +411,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         <div>
           <div className="display" style={{ fontSize: 16, color: "#E8EDF5" }}>TIEMPOS · RUTAS</div>
           <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 2 }}>
-            Ingreso · Ingreso tarde · Liquidación · Almacén (automático) · {formatFecha(hoy)}
+            Ingreso a CLO · Salida a ruta · Ingreso a CLO (fin) · Liquidación · Almacén (auto) · Salida de CLO final · {formatFecha(hoy)}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -411,9 +425,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
               {segundosDesdeSync !== null ? `· hace ${segundosDesdeSync}s` : ""}
             </span>
           </div>
-          {onLogout && (
-            <button className="btn-ghost" onClick={onLogout}>Salir</button>
-          )}
+          {onLogout && <button className="btn-ghost" onClick={onLogout}>Salir</button>}
         </div>
       </div>
 
@@ -442,12 +454,16 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         <p style={{ fontSize: 13, color: "#9AA7BD" }}>Cargando panel...</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-          {RUTAS.map((ruta) => {
+          {RUTAS_TIEMPOS.map((ruta) => {
             const r = rutasHoy[ruta] || rutaVacia(ruta);
-            const iniciada = AREAS.some((a) => r.areas[a.key].entrada);
+            const iniciada = AREAS.some((a) => (a.tipo === "instante" ? r.areas[a.key].ts : r.areas[a.key].entrada));
+            const minEnCLO = r.areas.ingreso_clo.ts && r.areas.salida_ruta.ts
+              ? Math.round((r.areas.salida_ruta.ts - r.areas.ingreso_clo.ts) / 60000) : null;
+            const minEnRuta = r.areas.salida_ruta.ts && r.areas.ingreso_clo_fin.ts
+              ? Math.round((r.areas.ingreso_clo_fin.ts - r.areas.salida_ruta.ts) / 60000) : null;
             return (
               <div key={ruta} className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid #1E2A42" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid #1E2A42", flexWrap: "wrap" }}>
                   <span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{ruta}</span>
                   {r.finalizado ? (
                     <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "#3DDC97", background: "#0f2a20", border: "1px solid #3DDC97", borderRadius: 6, padding: "2px 8px" }}>
@@ -460,26 +476,62 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                   ) : (
                     <span style={{ fontSize: 10, color: "#9AA7BD" }}>SIN REGISTRAR HOY</span>
                   )}
+                  {(minEnCLO != null || minEnRuta != null) && (
+                    <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 10, color: "#9AA7BD" }}>
+                      {minEnCLO != null && <span>En CLO: <b style={{ color: "#E8EDF5" }}>{minEnCLO} min</b></span>}
+                      {minEnRuta != null && <span>En ruta: <b style={{ color: "#E8EDF5" }}>{minEnRuta} min</b></span>}
+                    </span>
+                  )}
                 </div>
                 <div>
                   {AREAS.map((a) => {
                     const area = r.areas[a.key];
+                    const esMiArea = a.manual && misAreas.includes(a.nombre);
+
+                    if (a.tipo === "instante") {
+                      return (
+                        <div key={a.key} style={{ padding: "10px 14px", borderTop: "1px solid #1E2A42" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <div style={{
+                              width: 30, height: 30, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                              background: area.ts ? "#0f2a20" : "#141b2c",
+                              border: `1px solid ${area.ts ? "#3DDC97" : "#1E2A42"}`,
+                              color: area.ts ? "#3DDC97" : "#5b6478",
+                            }}>
+                              <a.Icon size={14} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#E8EDF5" }}>{a.nombre}</div>
+                              <div className="mono" style={{ fontSize: 10, color: "#9AA7BD", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {area.ts && <span>{formatHora(area.ts)}</span>}
+                                {area.usuario && <span style={{ color: "#6b7280" }}>· {area.usuario}</span>}
+                              </div>
+                            </div>
+                            {area.ts && <CheckCircle2 size={16} color="#3DDC97" />}
+                          </div>
+                          {esMiArea && !area.ts && (
+                            <button className="btn" style={{ width: "100%", marginTop: 8 }} onClick={() => marcarInstante(ruta, a.key, a.nombre)}>
+                              <Check size={13} style={{ verticalAlign: "-2px" }} /> Marcar {a.nombre.toLowerCase()}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // tipo === "duracion" (Liquidación, Almacén)
                     const activaAhora = area.entrada && !area.salida;
                     const completa = area.entrada && area.salida;
                     const elapsed = activaAhora ? now - area.entrada : null;
                     const alerta = elapsed != null && elapsed > UMBRAL_ALERTA_MS;
-                    const esMiArea = a.manual && misAreas.includes(a.nombre);
                     return (
                       <div key={a.key} style={{ padding: "10px 14px", borderTop: "1px solid #1E2A42" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <div
-                            style={{
-                              width: 30, height: 30, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                              background: completa ? "#0f2a20" : activaAhora ? "#2a2210" : "#141b2c",
-                              border: `1px solid ${completa ? "#3DDC97" : activaAhora ? "#F2B134" : "#1E2A42"}`,
-                              color: completa ? "#3DDC97" : activaAhora ? "#F2B134" : "#5b6478",
-                            }}
-                          >
+                          <div style={{
+                            width: 30, height: 30, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                            background: completa ? "#0f2a20" : activaAhora ? "#2a2210" : "#141b2c",
+                            border: `1px solid ${completa ? "#3DDC97" : activaAhora ? "#F2B134" : "#1E2A42"}`,
+                            color: completa ? "#3DDC97" : activaAhora ? "#F2B134" : "#5b6478",
+                          }}>
                             <a.Icon size={14} />
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -494,13 +546,9 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                           </div>
                           <div style={{ flexShrink: 0, textAlign: "right" }}>
                             {completa ? (
-                              <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: "#3DDC97" }}>
-                                {formatDuration(area.salida - area.entrada)}
-                              </span>
+                              <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: "#3DDC97" }}>{formatDuration(area.salida - area.entrada)}</span>
                             ) : activaAhora ? (
-                              <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: alerta ? "#FF6B6B" : "#E8EDF5" }}>
-                                {formatDuration(elapsed)}
-                              </span>
+                              <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: alerta ? "#FF6B6B" : "#E8EDF5" }}>{formatDuration(elapsed)}</span>
                             ) : (
                               <span style={{ fontSize: 11, color: "#3b4459" }}>—</span>
                             )}
@@ -528,7 +576,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div className="display" style={{ fontSize: 14, color: "#9AA7BD", display: "flex", alignItems: "center", gap: 6 }}>
-          <Clock size={14} /> LÍNEA DE TIEMPO · HOY
+          <Clock size={14} /> LÍNEA DE TIEMPO · HOY (LIQUIDACIÓN Y ALMACÉN)
         </div>
         <button className="btn-ghost" onClick={() => setTimelineFull(true)}>
           <Maximize2 size={13} style={{ verticalAlign: "-2px" }} /> Pantalla completa
@@ -598,11 +646,17 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                   return (
                     <div key={a.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderTop: "1px solid #1E2A42", fontSize: 12 }}>
                       <a.Icon size={13} color="#9AA7BD" />
-                      <span style={{ width: 100, color: "#E8EDF5" }}>{a.nombre}</span>
-                      <span className="mono" style={{ fontSize: 11, color: "#9AA7BD" }}>{formatHora(area.entrada)} → {formatHora(area.salida)}</span>
-                      <span className="mono" style={{ marginLeft: "auto", fontWeight: 700, color: "#3DDC97" }}>
-                        {area.entrada && area.salida ? formatDuration(area.salida - area.entrada) : "—"}
-                      </span>
+                      <span style={{ width: 170, color: "#E8EDF5" }}>{a.nombre}</span>
+                      {a.tipo === "instante" ? (
+                        <span className="mono" style={{ marginLeft: "auto", fontWeight: 700, color: "#3DDC97" }}>{formatHora(area.ts)}</span>
+                      ) : (
+                        <>
+                          <span className="mono" style={{ fontSize: 11, color: "#9AA7BD" }}>{formatHora(area.entrada)} → {formatHora(area.salida)}</span>
+                          <span className="mono" style={{ marginLeft: "auto", fontWeight: 700, color: "#3DDC97" }}>
+                            {area.entrada && area.salida ? formatDuration(area.salida - area.entrada) : "—"}
+                          </span>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -616,14 +670,15 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
 }
 
 function TimelineBloque({ now, rutasHoy, calcularPistas }) {
-  const rutasActivas = RUTAS.map((ruta) => ({ ruta, r: rutasHoy[ruta] || rutaVacia(ruta) }))
+  const areasDuracion = AREAS.filter((a) => a.tipo === "duracion");
+  const rutasActivas = RUTAS_TIEMPOS.map((ruta) => ({ ruta, r: rutasHoy[ruta] || rutaVacia(ruta) }))
     .map(({ ruta, r }) => ({ ruta, ...calcularPistas(r) }))
     .filter((x) => x.hayActividad);
 
   return (
     <div className="card" style={{ padding: 16, marginBottom: 20 }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#9AA7BD" }}>
-        {AREAS.map((a) => (
+        {areasDuracion.map((a) => (
           <span key={a.key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <span style={{ width: 10, height: 10, borderRadius: 2, background: AREA_COLORS[a.key], display: "inline-block" }} />
             {a.nombre}
@@ -633,30 +688,39 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
       {rutasActivas.length === 0 ? (
         <p style={{ fontSize: 13, color: "#9AA7BD", textAlign: "center", padding: 16 }}>Aún no hay rutas activas hoy.</p>
       ) : (
-        rutasActivas.map(({ ruta, pistas }) => (
-          <div key={ruta} style={{ marginBottom: 14 }}>
-            <div style={{ marginBottom: 6 }}>
-              <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: "#E8EDF5" }}>{ruta}</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {pistas.map((p) => (
-                <div key={p.key}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#9AA7BD", marginBottom: 2 }}>
-                    <span style={{ textTransform: "uppercase", fontWeight: 700, color: p.activa ? AREA_COLORS[p.key] : "#3b4459" }}>{p.nombre}</span>
-                    <span className="mono">
-                      {p.activa ? `${formatHora(p.entrada)} → ${p.cerrada ? formatHora(p.fin) : "ahora"} · ${p.minutos} min` : "—"}
-                    </span>
+        rutasActivas.map(({ ruta, pistas }) => {
+          const r = rutasHoy[ruta] || rutaVacia(ruta);
+          const chips = AREAS.filter((a) => a.tipo === "instante" && r.areas[a.key].ts);
+          return (
+            <div key={ruta} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <span className="mono" style={{ fontSize: 12, fontWeight: 700, color: "#E8EDF5" }}>{ruta}</span>
+                {chips.map((a) => (
+                  <span key={a.key} style={{ fontSize: 9, color: AREA_COLORS[a.key], border: `1px solid ${AREA_COLORS[a.key]}`, borderRadius: 5, padding: "1px 6px", display: "flex", alignItems: "center", gap: 3 }}>
+                    <a.Icon size={9} /> {formatHora(r.areas[a.key].ts)}
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {pistas.map((p) => (
+                  <div key={p.key}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#9AA7BD", marginBottom: 2 }}>
+                      <span style={{ textTransform: "uppercase", fontWeight: 700, color: p.activa ? AREA_COLORS[p.key] : "#3b4459" }}>{p.nombre}</span>
+                      <span className="mono">
+                        {p.activa ? `${formatHora(p.entrada)} → ${p.cerrada ? formatHora(p.fin) : "ahora"} · ${p.minutos} min` : "—"}
+                      </span>
+                    </div>
+                    <div style={{ position: "relative", width: "100%", height: 7, borderRadius: 4, background: "#141b2c" }}>
+                      {p.activa && (
+                        <div style={{ position: "absolute", top: 0, height: "100%", borderRadius: 4, left: `${p.leftPct}%`, width: `${p.widthPct}%`, background: AREA_COLORS[p.key] }} />
+                      )}
+                    </div>
                   </div>
-                  <div style={{ position: "relative", width: "100%", height: 7, borderRadius: 4, background: "#141b2c" }}>
-                    {p.activa && (
-                      <div style={{ position: "absolute", top: 0, height: "100%", borderRadius: 4, left: `${p.leftPct}%`, width: `${p.widthPct}%`, background: AREA_COLORS[p.key] }} />
-                    )}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
