@@ -764,7 +764,8 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
       {rutasActivas.length === 0 ? (
         <p style={{ fontSize: 13, color: "#9AA7BD", textAlign: "center", padding: 16 }}>Aún no hay rutas activas hoy.</p>
       ) : (
-        rutasActivas.map(({ ruta, pistas }) => {
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 18 }}>
+        {rutasActivas.map(({ ruta, pistas }) => {
           const r = normalizarRuta(rutasHoy[ruta], ruta);
           const chips = AREAS.filter((a) => a.tipo === "instante" && r.areas[a.key].ts);
           return (
@@ -811,7 +812,8 @@ function TimelineBloque({ now, rutasHoy, calcularPistas }) {
               </div>
             </div>
           );
-        })
+        })}
+        </div>
       )}
     </div>
   );
