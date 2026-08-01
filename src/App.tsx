@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import html2canvas from "html2canvas"; // npm install html2canvas
 import CuponeraView from "./components/CuponeraView";
+import TiemposView from "./components/TiemposView";
 import { supabase } from "./supabaseClient";
 
 // ====== SUPABASE ======
@@ -35,6 +36,7 @@ const NOMBRES = {
   "SUPERVISOR-1": "Christian Velasco",
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
+  "LIQUIDACION": "Sulema Ponce",
 };
 const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
@@ -43,6 +45,7 @@ const OBJETIVO_TABS = [
   { key: "champions", label: "CHAMPIONS", unit: "units" },
   { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "cuponera", label: "CUPONERA", unit: "special" },
+  { key: "tiempos", label: "TIEMPOS", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -98,6 +101,7 @@ const USERS = [
   { username: "SUPERVISOR-1", password: "3030", role: "staff", puesto: "supervisor" },
   { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
   { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
+  { username: "LIQUIDACION- SULEMA PONCE", password: "7625", role: "liquidacion" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -1389,6 +1393,16 @@ export default function App() {
         />
       )}
 
+      {role === "liquidacion" && (
+        <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
+          <TiemposView
+            identidad={NOMBRES[staffUsername] || "Sulema Ponce"}
+            misAreas={["Liquidación"]}
+            onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
+          />
+        </div>
+      )}
+
       {role === "vendedor" && (
         <VendorView
           vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
@@ -1877,7 +1891,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => t.key !== "tiempos")} />
 
       {tab === "dia" ? (
         <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} />
@@ -2072,7 +2086,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
 
       {tab === "resumen" && (
         <>
-          <ObjetivoTabs tab={objTab} setTab={setObjTab} tabs={esSupervisor2 ? OBJETIVO_TABS.filter((t) => t.key === "dia" || t.key === "mesa" || t.key === "cuponera") : undefined} />
+          <ObjetivoTabs tab={objTab} setTab={setObjTab} tabs={esSupervisor2 ? OBJETIVO_TABS.filter((t) => t.key === "dia" || t.key === "mesa" || t.key === "cuponera" || t.key === "tiempos") : undefined} />
 
           {objTab === "dia" ? (
             <>
@@ -2245,6 +2259,8 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             </>
           ) : objTab === "cuponera" ? (
             <CuponeraView data={data} persist={persist} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
+          ) : objTab === "tiempos" ? (
+            <TiemposView identidad={revisorNombre} misAreas={["Ingreso", "Ingreso tarde"]} />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
