@@ -46,6 +46,10 @@ const OBJETIVO_TABS = [
   { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "cuponera", label: "CUPONERA", unit: "special" },
   { key: "tiempos", label: "TIEMPOS", unit: "special" },
+  { key: "rutas", label: "RUTAS", unit: "special" },
+  { key: "actividades_dia", label: "ACTIVIDADES DÍA", unit: "special" },
+  { key: "actividades_semana", label: "ACTIVIDADES SEMANA", unit: "special" },
+  { key: "actividades_mes", label: "ACTIVIDADES MES", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -242,6 +246,90 @@ function defaultData() {
     // reinicia cada vez que arranca un nuevo periodo (ver updatePeriodo).
     cuponesRedimidos: [],
     periodo: { inicio: firstOfMonthISO(), fin: lastOfMonthISO() },
+    // Checklists de actividades: día (se reinicia cada día), semana (cada
+    // lunes) y mes (cada mes). Se siembran solas la primera vez que se usan
+    // (ver normalizarActividades).
+    actividades: {
+      dia: { fecha: null, items: [] },
+      semana: { semanaId: null, items: [] },
+      mes: { mesId: null, items: [] },
+    },
+  };
+}
+
+// Actividades fijas con las que arranca cada checklist (se pueden agregar más desde la app).
+const ACTIVIDADES_INICIALES = {
+  dia: [
+    "Marcar llegada CLO, salida a ruta",
+    "Conteos matutinos",
+    "Registro de KM",
+    "Seguimiento a rutas",
+    "Mesa de control 1",
+    "Mesa de control 2",
+  ],
+  mes: [
+    "Nómina mínima esperada",
+    "Inventario puerta cerrada",
+  ],
+  semana: [
+    "Arqueo de créditos",
+    "Arqueo resguardo",
+    "Feedback nómina",
+  ],
+};
+
+function fechaHoyISO() {
+  return new Date().toLocaleDateString("en-CA");
+}
+
+// Lunes de la semana de una fecha dada (se usa como identificador único de "esta semana").
+function lunesDeSemana(fechaISO) {
+  const d = new Date(fechaISO + "T00:00:00");
+  const dia = d.getDay(); // 0=domingo … 6=sábado
+  const diff = (dia === 0 ? -6 : 1) - dia;
+  d.setDate(d.getDate() + diff);
+  return d.toLocaleDateString("en-CA");
+}
+
+function nuevaActividad(texto, tipo, autor, fechaISO) {
+  return {
+    id: "act_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+    texto: texto.trim(),
+    tipo, // "fija" | "temporal"
+    hecha: false,
+    creadaPor: autor || "Sistema",
+    creadaFecha: fechaISO,
+  };
+}
+
+// Procesa un ciclo (día/semana/mes): si el identificador (fecha/semanaId/mesId)
+// ya coincide con el actual, no toca nada. Si cambió (o es la primera vez),
+// reinicia las actividades FIJAS a pendiente y purga las TEMPORALES que ya se
+// hubieran marcado como hechas (las temporales pendientes se conservan).
+function procesarCicloActividades(estado, idActual, campoId, semillas) {
+  const idGuardado = estado && estado[campoId];
+  if (idGuardado === idActual) return estado;
+
+  if (!idGuardado) {
+    return { [campoId]: idActual, items: semillas.map((texto) => nuevaActividad(texto, "fija", "Sistema", idActual)) };
+  }
+
+  const items = (estado.items || [])
+    .filter((it) => it.tipo === "fija" || !it.hecha)
+    .map((it) => (it.tipo === "fija" ? { ...it, hecha: false } : it));
+
+  return { [campoId]: idActual, items };
+}
+
+function normalizarActividades(actividadesActuales) {
+  const hoy = fechaHoyISO();
+  const semanaActual = lunesDeSemana(hoy);
+  const mesActual = hoy.slice(0, 7);
+  const base = actividadesActuales || { dia: { fecha: null, items: [] }, semana: { semanaId: null, items: [] }, mes: { mesId: null, items: [] } };
+  return {
+    dia: procesarCicloActividades(base.dia, hoy, "fecha", ACTIVIDADES_INICIALES.dia),
+    semana: procesarCicloActividades(base.semana, semanaActual, "semanaId", ACTIVIDADES_INICIALES.semana),
+    mes: procesarCicloActividades(base.mes, mesActual, "mesId", ACTIVIDADES_INICIALES.mes),
   };
 }
 
@@ -1504,16 +1592,25 @@ function KpiCard({ icon, label, value, accent }) {
   );
 }
 
-function ObjetivoTabs({ tab, setTab, tabs }) {
+function ObjetivoTabs({ tab, setTab, tabs, estadoTabs }) {
   const lista = tabs || OBJETIVO_TABS;
   return (
     <div style={{ display: "flex", gap: 8, margin: "14px 0", flexWrap: "wrap" }}>
-      {lista.map((t) => (
-        <button key={t.key} onClick={() => setTab(t.key)}
-          className={tab === t.key ? "btn" : "btn-ghost"} style={{ fontSize: 13, flex: 1 }}>
-          {t.label}
-        </button>
-      ))}
+      <style>{`
+        @keyframes parpadeoRojoTab { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.55); } 50% { box-shadow: 0 0 0 5px rgba(255,107,107,0); } }
+        .tab-pendiente { border: 1px solid #FF6B6B !important; color: #FF6B6B !important; animation: parpadeoRojoTab 1.4s ease-in-out infinite; }
+        .tab-completo { border: 1px solid #3DDC97 !important; color: #3DDC97 !important; }
+      `}</style>
+      {lista.map((t) => {
+        const estado = estadoTabs && estadoTabs[t.key];
+        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : "";
+        return (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`${tab === t.key ? "btn" : "btn-ghost"} ${claseExtra}`} style={{ fontSize: 13, flex: 1 }}>
+            {t.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -2039,7 +2136,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => t.key !== "tiempos")} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes"].includes(t.key))} />
 
       {tab === "dia" ? (
         <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} rutaCodigo={vendedor.name.replace("RUTA ", "").trim()} />
@@ -2090,6 +2187,165 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
   );
 }
 
+// Bloque de avance (RoadProgress + KPIs + marcas + gráfica) para MAX/OPEN/
+// CHAMPIONS de un vendedor — el mismo que ve cada ruta, reutilizado para que
+// el staff pueda darle seguimiento tal cual.
+function RutaProgresoBloque({ vendedor, metricTab }) {
+  const m = vendedor.tabs[metricTab];
+  const unit = OBJETIVO_TABS.find((t) => t.key === metricTab).unit;
+  const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
+  const chartKey = unit === "units" ? "paquetes" : "monto";
+  return (
+    <>
+      <RoadProgress pct={m.avancePct} />
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 20 }}>
+        <span>{fmt(unit, m.avance)} {unit === "units" ? "vendidos" : "vendido"}</span>
+        <span>{m.avancePct.toFixed(0)}% de {fmt(unit, m.objetivo)}</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+        <KpiCard icon={<Target size={14} />} label="Resta por vender" value={fmt(unit, m.restaPorVender)} accent="#FF6B6B" />
+        <KpiCard icon={<Calendar size={14} />} label="Necesitas vender / día" value={fmt(unit, m.ventaPorDiaNecesaria)} accent="#F2B134" />
+        {metricTab === "max" && (
+          <>
+            <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={vendedor.visitasEfectivas} />
+            <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(vendedor.marcaOtc.vendido)} / ${money(vendedor.marcaOtc.objetivo)}`} accent={metaColor(vendedor.marcaOtc.vendido, vendedor.marcaOtc.objetivo)} />
+            <KpiCard icon={<Star size={14} />} label={`Comisión OTC (${(vendedor.tasaComisionOtc * 100).toFixed(1)}%)`} value={money(vendedor.comisionOtc)} accent="#3DDC97" />
+          </>
+        )}
+      </div>
+      {metricTab === "open" && <MarcasBreakdown titulo="MARCAS · OPEN (PAQUETES)" marcas={MARCAS_OPEN} data={vendedor.marcasOpen} />}
+      {metricTab === "champions" && <MarcasBreakdown titulo="MARCAS · CHAMPIONS (PAQUETES)" marcas={MARCAS_CHAMPIONS} data={vendedor.marcasChampions} />}
+      <div className="card" style={{ padding: 16 }}>
+        <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTA POR DÍA{unit === "units" ? " (PAQUETES)" : ""}</div>
+        <div style={{ height: 220 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData}>
+              <CartesianGrid stroke="#1E2A42" vertical={false} />
+              <XAxis dataKey="fecha" stroke="#9AA7BD" fontSize={11} />
+              <YAxis stroke="#9AA7BD" fontSize={11} tickFormatter={(v) => (unit === "units" ? v : `${(v / 1000).toFixed(0)}k`)} />
+              <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid #2A3852" }} formatter={(v) => (unit === "units" ? unidades(v) : money(v))} />
+              <Bar dataKey={chartKey} fill="#F2B134" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Pestaña "RUTAS" para staff: elige una ruta y ve exactamente lo mismo que
+// ve esa ruta en MAX/OPEN/CHAMPIONS, para seguimiento.
+function RutasView({ stats }) {
+  const [rutaSeleccionada, setRutaSeleccionada] = useState(null);
+  const [metricTab, setMetricTab] = useState("max");
+  const vendedor = stats.porVendedor.find((v) => v.name === rutaSeleccionada) || stats.porVendedor[0];
+  if (!vendedor) return <div style={{ color: "#9AA7BD", fontSize: 13 }}>No hay rutas configuradas.</div>;
+  return (
+    <div>
+      <select
+        value={vendedor.name}
+        onChange={(e) => setRutaSeleccionada(e.target.value)}
+        style={{ background: "#131C30", color: "#E8EDF5", border: "1px solid #1E2A42", borderRadius: 8, padding: "10px 12px", fontSize: 13, marginBottom: 14, width: "100%" }}
+      >
+        {stats.porVendedor.map((v) => (
+          <option key={v.id} value={v.name}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</option>
+        ))}
+      </select>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["max", "open", "champions"].map((k) => (
+          <button key={k} className={metricTab === k ? "btn" : "btn-ghost"} style={{ flex: 1, fontSize: 13 }} onClick={() => setMetricTab(k)}>
+            {k.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      <RutaProgresoBloque vendedor={vendedor} metricTab={metricTab} />
+    </div>
+  );
+}
+
+// Checklist de actividades (día/semana/mes). "Fija" reaparece siempre al
+// reiniciar el ciclo; "temporal" solo existe por este ciclo y se borra sola
+// al pasar el siguiente, a menos que se haya quedado pendiente.
+function ActividadesView({ ciclo, titulo, data, persist, revisorNombre }) {
+  const [nuevoTexto, setNuevoTexto] = useState("");
+  const [nuevoTipo, setNuevoTipo] = useState("temporal");
+
+  const estado = data.actividades?.[ciclo] || { items: [] };
+  const items = estado.items || [];
+  const pendientes = items.filter((it) => !it.hecha);
+  const hechas = items.filter((it) => it.hecha);
+
+  function marcar(id, hecha) {
+    const nuevos = items.map((it) => (it.id === id ? { ...it, hecha } : it));
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: nuevos } } });
+  }
+  function agregar() {
+    if (!nuevoTexto.trim()) return;
+    const nueva = nuevaActividad(nuevoTexto, nuevoTipo, revisorNombre || "Staff", fechaHoyISO());
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: [...items, nueva] } } });
+    setNuevoTexto("");
+  }
+  function eliminar(id) {
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: items.filter((it) => it.id !== id) } } });
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div className="display" style={{ fontSize: 15, color: "#E8EDF5" }}>{titulo}</div>
+        <div style={{ fontSize: 12, color: pendientes.length === 0 ? "#3DDC97" : "#FF6B6B", fontWeight: 700 }}>
+          {pendientes.length === 0 ? "TODO COMPLETO" : `${pendientes.length} pendiente${pendientes.length > 1 ? "s" : ""}`}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+        {items.length === 0 && (
+          <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 20 }}>No hay actividades cargadas.</div>
+        )}
+        {[...pendientes, ...hechas].map((it) => (
+          <div key={it.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10 }}>
+            <button
+              onClick={() => marcar(it.id, !it.hecha)}
+              style={{
+                width: 22, height: 22, borderRadius: 6, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                border: `1px solid ${it.hecha ? "#3DDC97" : "#5b6478"}`, background: it.hecha ? "#0f2a20" : "transparent", cursor: "pointer",
+              }}
+            >
+              {it.hecha && <CheckCircle2 size={14} color="#3DDC97" />}
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: it.hecha ? "#9AA7BD" : "#E8EDF5", textDecoration: it.hecha ? "line-through" : "none" }}>{it.texto}</div>
+              <div style={{ fontSize: 10, color: "#5b6478", marginTop: 2 }}>
+                {it.tipo === "fija" ? "Fija" : "Temporal"}{it.creadaPor ? ` · ${it.creadaPor}` : ""}
+              </div>
+            </div>
+            <button className="btn-ghost" onClick={() => eliminar(it.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ padding: 16 }}>
+        <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>AGREGAR ACTIVIDAD</div>
+        <input
+          type="text"
+          value={nuevoTexto}
+          onChange={(e) => setNuevoTexto(e.target.value)}
+          placeholder="Descripción de la actividad..."
+          style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
+        />
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <button className={nuevoTipo === "temporal" ? "btn" : "btn-ghost"} style={{ flex: 1, fontSize: 12 }} onClick={() => setNuevoTipo("temporal")}>Temporal (solo hoy/este ciclo)</button>
+          <button className={nuevoTipo === "fija" ? "btn" : "btn-ghost"} style={{ flex: 1, fontSize: 12 }} onClick={() => setNuevoTipo("fija")}>Fija (permanente)</button>
+        </div>
+        <button className="btn" style={{ width: "100%" }} onClick={agregar}>
+          <Plus size={14} style={{ verticalAlign: "-2px" }} /> Agregar actividad
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, gap: 8 }}>
@@ -2111,10 +2367,19 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
 
 function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
+  const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
   const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
   const [newName, setNewName] = useState("");
+
+  // Estado de cada checklist de actividades, para pintar la pestaña
+  // parpadeando en rojo (hay pendientes) o en verde (todo completo).
+  const estadoTabsActividades = {
+    actividades_dia: (data.actividades?.dia?.items || []).length === 0 ? undefined : (data.actividades.dia.items.every((it) => it.hecha) ? "completo" : "pendiente"),
+    actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
+    actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
+  };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
   const [nuevoFestivo, setNuevoFestivo] = useState("");
@@ -2162,6 +2427,32 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
   }
   function quitarDiaNoLaborable(fecha) {
     persist({ ...data, diasNoLaborables: (data.diasNoLaborables || []).filter((f) => f !== fecha) });
+  }
+
+  // Reinicia solo los checklists de actividades que ya entraron a un nuevo
+  // periodo (día/semana/mes). No hace nada si ya están al día.
+  useEffect(() => {
+    if (!data) return;
+    const actual = data.actividades;
+    const normalizado = normalizarActividades(actual);
+    const cambio = normalizado.dia !== actual?.dia || normalizado.semana !== actual?.semana || normalizado.mes !== actual?.mes;
+    if (cambio) persist({ ...data, actividades: normalizado });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.actividades?.dia?.fecha, data?.actividades?.semana?.semanaId, data?.actividades?.mes?.mesId]);
+
+  function marcarActividad(ciclo, id, hecha) {
+    const est = data.actividades[ciclo];
+    const items = est.items.map((it) => (it.id === id ? { ...it, hecha } : it));
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items } } });
+  }
+  function agregarActividad(ciclo, texto, tipo, autor) {
+    if (!texto || !texto.trim()) return;
+    const est = data.actividades[ciclo];
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items: [...est.items, nuevaActividad(texto, tipo, autor, fechaHoyISO())] } } });
+  }
+  function eliminarActividad(ciclo, id) {
+    const est = data.actividades[ciclo];
+    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items: est.items.filter((it) => it.id !== id) } } });
   }
 
   const revisorNombre = NOMBRES[staffUsername] || staffUsername || "Staff";
@@ -2234,7 +2525,18 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
 
       {tab === "resumen" && (
         <>
-          <ObjetivoTabs tab={objTab} setTab={setObjTab} tabs={esSupervisor2 ? OBJETIVO_TABS.filter((t) => t.key === "dia" || t.key === "mesa" || t.key === "cuponera" || t.key === "tiempos") : undefined} />
+          <ObjetivoTabs
+            tab={objTab}
+            setTab={setObjTab}
+            tabs={
+              esSupervisor2
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos"].includes(t.key))
+                : esSupervisor1
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes")
+                : undefined
+            }
+            estadoTabs={estadoTabsActividades}
+          />
 
           {objTab === "dia" ? (
             <>
@@ -2409,6 +2711,14 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <CuponeraView data={data} persist={persist} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
           ) : objTab === "tiempos" ? (
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
+          ) : objTab === "rutas" ? (
+            <RutasView stats={stats} />
+          ) : objTab === "actividades_dia" ? (
+            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} revisorNombre={revisorNombre} />
+          ) : objTab === "actividades_semana" ? (
+            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} revisorNombre={revisorNombre} />
+          ) : objTab === "actividades_mes" ? (
+            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} revisorNombre={revisorNombre} />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
