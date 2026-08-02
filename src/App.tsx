@@ -2244,7 +2244,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
         {modoCaptura && generandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
         {modoCaptura && imagenLista && (
           <button className="btn" onClick={guardarOCompartirImagen}>
-            <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar / Compartir imagen
+            <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar imagen
           </button>
         )}
         <button className="btn-ghost" onClick={() => setModoCaptura((m) => !m)}>
@@ -2253,7 +2253,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
       </div>
       {modoCaptura && imagenLista && (
         <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 12, textAlign: "right" }}>
-          Toca "Guardar / Compartir imagen" para guardarla (según tu dispositivo, se descarga o te deja elegir dónde guardarla).
+          Toca "Guardar imagen" — te va a dejar elegir guardarla en tu galería/fotos.
         </div>
       )}
       {modoCaptura && errorImagen && (
