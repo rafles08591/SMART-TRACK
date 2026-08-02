@@ -51,6 +51,7 @@ const OBJETIVO_TABS = [
   { key: "actividades_semana", label: "ACTIVIDADES SEMANA", unit: "special" },
   { key: "actividades_mes", label: "ACTIVIDADES MES", unit: "special" },
   { key: "cotizador", label: "COTIZADOR", unit: "special" },
+  { key: "rally_otc", label: "RALLY OTC", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -254,6 +255,18 @@ function defaultData() {
       dia: { fecha: null, items: [] },
       semana: { semanaId: null, items: [] },
       mes: { mesId: null, items: [] },
+    },
+    // Rally OTC: configurado por gerente, visible para todos los roles.
+    // objetivos es un mapa { "RUTA J201": { dia, final }, ... } solo para
+    // las rutas participantes.
+    rallyOtc: {
+      activo: false,
+      nombre: "",
+      fechaInicio: null,
+      fechaFin: null,
+      rutasParticipantes: [],
+      imagen: null,
+      objetivos: {},
     },
   };
 }
@@ -1607,6 +1620,97 @@ function Login({ onLogin }) {
   );
 }
 
+// Hook reutilizable: genera una imagen PNG de cualquier bloque (usando
+// capturaRef) y la guarda/comparte con un solo toque. Se usa en Mesa de
+// Control, la tabla POR RUTA HOY, el ranking Repartidor Ahogado y Rally OTC.
+function useCapturaImagen() {
+  const capturaRef = useRef(null);
+  const [generandoImagen, setGenerandoImagen] = useState(false);
+  const [imagenLista, setImagenLista] = useState(null);
+  const [errorImagen, setErrorImagen] = useState(null);
+
+  async function generarImagen(nombreArchivo) {
+    setGenerandoImagen(true);
+    setErrorImagen(null);
+    setImagenLista(null);
+    try {
+      if (!capturaRef.current) return;
+      if (document.fonts && document.fonts.ready) {
+        try {
+          await Promise.race([document.fonts.ready, new Promise((res) => setTimeout(res, 2000))]);
+        } catch (e) { /* seguir de todos modos */ }
+      }
+      const canvas = await Promise.race([
+        html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 1.3, useCORS: true }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse (más de 20s).")), 20000)),
+      ]);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        setImagenLista({ blob, nombreArchivo, url });
+      }, "image/png");
+    } catch (e) {
+      console.error("No se pudo generar la imagen:", e);
+      setErrorImagen(e?.message || "No se pudo generar la imagen.");
+    } finally {
+      setGenerandoImagen(false);
+    }
+  }
+
+  async function guardarOCompartir() {
+    if (!imagenLista) return;
+    const { blob, nombreArchivo, url } = imagenLista;
+    const archivo = new File([blob], nombreArchivo, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      try {
+        await navigator.share({ files: [archivo], title: nombreArchivo });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
+        console.warn("Share falló, cae a descarga tradicional:", err);
+      }
+    }
+    const link = document.createElement("a");
+    link.download = nombreArchivo;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  useEffect(() => {
+    return () => { if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url); };
+  }, [imagenLista]);
+
+  return { capturaRef, generandoImagen, imagenLista, errorImagen, generarImagen, guardarOCompartir, limpiar: () => setImagenLista(null) };
+}
+
+// Botón compacto "Guardar/Compartir imagen" que usa el hook de arriba —
+// muestra "Generando...", el botón cuando ya está lista, y el error si algo falla.
+function BotonGuardarImagen({ captura, nombreArchivo, etiqueta = "Guardar imagen" }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {captura.generandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
+        {!captura.generandoImagen && !captura.imagenLista && (
+          <button className="btn-ghost" onClick={() => captura.generarImagen(nombreArchivo)}>
+            <Download size={14} style={{ verticalAlign: "-2px" }} /> {etiqueta}
+          </button>
+        )}
+        {captura.imagenLista && (
+          <button className="btn" onClick={captura.guardarOCompartir}>
+            <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar imagen
+          </button>
+        )}
+      </div>
+      {captura.errorImagen && (
+        <div style={{ fontSize: 11, color: "#FF6B6B" }}>No se pudo generar: {captura.errorImagen}</div>
+      )}
+    </div>
+  );
+}
+
+
 function RoadProgress({ pct }) {
   return (
     <div style={{ margin: "18px 0 8px" }}>
@@ -1626,6 +1730,104 @@ function KpiCard({ icon, label, value, accent }) {
         {icon}<span>{label}</span>
       </div>
       <div className="mono display" style={{ fontSize: 22, color: accent || "#E8EDF5" }}>{value}</div>
+    </div>
+  );
+}
+
+// Ranking "REPARTIDOR AHOGADO": ordena a todos por efectividad del día
+// (peor primero) y, para los últimos 3 lugares, dibuja una ilustración de
+// agua con aletas de tiburón acechando — todo en SVG, sin necesitar subir
+// ninguna imagen.
+function RepartidorAhogadoView({ stats }) {
+  const captura = useCapturaImagen();
+  const ranking = stats.porVendedor
+    .filter((v) => v.hoy.volumen.objetivo > 0)
+    .slice()
+    .sort((a, b) => a.hoy.efectividadPct - b.hoy.efectividadPct);
+  const ultimos3 = ranking.slice(0, 3).map((v) => v.name);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div className="display" style={{ fontSize: 16, color: "#E8EDF5" }}>REPARTIDOR AHOGADO</div>
+        <BotonGuardarImagen captura={captura} nombreArchivo={`repartidor_ahogado_${fechaHoyISO()}.png`} />
+      </div>
+
+      <div ref={captura.capturaRef} className="card" style={{ padding: 20 }}>
+        <div style={{ textAlign: "center", marginBottom: 4 }}>
+          <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>RANKING · REPARTIDOR AHOGADO</div>
+          <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 4 }}>Efectividad del día · {fechaHoyISO()}</div>
+        </div>
+
+        <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 8 }}>
+          {ranking.map((v, i) => {
+            const esUltimos3 = i < 3;
+            return (
+              <div
+                key={v.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 10,
+                  background: esUltimos3 ? "#2a1414" : "#131C30",
+                  border: `1px solid ${esUltimos3 ? "#FF6B6B" : "#1E2A42"}`,
+                }}
+              >
+                <div style={{
+                  width: 26, height: 26, borderRadius: 13, display: "flex", alignItems: "center", justifyContent: "center",
+                  background: esUltimos3 ? "#FF6B6B" : "#1E2A42", color: esUltimos3 ? "#2a1414" : "#9AA7BD", fontWeight: 700, fontSize: 12, flexShrink: 0,
+                }}>
+                  {i + 1}
+                </div>
+                <div style={{ flex: 1, fontSize: 13, color: "#E8EDF5" }}>
+                  {v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
+                </div>
+                <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: esUltimos3 ? "#FF6B6B" : v.hoy.efectividadPct >= 80 ? "#3DDC97" : "#F2B134" }}>
+                  {v.hoy.efectividadPct.toFixed(0)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {ultimos3.length > 0 && (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ textAlign: "center", fontSize: 12, color: "#FF6B6B", fontWeight: 700, marginBottom: 8 }}>
+              ÚLTIMOS 3 LUGARES · EN LA MIRA
+            </div>
+            <IlustracionAguaTiburones nombres={ultimos3.map((n) => `${n}${NOMBRES[n] ? " · " + NOMBRES[n] : ""}`)} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Ilustración SVG: agua ondulada con 3 aletas de tiburón acechando, y un
+// repartidor "hundiéndose" en medio — puramente decorativo, sin imágenes externas.
+function IlustracionAguaTiburones({ nombres }) {
+  return (
+    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "linear-gradient(180deg, #0a1a2e 0%, #0d3b52 55%, #062736 100%)" }}>
+      <svg viewBox="0 0 400 200" style={{ width: "100%", display: "block" }} xmlns="http://www.w3.org/2000/svg">
+        <g transform="translate(200,70)">
+          <circle cx="0" cy="0" r="9" fill="#F2B134" />
+          <path d="M -14 8 Q 0 22 14 8" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
+          <path d="M -8 6 L -20 -10" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
+          <path d="M 8 6 L 20 -10" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
+        </g>
+        <g fill="#1c2b36" stroke="#0a1a2e" strokeWidth="1.5">
+          <path d="M 70 130 Q 85 95 100 130 Q 85 122 70 130 Z" />
+          <path d="M 190 140 Q 208 100 226 140 Q 208 130 190 140 Z" />
+          <path d="M 300 132 Q 316 98 332 132 Q 316 124 300 132 Z" />
+        </g>
+        <path d="M 0 150 Q 25 138 50 150 T 100 150 T 150 150 T 200 150 T 250 150 T 300 150 T 350 150 T 400 150 V 200 H 0 Z" fill="#0d3b52" opacity="0.9" />
+        <path d="M 0 165 Q 30 150 60 165 T 120 165 T 180 165 T 240 165 T 300 165 T 360 165 T 400 165 V 200 H 0 Z" fill="#093347" />
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, padding: "0 14px 16px", marginTop: -18 }}>
+        {nombres.map((n, i) => (
+          <div key={i} style={{ background: "rgba(255,107,107,0.15)", border: "1px solid #FF6B6B", borderRadius: 8, padding: "6px 10px", fontSize: 11, color: "#FF6B6B", fontWeight: 700, textAlign: "center" }}>
+            {n}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2411,7 +2613,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -2426,7 +2628,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined }} />
 
       {tab === "dia" ? (
         <DiaKpis
@@ -2440,6 +2642,8 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
+      ) : tab === "rally_otc" ? (
+        <RallyOtcView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
@@ -2555,6 +2759,334 @@ function RutasView({ stats }) {
         ))}
       </div>
       <RutaProgresoBloque vendedor={vendedor} metricTab={metricTab} />
+    </div>
+  );
+}
+
+// Suma el OTC de una ruta dentro de un rango de fechas (o de una sola fecha si desde===hasta).
+function otcEnRango(data, nombreRuta, desde, hasta) {
+  return (data.otcDia || [])
+    .filter((r) => r.vendedor === nombreRuta && (!desde || r.fecha >= desde) && (!hasta || r.fecha <= hasta))
+    .reduce((s, r) => s + (Number(r.monto) || 0), 0);
+}
+
+function calcularAvanceRallyRuta(data, rally, nombreRuta) {
+  const obj = rally.objetivos?.[nombreRuta] || { dia: 0, final: 0 };
+  const hoy = fechaHoyISO();
+  return {
+    avanceDia: otcEnRango(data, nombreRuta, hoy, hoy),
+    objetivoDia: obj.dia || 0,
+    avanceTotal: otcEnRango(data, nombreRuta, rally.fechaInicio, rally.fechaFin),
+    objetivoFinal: obj.final || 0,
+  };
+}
+
+// Progreso de UN vendedor dentro del rally (vista del propio vendedor). Si
+// ya cubrió su objetivo final, se oculta el número exacto y solo se marca
+// en verde como cubierto (para no mostrar "cuánto se pasó").
+function ProgresoRallyRuta({ nombreRuta, rally, data }) {
+  if (!rally.rutasParticipantes.includes(nombreRuta)) {
+    return <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Tu ruta no participa en este rally.</div>;
+  }
+  const { avanceDia, objetivoDia, avanceTotal, objetivoFinal } = calcularAvanceRallyRuta(data, rally, nombreRuta);
+  const cumplioDia = objetivoDia > 0 && avanceDia >= objetivoDia;
+  const cumplioFinal = objetivoFinal > 0 && avanceTotal >= objetivoFinal;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+      <KpiCard
+        icon={<Calendar size={14} />}
+        label="Avance del día"
+        value={cumplioDia ? "¡Objetivo del día cubierto!" : `${money(avanceDia)} / ${money(objetivoDia)}`}
+        accent={cumplioDia ? "#3DDC97" : metaColor(avanceDia, objetivoDia)}
+      />
+      <KpiCard
+        icon={<Target size={14} />}
+        label="Avance total del rally"
+        value={cumplioFinal ? "¡YA CUBRISTE TU OBJETIVO!" : `${money(avanceTotal)} / ${money(objetivoFinal)}`}
+        accent={cumplioFinal ? "#3DDC97" : metaColor(avanceTotal, objetivoFinal)}
+      />
+    </div>
+  );
+}
+
+// Progreso agregado (suma de todas las rutas participantes) — para
+// supervisor1/gerente (con objetivo) y supervisor2 (solo informativo, sin
+// objetivo). Cada ruta que ya cubrió su objetivo final se marca "CUBIERTO"
+// en la tabla, sin mostrar el excedente.
+function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
+  let sumaAvanceDia = 0, sumaObjDia = 0, sumaAvanceTotal = 0, sumaObjFinal = 0;
+  const filas = rutas.map((r) => {
+    const a = calcularAvanceRallyRuta(data, rally, r);
+    sumaAvanceDia += a.avanceDia; sumaObjDia += a.objetivoDia;
+    sumaAvanceTotal += a.avanceTotal; sumaObjFinal += a.objetivoFinal;
+    return { ruta: r, ...a };
+  });
+  const cumplioDiaTotal = mostrarObjetivo && sumaObjDia > 0 && sumaAvanceDia >= sumaObjDia;
+  const cumplioFinalTotal = mostrarObjetivo && sumaObjFinal > 0 && sumaAvanceTotal >= sumaObjFinal;
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <KpiCard
+          icon={<Calendar size={14} />}
+          label="Avance del día (equipo)"
+          value={mostrarObjetivo ? (cumplioDiaTotal ? "¡Objetivo del día cubierto!" : `${money(sumaAvanceDia)} / ${money(sumaObjDia)}`) : money(sumaAvanceDia)}
+          accent={mostrarObjetivo ? (cumplioDiaTotal ? "#3DDC97" : metaColor(sumaAvanceDia, sumaObjDia)) : undefined}
+        />
+        <KpiCard
+          icon={<Target size={14} />}
+          label="Avance total (equipo)"
+          value={mostrarObjetivo ? (cumplioFinalTotal ? "¡YA CUBRIERON EL OBJETIVO!" : `${money(sumaAvanceTotal)} / ${money(sumaObjFinal)}`) : money(sumaAvanceTotal)}
+          accent={mostrarObjetivo ? (cumplioFinalTotal ? "#3DDC97" : metaColor(sumaAvanceTotal, sumaObjFinal)) : undefined}
+        />
+      </div>
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+              <th style={{ padding: "8px 16px" }}>Ruta</th>
+              <th>Avance día</th>
+              {mostrarObjetivo && <th>Obj. día</th>}
+              <th>Avance total</th>
+              {mostrarObjetivo && <th>Obj. final</th>}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f) => {
+              const cumplio = mostrarObjetivo && f.objetivoFinal > 0 && f.avanceTotal >= f.objetivoFinal;
+              return (
+                <tr key={f.ruta} style={{ borderTop: "1px solid #1E2A42" }}>
+                  <td style={{ padding: "10px 16px" }}>{f.ruta}{NOMBRES[f.ruta] ? ` · ${NOMBRES[f.ruta]}` : ""}</td>
+                  <td>{money(f.avanceDia)}</td>
+                  {mostrarObjetivo && <td>{money(f.objetivoDia)}</td>}
+                  <td>{money(f.avanceTotal)}</td>
+                  {mostrarObjetivo && <td>{money(f.objetivoFinal)}</td>}
+                  <td>
+                    {cumplio && (
+                      <span style={{ background: "#0f2a20", border: "1px solid #3DDC97", color: "#3DDC97", fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 8px" }}>
+                        CUBIERTO
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pestaña RALLY OTC — visible para todos los roles.
+ * - Gerente: configura el rally (nombre, vigencia, rutas participantes,
+ *   imagen, objetivos por ruta) y puede activarlo/desactivarlo. También
+ *   tiene la opción de guardar/descargar una imagen del avance.
+ * - Vendedor: ve su propio avance del día y total contra su objetivo.
+ * - Supervisor-1 / Gerente: ven el avance agregado del equipo contra la
+ *   suma de los objetivos de todas las rutas participantes.
+ * - Supervisor-2: ve el avance agregado, sin objetivo (solo informativo).
+ */
+function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombre }) {
+  const rally = data.rallyOtc || { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {} };
+  const esGerente = rol === "staff" && puesto === "gerente";
+  const captura = useCapturaImagen();
+  const [form, setForm] = useState(null);
+  const [subiendoImagen, setSubiendoImagen] = useState(false);
+  const fileRef = useRef(null);
+
+  function iniciarEdicion() {
+    setForm({
+      nombre: rally.nombre || "",
+      fechaInicio: rally.fechaInicio || "",
+      fechaFin: rally.fechaFin || "",
+      rutasParticipantes: [...(rally.rutasParticipantes || [])],
+      imagen: rally.imagen || null,
+      objetivos: { ...(rally.objetivos || {}) },
+    });
+  }
+
+  function toggleRuta(nombreRuta) {
+    setForm((f) => {
+      const yaEsta = f.rutasParticipantes.includes(nombreRuta);
+      const rutasParticipantes = yaEsta ? f.rutasParticipantes.filter((r) => r !== nombreRuta) : [...f.rutasParticipantes, nombreRuta];
+      const objetivos = { ...f.objetivos };
+      if (!yaEsta && !objetivos[nombreRuta]) objetivos[nombreRuta] = { dia: 0, final: 0 };
+      return { ...f, rutasParticipantes, objetivos };
+    });
+  }
+
+  function actualizarObjetivo(nombreRuta, campo, valor) {
+    setForm((f) => ({ ...f, objetivos: { ...f.objetivos, [nombreRuta]: { ...(f.objetivos[nombreRuta] || {}), [campo]: Number(valor) || 0 } } }));
+  }
+
+  async function subirImagenRally(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      alert("La imagen pesa más de 3MB. Usa una más ligera.");
+      return;
+    }
+    setSubiendoImagen(true);
+    try {
+      const extension = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const nombreArchivo = `rally_${Date.now()}.${extension}`;
+      const { error } = await supabase.storage.from("promociones").upload(nombreArchivo, file, { cacheControl: "3600", upsert: false });
+      if (error) {
+        alert(`No se pudo subir la imagen: ${error.message}`);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
+      setForm((f) => ({ ...f, imagen: urlData.publicUrl }));
+    } finally {
+      setSubiendoImagen(false);
+    }
+  }
+
+  function guardarRally(activo) {
+    persist({
+      ...data,
+      rallyOtc: {
+        activo,
+        nombre: form.nombre.trim(),
+        fechaInicio: form.fechaInicio || null,
+        fechaFin: form.fechaFin || null,
+        rutasParticipantes: form.rutasParticipantes,
+        imagen: form.imagen,
+        objetivos: form.objetivos,
+      },
+    });
+    setForm(null);
+  }
+
+  function desactivarRally() {
+    persist({ ...data, rallyOtc: { ...rally, activo: false } });
+  }
+
+  return (
+    <div>
+      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>RALLY OTC</div>
+
+      {esGerente && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: form ? 14 : 0, flexWrap: "wrap", gap: 8 }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
+              CONFIGURACIÓN {rally.activo ? <span style={{ color: "#3DDC97" }}>· ACTIVO</span> : <span style={{ color: "#9AA7BD" }}>· INACTIVO</span>}
+            </div>
+            {!form && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-ghost" onClick={iniciarEdicion}>{rally.nombre ? "Editar rally" : "Configurar rally"}</button>
+                {rally.activo && <button className="btn-ghost" onClick={desactivarRally}>Desactivar</button>}
+              </div>
+            )}
+          </div>
+
+          {form && (
+            <div>
+              <input
+                type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))}
+                placeholder="Nombre del rally"
+                style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
+              />
+              <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 4 }}>Fecha de inicio</div>
+                  <input type="date" value={form.fechaInicio || ""} onChange={(e) => setForm((f) => ({ ...f, fechaInicio: e.target.value }))} style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px" }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 4 }}>Fecha de fin (vigencia)</div>
+                  <input type="date" value={form.fechaFin || ""} onChange={(e) => setForm((f) => ({ ...f, fechaFin: e.target.value }))} style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px" }} />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>CÓDIGOS PARTICIPANTES</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {(data.vendedores || []).map((v) => (
+                    <button key={v.id} className={form.rutasParticipantes.includes(v.name) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRuta(v.name)}>
+                      {v.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {form.rutasParticipantes.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>OBJETIVOS POR RUTA (OTC)</div>
+                  {form.rutasParticipantes.map((nombreRuta) => (
+                    <div key={nombreRuta} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                      <span style={{ width: 110, fontSize: 12, color: "#E8EDF5" }}>{nombreRuta}</span>
+                      <input
+                        type="number" placeholder="Objetivo día ($)" value={form.objetivos[nombreRuta]?.dia || 0}
+                        onChange={(e) => actualizarObjetivo(nombreRuta, "dia", e.target.value)}
+                        style={{ width: 130, padding: "6px 8px" }}
+                      />
+                      <input
+                        type="number" placeholder="Objetivo final ($)" value={form.objetivos[nombreRuta]?.final || 0}
+                        onChange={(e) => actualizarObjetivo(nombreRuta, "final", e.target.value)}
+                        style={{ width: 130, padding: "6px 8px" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginBottom: 10 }}>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>IMAGEN ALUSIVA AL RALLY</div>
+                <button className="btn" onClick={() => fileRef.current?.click()} disabled={subiendoImagen}>
+                  {subiendoImagen ? "Subiendo..." : form.imagen ? "Cambiar imagen" : "Elegir imagen"}
+                </button>
+                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={subirImagenRally} />
+                {form.imagen && <img src={form.imagen} alt="Rally" style={{ maxWidth: 200, display: "block", marginTop: 8, borderRadius: 8 }} />}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="btn-ghost" onClick={() => setForm(null)}>Cancelar</button>
+                <button className="btn-ghost" onClick={() => guardarRally(false)}>Guardar sin activar</button>
+                <button className="btn" onClick={() => guardarRally(true)}>Guardar y activar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!rally.activo ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+          No hay un Rally OTC activo en este momento.
+        </div>
+      ) : (
+        <>
+          <div ref={captura.capturaRef}>
+            <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+              {rally.imagen && <img src={rally.imagen} alt={rally.nombre} style={{ width: "100%", borderRadius: 10, marginBottom: 12, display: "block" }} />}
+              <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
+              <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>
+                Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
+              </div>
+            </div>
+
+            {rol === "vendedor" ? (
+              <ProgresoRallyRuta nombreRuta={vendedorActual} rally={rally} data={data} />
+            ) : (
+              <ProgresoRallyAgregado
+                rutas={rally.rutasParticipantes}
+                data={data}
+                rally={rally}
+                mostrarObjetivo={puesto !== "supervisor2"}
+              />
+            )}
+          </div>
+
+          {esGerente && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+              <BotonGuardarImagen captura={captura} nombreArchivo={`rally_otc_${fechaHoyISO()}.png`} etiqueta="Guardar / descargar" />
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -2677,6 +3209,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
     actividades_dia: (data.actividades?.dia?.items || []).length === 0 ? undefined : (data.actividades.dia.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
+    rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
@@ -2687,6 +3220,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
   const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
   const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
   const [verTablaHoyCompleta, setVerTablaHoyCompleta] = useState(false);
+  const capturaPorRutaHoy = useCapturaImagen();
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -2828,7 +3362,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             setTab={setObjTab}
             tabs={
               esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos"].includes(t.key))
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "rally_otc"].includes(t.key))
                 : esSupervisor1
                 ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador")
                 : undefined
@@ -2950,12 +3484,17 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px 0", flexWrap: "wrap", gap: 8 }}>
                   <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>POR RUTA · HOY</div>
-                  <button className="btn-ghost" onClick={() => setVerTablaHoyCompleta(true)}>
-                    Ver tabla completa (pantalla)
-                  </button>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <BotonGuardarImagen captura={capturaPorRutaHoy} nombreArchivo={`por_ruta_hoy_${fechaHoyISO()}.png`} etiqueta="Guardar / enviar" />
+                    <button className="btn-ghost" onClick={() => setVerTablaHoyCompleta(true)}>
+                      Ver tabla completa (pantalla)
+                    </button>
+                  </div>
                 </div>
-                <div style={{ overflowX: "auto" }}>
-                  <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
+                <div ref={capturaPorRutaHoy.capturaRef} style={{ padding: 16 }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
+                  </div>
                 </div>
               </div>
 
@@ -2963,6 +3502,12 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                 <ModalTablaCompleta titulo="POR RUTA · HOY" onClose={() => setVerTablaHoyCompleta(false)}>
                   <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
                 </ModalTablaCompleta>
+              )}
+
+              {!esSupervisor2 && (
+                <div style={{ marginTop: 24 }}>
+                  <RepartidorAhogadoView stats={stats} />
+                </div>
               )}
             </>
           ) : objTab === "mesa" ? (
@@ -3034,6 +3579,8 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                 Abrir cotizador
               </a>
             </div>
+          ) : objTab === "rally_otc" ? (
+            <RallyOtcView data={data} persist={persist} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
