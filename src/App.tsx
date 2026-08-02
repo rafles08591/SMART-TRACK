@@ -2035,6 +2035,32 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
           </div>
         ))}
       </div>
+
+      {(() => {
+        const clientesAlerta = todos.filter((r) => r.alerta);
+        if (clientesAlerta.length === 0) return null;
+        return (
+          <div style={{ marginTop: 22, textAlign: "left" }}>
+            <div style={{ fontSize: 12, color: "#FF6B6B", marginBottom: 8, fontWeight: 700 }}>
+              CLIENTES EN ALERTA ({clientesAlerta.length}) · ESTANCIA &lt; 3 MIN O INICIO NO-GPS
+            </div>
+            <div className="card" style={{ padding: 12 }}>
+              {clientesAlerta.map((r, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex", justifyContent: "space-between", fontSize: 12, color: "#FF6B6B",
+                    padding: "6px 0", borderTop: i > 0 ? "1px solid #3a1414" : "none",
+                  }}
+                >
+                  <span>{r.cliente}</span>
+                  <span className="mono">{r.tiempoEstancia} min · {r.tipoInicio || "SIN DATO"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2079,7 +2105,8 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
-  const [descargandoImagen, setDescargandoImagen] = useState(false);
+  const [generandoImagen, setGenerandoImagen] = useState(false);
+  const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
   const capturaRef = useRef(null);
 
   useEffect(() => {
@@ -2101,29 +2128,73 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
     return () => { activo = false; };
   }, [nombreRuta, analisis?.fecha]);
 
-  // Al entrar a modo captura, descarga automáticamente una imagen PNG del
-  // resumen (sin que el usuario tenga que tomar screenshot a mano).
+  // Al entrar a modo captura, genera la imagen sola (esto sí se puede hacer
+  // en automático). Pero GUARDARLA o COMPARTIRLA se deja para un botón que
+  // el propio usuario toca — los navegadores exigen que Web Share API (y a
+  // veces hasta la descarga) se dispare directo desde un toque, si no, en
+  // celular puede fallar en silencio y no verse nada guardado.
   useEffect(() => {
-    if (!modoCaptura || !analisis) return;
+    if (!modoCaptura || !analisis) {
+      setImagenLista(null);
+      return;
+    }
     let cancelado = false;
-    setDescargandoImagen(true);
+    setGenerandoImagen(true);
+    setImagenLista(null);
     const t = setTimeout(async () => {
       try {
         if (!capturaRef.current || cancelado) return;
         const canvas = await html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 2 });
         if (cancelado) return;
-        const link = document.createElement("a");
-        link.download = `mesa_control_${(nombreRuta || "ruta").replace(/\s+/g, "_")}_${analisis.fecha}.png`;
-        link.href = canvas.toDataURL("image/png");
-        link.click();
+        const nombreArchivo = `mesa_control_${(nombreRuta || "ruta").replace(/\s+/g, "_")}_${analisis.fecha}.png`;
+        canvas.toBlob((blob) => {
+          if (!blob || cancelado) return;
+          const url = URL.createObjectURL(blob);
+          setImagenLista({ blob, nombreArchivo, url });
+        }, "image/png");
       } catch (e) {
         console.error("No se pudo generar la imagen:", e);
       } finally {
-        if (!cancelado) setDescargandoImagen(false);
+        if (!cancelado) setGenerandoImagen(false);
       }
     }, 250); // pequeño respiro para que el DOM termine de pintar el resumen
     return () => { cancelado = true; clearTimeout(t); };
   }, [modoCaptura, analisis, nombreRuta]);
+
+  // Libera el Object URL cuando ya no se necesita (se generó uno nuevo, se
+  // salió de modo captura, o se desmonta el componente).
+  useEffect(() => {
+    return () => {
+      if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url);
+    };
+  }, [imagenLista]);
+
+  // Se llama DIRECTO desde el onClick del botón (gesto de usuario real), para
+  // que tanto el share sheet como la descarga funcionen de forma confiable
+  // en celular (sobre todo iOS Safari, donde si no viene de un toque directo
+  // simplemente no pasa nada visible).
+  async function guardarOCompartirImagen() {
+    if (!imagenLista) return;
+    const { blob, nombreArchivo, url } = imagenLista;
+    const archivo = new File([blob], nombreArchivo, { type: "image/png" });
+
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      try {
+        await navigator.share({ files: [archivo], title: nombreArchivo });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return; // el usuario canceló el share
+        console.warn("Share falló, cae a descarga tradicional:", err);
+      }
+    }
+
+    const link = document.createElement("a");
+    link.download = nombreArchivo;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
 
   if (!analisis) {
     return (
@@ -2142,12 +2213,22 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        {modoCaptura && descargandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        {modoCaptura && generandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
+        {modoCaptura && imagenLista && (
+          <button className="btn" onClick={guardarOCompartirImagen}>
+            <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar / Compartir imagen
+          </button>
+        )}
         <button className="btn-ghost" onClick={() => setModoCaptura((m) => !m)}>
-          {modoCaptura ? "Ver detalle completo" : "Ver resumen (descarga imagen)"}
+          {modoCaptura ? "Ver detalle completo" : "Ver resumen (imagen)"}
         </button>
       </div>
+      {modoCaptura && imagenLista && (
+        <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 12, textAlign: "right" }}>
+          Toca "Guardar / Compartir imagen" — en celular te va a abrir el menú para guardar en Fotos o Archivos.
+        </div>
+      )}
 
       {modoCaptura ? (
         <div ref={capturaRef}>
