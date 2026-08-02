@@ -975,11 +975,23 @@ export default function App() {
   }
 
   function downloadObjetivosTemplate() {
-    const ws = XLSX.utils.json_to_sheet([{
-      RUTA: "RUTA J201", OPEN: 150000, CHAMPIONS: 200000, MAX: 200000, VISITAS_EFECTIVAS: 120,
-      "ICE MIX": 40000, "BLOSS MIX": 30000, "SUMM MIX": 30000, FARONET: 20000,
-      CHAM_ICE: 50000, "CHAM_BLOSS-SUMM": 40000, CHAM_FARONET: 25000, OTC: 9600, OTC_DIA: 1600,
-    }]);
+    const filas = (data.vendedores || []).map((v) => ({
+      RUTA: v.name,
+      OPEN: v.objetivos?.open || 0,
+      CHAMPIONS: v.objetivos?.champions || 0,
+      MAX: v.objetivos?.max || 0,
+      VISITAS_EFECTIVAS: v.objetivos?.visitasEfectivas || 0,
+      "ICE MIX": v.objetivos?.iceMix || 0,
+      "BLOSS MIX": v.objetivos?.blossMix || 0,
+      "SUMM MIX": v.objetivos?.summMix || 0,
+      FARONET: v.objetivos?.faronet || 0,
+      CHAM_ICE: v.objetivos?.champIce || 0,
+      "CHAM_BLOSS-SUMM": v.objetivos?.champBlossSumm || 0,
+      CHAM_FARONET: v.objetivos?.champFaronet || 0,
+      OTC: v.objetivos?.otc || 0,
+      OTC_DIA: v.objetivos?.otcDiario || 0,
+    }));
+    const ws = XLSX.utils.json_to_sheet(filas);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Objetivos");
     XLSX.writeFile(wb, "plantilla_objetivos.xlsx");
