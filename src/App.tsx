@@ -267,6 +267,8 @@ function defaultData() {
       rutasParticipantes: [],
       imagen: null,
       objetivos: {},
+      codigosParticipantes: [],
+      unidad: "dinero", // "dinero" | "piezas"
     },
   };
 }
@@ -2763,20 +2765,31 @@ function RutasView({ stats }) {
   );
 }
 
-// Suma el OTC de una ruta dentro de un rango de fechas (o de una sola fecha si desde===hasta).
-function otcEnRango(data, nombreRuta, desde, hasta) {
+// Suma el OTC de una ruta dentro de un rango de fechas (o de una sola fecha
+// si desde===hasta), filtrando solo los códigos de artículo que el gerente
+// haya marcado como participantes del rally, y sumando en piezas o en
+// dinero según la unidad configurada. Si no se eligió ningún código, se
+// suma todo (comportamiento de respaldo).
+function otcEnRango(data, rally, nombreRuta, desde, hasta) {
+  const codigos = rally.codigosParticipantes || [];
+  const enPiezas = rally.unidad === "piezas";
   return (data.otcDia || [])
-    .filter((r) => r.vendedor === nombreRuta && (!desde || r.fecha >= desde) && (!hasta || r.fecha <= hasta))
-    .reduce((s, r) => s + (Number(r.monto) || 0), 0);
+    .filter((r) =>
+      r.vendedor === nombreRuta
+      && (!desde || r.fecha >= desde)
+      && (!hasta || r.fecha <= hasta)
+      && (codigos.length === 0 || codigos.includes(r.codigoArticulo))
+    )
+    .reduce((s, r) => s + (enPiezas ? (Number(r.unidadesVendidas) || 0) : (Number(r.monto) || 0)), 0);
 }
 
 function calcularAvanceRallyRuta(data, rally, nombreRuta) {
   const obj = rally.objetivos?.[nombreRuta] || { dia: 0, final: 0 };
   const hoy = fechaHoyISO();
   return {
-    avanceDia: otcEnRango(data, nombreRuta, hoy, hoy),
+    avanceDia: otcEnRango(data, rally, nombreRuta, hoy, hoy),
     objetivoDia: obj.dia || 0,
-    avanceTotal: otcEnRango(data, nombreRuta, rally.fechaInicio, rally.fechaFin),
+    avanceTotal: otcEnRango(data, rally, nombreRuta, rally.fechaInicio, rally.fechaFin),
     objetivoFinal: obj.final || 0,
   };
 }
@@ -2788,6 +2801,7 @@ function ProgresoRallyRuta({ nombreRuta, rally, data }) {
   if (!rally.rutasParticipantes.includes(nombreRuta)) {
     return <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Tu ruta no participa en este rally.</div>;
   }
+  const fmtRally = rally.unidad === "piezas" ? unidades : money;
   const { avanceDia, objetivoDia, avanceTotal, objetivoFinal } = calcularAvanceRallyRuta(data, rally, nombreRuta);
   const cumplioDia = objetivoDia > 0 && avanceDia >= objetivoDia;
   const cumplioFinal = objetivoFinal > 0 && avanceTotal >= objetivoFinal;
@@ -2796,13 +2810,13 @@ function ProgresoRallyRuta({ nombreRuta, rally, data }) {
       <KpiCard
         icon={<Calendar size={14} />}
         label="Avance del día"
-        value={cumplioDia ? "¡Objetivo del día cubierto!" : `${money(avanceDia)} / ${money(objetivoDia)}`}
+        value={cumplioDia ? "¡Objetivo del día cubierto!" : `${fmtRally(avanceDia)} / ${fmtRally(objetivoDia)}`}
         accent={cumplioDia ? "#3DDC97" : metaColor(avanceDia, objetivoDia)}
       />
       <KpiCard
         icon={<Target size={14} />}
         label="Avance total del rally"
-        value={cumplioFinal ? "¡YA CUBRISTE TU OBJETIVO!" : `${money(avanceTotal)} / ${money(objetivoFinal)}`}
+        value={cumplioFinal ? "¡YA CUBRISTE TU OBJETIVO!" : `${fmtRally(avanceTotal)} / ${fmtRally(objetivoFinal)}`}
         accent={cumplioFinal ? "#3DDC97" : metaColor(avanceTotal, objetivoFinal)}
       />
     </div>
@@ -2814,6 +2828,7 @@ function ProgresoRallyRuta({ nombreRuta, rally, data }) {
 // objetivo). Cada ruta que ya cubrió su objetivo final se marca "CUBIERTO"
 // en la tabla, sin mostrar el excedente.
 function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
+  const fmtRally = rally.unidad === "piezas" ? unidades : money;
   let sumaAvanceDia = 0, sumaObjDia = 0, sumaAvanceTotal = 0, sumaObjFinal = 0;
   const filas = rutas.map((r) => {
     const a = calcularAvanceRallyRuta(data, rally, r);
@@ -2830,13 +2845,13 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
         <KpiCard
           icon={<Calendar size={14} />}
           label="Avance del día (equipo)"
-          value={mostrarObjetivo ? (cumplioDiaTotal ? "¡Objetivo del día cubierto!" : `${money(sumaAvanceDia)} / ${money(sumaObjDia)}`) : money(sumaAvanceDia)}
+          value={mostrarObjetivo ? (cumplioDiaTotal ? "¡Objetivo del día cubierto!" : `${fmtRally(sumaAvanceDia)} / ${fmtRally(sumaObjDia)}`) : fmtRally(sumaAvanceDia)}
           accent={mostrarObjetivo ? (cumplioDiaTotal ? "#3DDC97" : metaColor(sumaAvanceDia, sumaObjDia)) : undefined}
         />
         <KpiCard
           icon={<Target size={14} />}
           label="Avance total (equipo)"
-          value={mostrarObjetivo ? (cumplioFinalTotal ? "¡YA CUBRIERON EL OBJETIVO!" : `${money(sumaAvanceTotal)} / ${money(sumaObjFinal)}`) : money(sumaAvanceTotal)}
+          value={mostrarObjetivo ? (cumplioFinalTotal ? "¡YA CUBRIERON EL OBJETIVO!" : `${fmtRally(sumaAvanceTotal)} / ${fmtRally(sumaObjFinal)}`) : fmtRally(sumaAvanceTotal)}
           accent={mostrarObjetivo ? (cumplioFinalTotal ? "#3DDC97" : metaColor(sumaAvanceTotal, sumaObjFinal)) : undefined}
         />
       </div>
@@ -2858,10 +2873,10 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
               return (
                 <tr key={f.ruta} style={{ borderTop: "1px solid #1E2A42" }}>
                   <td style={{ padding: "10px 16px" }}>{f.ruta}{NOMBRES[f.ruta] ? ` · ${NOMBRES[f.ruta]}` : ""}</td>
-                  <td>{money(f.avanceDia)}</td>
-                  {mostrarObjetivo && <td>{money(f.objetivoDia)}</td>}
-                  <td>{money(f.avanceTotal)}</td>
-                  {mostrarObjetivo && <td>{money(f.objetivoFinal)}</td>}
+                  <td>{fmtRally(f.avanceDia)}</td>
+                  {mostrarObjetivo && <td>{fmtRally(f.objetivoDia)}</td>}
+                  <td>{fmtRally(f.avanceTotal)}</td>
+                  {mostrarObjetivo && <td>{fmtRally(f.objetivoFinal)}</td>}
                   <td>
                     {cumplio && (
                       <span style={{ background: "#0f2a20", border: "1px solid #3DDC97", color: "#3DDC97", fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 8px" }}>
@@ -2890,12 +2905,16 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
  * - Supervisor-2: ve el avance agregado, sin objetivo (solo informativo).
  */
 function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombre }) {
-  const rally = data.rallyOtc || { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {} };
+  const rally = data.rallyOtc || { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero" };
   const esGerente = rol === "staff" && puesto === "gerente";
   const captura = useCapturaImagen();
   const [form, setForm] = useState(null);
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const fileRef = useRef(null);
+
+  // Códigos de artículo que sí aparecen en los archivos de OTC del día ya
+  // subidos, para que el gerente elija de la lista real en vez de adivinar.
+  const codigosDisponibles = [...new Set((data.otcDia || []).map((r) => r.codigoArticulo).filter(Boolean))].sort();
 
   function iniciarEdicion() {
     setForm({
@@ -2905,6 +2924,8 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
       rutasParticipantes: [...(rally.rutasParticipantes || [])],
       imagen: rally.imagen || null,
       objetivos: { ...(rally.objetivos || {}) },
+      codigosParticipantes: [...(rally.codigosParticipantes || [])],
+      unidad: rally.unidad || "dinero",
     });
   }
 
@@ -2915,6 +2936,13 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
       const objetivos = { ...f.objetivos };
       if (!yaEsta && !objetivos[nombreRuta]) objetivos[nombreRuta] = { dia: 0, final: 0 };
       return { ...f, rutasParticipantes, objetivos };
+    });
+  }
+
+  function toggleCodigo(codigo) {
+    setForm((f) => {
+      const yaEsta = f.codigosParticipantes.includes(codigo);
+      return { ...f, codigosParticipantes: yaEsta ? f.codigosParticipantes.filter((c) => c !== codigo) : [...f.codigosParticipantes, codigo] };
     });
   }
 
@@ -2957,6 +2985,8 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
         rutasParticipantes: form.rutasParticipantes,
         imagen: form.imagen,
         objetivos: form.objetivos,
+        codigosParticipantes: form.codigosParticipantes,
+        unidad: form.unidad,
       },
     });
     setForm(null);
@@ -3003,7 +3033,7 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
               </div>
 
               <div style={{ marginBottom: 10 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>CÓDIGOS PARTICIPANTES</div>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>RUTAS PARTICIPANTES</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {(data.vendedores || []).map((v) => (
                     <button key={v.id} className={form.rutasParticipantes.includes(v.name) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRuta(v.name)}>
@@ -3013,19 +3043,57 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
                 </div>
               </div>
 
+              <div style={{ marginBottom: 10 }}>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>UNIDAD DEL RALLY</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className={form.unidad === "dinero" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setForm((f) => ({ ...f, unidad: "dinero" }))}>
+                    Dinero ($)
+                  </button>
+                  <button className={form.unidad === "piezas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setForm((f) => ({ ...f, unidad: "piezas" }))}>
+                    Piezas (pz)
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 10 }}>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
+                  CÓDIGOS DE ARTÍCULO QUE SE SUMAN (OTC)
+                </div>
+                {codigosDisponibles.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#9AA7BD" }}>
+                    Aún no hay códigos disponibles — sube primero un archivo de "Avance del día (OTC)" para que aparezcan aquí.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {codigosDisponibles.map((codigo) => (
+                        <button key={codigo} className={form.codigosParticipantes.includes(codigo) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleCodigo(codigo)}>
+                          {codigo}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>
+                      {form.codigosParticipantes.length === 0
+                        ? "Si no eliges ninguno, se suma TODO el OTC sin filtrar por código."
+                        : `Se sumará solo el OTC de estos ${form.codigosParticipantes.length} código(s).`}
+                    </div>
+                  </>
+                )}
+              </div>
+
               {form.rutasParticipantes.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>OBJETIVOS POR RUTA (OTC)</div>
+                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>OBJETIVOS POR RUTA ({form.unidad === "piezas" ? "PZ" : "$"})</div>
                   {form.rutasParticipantes.map((nombreRuta) => (
                     <div key={nombreRuta} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
                       <span style={{ width: 110, fontSize: 12, color: "#E8EDF5" }}>{nombreRuta}</span>
                       <input
-                        type="number" placeholder="Objetivo día ($)" value={form.objetivos[nombreRuta]?.dia || 0}
+                        type="number" placeholder={`Objetivo día (${form.unidad === "piezas" ? "pz" : "$"})`} value={form.objetivos[nombreRuta]?.dia || 0}
                         onChange={(e) => actualizarObjetivo(nombreRuta, "dia", e.target.value)}
                         style={{ width: 130, padding: "6px 8px" }}
                       />
                       <input
-                        type="number" placeholder="Objetivo final ($)" value={form.objetivos[nombreRuta]?.final || 0}
+                        type="number" placeholder={`Objetivo final (${form.unidad === "piezas" ? "pz" : "$"})`} value={form.objetivos[nombreRuta]?.final || 0}
                         onChange={(e) => actualizarObjetivo(nombreRuta, "final", e.target.value)}
                         style={{ width: 130, padding: "6px 8px" }}
                       />
