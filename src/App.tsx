@@ -50,6 +50,7 @@ const OBJETIVO_TABS = [
   { key: "actividades_dia", label: "ACTIVIDADES DÍA", unit: "special" },
   { key: "actividades_semana", label: "ACTIVIDADES SEMANA", unit: "special" },
   { key: "actividades_mes", label: "ACTIVIDADES MES", unit: "special" },
+  { key: "cotizador", label: "COTIZADOR", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -705,6 +706,28 @@ export default function App() {
       const volumenObjetivo = tabs.max.ventaPorDiaNecesaria;
       const bajoDesempeno = volumenObjetivo > 0 && paquetesHoy < volumenObjetivo * UMBRAL_BAJO_DESEMPENO;
       const otcDiario = v.objetivos?.otcDiario || 0;
+
+      // Evaluación ampliada: junta TODOS los indicadores del día que tengan
+      // un objetivo válido (volumen, cada marca, OTC) y saca un % promedio
+      // de efectividad. También arma la lista de lo que le falta a cada
+      // indicador débil, para poder sugerir "vende X de Y" más adelante.
+      const indicadoresDia = [];
+      if (volumenObjetivo > 0) indicadoresDia.push({ label: "Volumen del día", vendido: paquetesHoy, objetivo: volumenObjetivo, unidad: "paq" });
+      MARCAS_DIA.forEach((m) => {
+        const obj = marcasHoy[m.key].objetivo;
+        if (obj > 0) indicadoresDia.push({ label: m.label, vendido: marcasHoy[m.key].vendido, objetivo: obj, unidad: "paq" });
+      });
+      if (otcDiario > 0) indicadoresDia.push({ label: "OTC del día", vendido: otcHoy, objetivo: otcDiario, unidad: "$" });
+
+      const efectividadPct = indicadoresDia.length > 0
+        ? (indicadoresDia.reduce((s, ind) => s + Math.min(1, ind.vendido / ind.objetivo), 0) / indicadoresDia.length) * 100
+        : 100;
+
+      const indicadoresDebiles = indicadoresDia
+        .filter((ind) => ind.vendido < ind.objetivo)
+        .map((ind) => ({ ...ind, faltante: ind.objetivo - ind.vendido, faltantePct: (ind.objetivo - ind.vendido) / ind.objetivo }))
+        .sort((a, b) => b.faltantePct - a.faltantePct);
+
       const hoy = {
         fecha: fechaHoyRef,
         volumen: { vendido: paquetesHoy, objetivo: volumenObjetivo },
@@ -713,6 +736,8 @@ export default function App() {
         otc: { objetivo: otcDiario, vendido: otcHoy },
         otcSinVuala: { piezas: otcSinVualaPiezas, cumple: otcSinVualaCumple },
         bajoDesempeno,
+        efectividadPct,
+        indicadoresDebiles,
       };
 
       const porDiaMap = {};
@@ -850,7 +875,18 @@ export default function App() {
     totalProyeccion.marcasChampions = totalProyeccionMarcasChampions;
     total.proyeccion = totalProyeccion;
 
-    return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal };
+    // Ranking de efectividad del día: el más bajo se propone para "LA
+    // TERCERA MANO DEL PACHUCO", y los 3 más bajos reciben la alerta. Solo
+    // se considera a quien ya tenga al menos un indicador con objetivo
+    // válido (evita marcar a alguien sin datos como "el peor").
+    const rankingDesempeno = porVendedor
+      .filter((v) => (v.hoy.indicadoresDebiles.length > 0 || v.hoy.efectividadPct < 100) && v.hoy.volumen.objetivo > 0)
+      .slice()
+      .sort((a, b) => a.hoy.efectividadPct - b.hoy.efectividadPct);
+    const peorVendedorNombre = rankingDesempeno[0]?.name || null;
+    const bottom3Nombres = rankingDesempeno.slice(0, 3).map((v) => v.name);
+
+    return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
   }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo]);
 
   async function handleOtcSemanalFile(e) {
@@ -1503,6 +1539,8 @@ export default function App() {
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
+          peorVendedorNombre={stats.peorVendedorNombre}
+          bottom3Nombres={stats.bottom3Nombres}
         />
       )}
     </div>
@@ -1650,7 +1688,7 @@ function formatCrono(ms) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-function DiaKpis({ hoy, mensajeDia, rutaCodigo }) {
+function DiaKpis({ hoy, mensajeDia, rutaCodigo, esPeor, esBottom3 }) {
   const [tiempos, setTiempos] = useState(null);
   const [ahora, setAhora] = useState(Date.now());
 
@@ -1692,6 +1730,45 @@ function DiaKpis({ hoy, mensajeDia, rutaCodigo }) {
   return (
     <>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {hoy.fecha}</div>
+
+      {esBottom3 && (
+        <div className="card" style={{ padding: 16, marginBottom: 16, border: "1px solid #FF6B6B", background: "#2a1414" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <AlertCircle size={18} color="#FF6B6B" />
+            <span className="display" style={{ fontSize: 14, color: "#FF6B6B" }}>TU ERES SELECCIONADO PARA LA TERCERA MANO DEL PACHUCO</span>
+          </div>
+          <div style={{ fontSize: 12, color: "#E8EDF5", marginBottom: 10 }}>
+            Estás entre los 3 con menor efectividad hoy. Para salir del listado, esto es lo que más te está pesando:
+          </div>
+          {hoy.indicadoresDebiles && hoy.indicadoresDebiles.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {hoy.indicadoresDebiles.slice(0, 4).map((ind, i) => (
+                <div key={i} style={{ fontSize: 13, color: "#E8EDF5" }}>
+                  • Vende <b style={{ color: "#F2B134" }}>{ind.unidad === "$" ? money(ind.faltante) : `${unidades(ind.faltante)}`}</b> más de <b>{ind.label}</b> para cerrar ese objetivo.
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: "#E8EDF5" }}>Sigue empujando tus indicadores del día para subir tu efectividad.</div>
+          )}
+        </div>
+      )}
+
+      {esPeor && (
+        <div className="card" style={{ padding: 12, marginBottom: 16, border: "1px solid #FF6B6B" }}>
+          <div style={{ fontSize: 12, color: "#FF6B6B", fontWeight: 700 }}>PROPUESTO PARA: "LA TERCERA MANO DEL PACHUCO" (menor efectividad de todas las rutas hoy)</div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <KpiCard
+          icon={<Star size={14} />}
+          label="Efectividad del día"
+          value={`${hoy.efectividadPct.toFixed(0)}%`}
+          accent={hoy.efectividadPct >= 80 ? "#3DDC97" : hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B"}
+        />
+      </div>
+
       {(horaIngresoClo || msEnRuta != null) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
           {horaIngresoClo && (
@@ -1738,7 +1815,7 @@ function DiaKpis({ hoy, mensajeDia, rutaCodigo }) {
   );
 }
 
-function TablaPorRutaHoy({ porVendedor }) {
+function TablaPorRutaHoy({ porVendedor, peorVendedorNombre }) {
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: 720 }}>
       <thead>
@@ -1749,13 +1826,19 @@ function TablaPorRutaHoy({ porVendedor }) {
           <th>OTC</th>
           <th>Sin Vuala</th>
           <th>Visitas</th>
+          <th>Efectividad</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {porVendedor.map((v) => (
           <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-            <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
+            <td style={{ padding: "10px 16px" }}>
+              {v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
+              {peorVendedorNombre === v.name && (
+                <div style={{ fontSize: 9, color: "#FF6B6B", fontWeight: 700, marginTop: 2 }}>PROPUESTO: LA TERCERA MANO DEL PACHUCO</div>
+              )}
+            </td>
             <td style={{ color: metaColor(v.hoy.volumen.vendido, v.hoy.volumen.objetivo) }}>{unidades(v.hoy.volumen.vendido)}</td>
             {MARCAS_DIA.map((m) => (
               <td key={m.key} style={{ color: metaColor(v.hoy.marcas[m.key].vendido, v.hoy.marcas[m.key].objetivo) }}>
@@ -1774,6 +1857,9 @@ function TablaPorRutaHoy({ porVendedor }) {
               </span>
             </td>
             <td>{v.hoy.visitasEfectivas}</td>
+            <td style={{ color: v.hoy.efectividadPct >= 80 ? "#3DDC97" : v.hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B", fontWeight: 700 }}>
+              {v.hoy.efectividadPct.toFixed(0)}%
+            </td>
             <td>{v.hoy.bajoDesempeno && <AlertCircle size={14} color="#FF6B6B" />}</td>
           </tr>
         ))}
@@ -1843,10 +1929,15 @@ function ModalTablaCompleta({ titulo, onClose, children }) {
 }
 
 
-function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor }) {
+function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats }) {
   const { fecha, horaInicio, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, todos } = analisis;
   const gps = tipoInicioConteo["GPS"] || 0;
   const noGps = todos.length - gps;
+
+  const horaSalidaClo = formatHoraTiempos(tiempos?.salida_ruta?.ts);
+  const horaFinRuta = formatHoraTiempos(tiempos?.ingreso_clo_fin?.ts);
+  const minClo2Inicio = diferenciaMinutos(horaSalidaClo, horaInicio);
+
   return (
     <div className="card" style={{ padding: 24, textAlign: "center", border: "1px solid #2A3852" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 4 }}>
@@ -1856,10 +1947,33 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
       <div style={{ fontSize: 20, fontWeight: 700, marginTop: 10 }}>{nombreRuta}</div>
       {nombreVendedor && <div style={{ fontSize: 15, color: "#E8EDF5" }}>{nombreVendedor}</div>}
       <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 6 }}>
-        {fecha} · Inicio {horaInicio || "—"}{revisor ? ` · Revisó: ${revisor}` : ""}
+        {fecha}{revisor ? ` · Revisó: ${revisor}` : ""}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 22, textAlign: "left" }}>
+      <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>TIEMPOS DE RUTA</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
+        <div className="card" style={{ padding: 12 }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>SALIDA CLO</div>
+          <div className="mono" style={{ fontSize: 16 }}>{horaSalidaClo || "—"}</div>
+        </div>
+        <div className="card" style={{ padding: 12 }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>INICIO DE RUTA</div>
+          <div className="mono" style={{ fontSize: 16 }}>{horaInicio || "—"}</div>
+        </div>
+        <div className="card" style={{ padding: 12 }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>CLO → INICIO</div>
+          <div className="mono" style={{ fontSize: 16, color: minClo2Inicio != null && minClo2Inicio > 15 ? "#FF6B6B" : "#3DDC97" }}>
+            {minClo2Inicio != null ? `${minClo2Inicio} min` : "—"}
+          </div>
+        </div>
+        <div className="card" style={{ padding: 12, gridColumn: "1 / -1" }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>HORA EN QUE TERMINÓ LA RUTA (REGRESO A CLO)</div>
+          <div className="mono" style={{ fontSize: 16 }}>{horaFinRuta || "—"}</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 22 }}>INDICADORES DE VISITAS</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
         <div className="card" style={{ padding: 14 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS TOTALES</div>
           <div className="mono" style={{ fontSize: 22 }}>{todos.length}</div>
@@ -1885,6 +1999,32 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
           <div className="mono" style={{ fontSize: 22 }}>{clientesConDescuento.length}</div>
         </div>
       </div>
+
+      {vendedorStats && (
+        <>
+          <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 22 }}>VENTAS DEL PERIODO (ESTA RUTA)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
+            <div className="card" style={{ padding: 14 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>MARCAS ESTRATÉGICAS</div>
+              <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(vendedorStats.volumenEstrategicas)}</div>
+            </div>
+            <div className="card" style={{ padding: 14 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>OTC</div>
+              <div className="mono" style={{ fontSize: 18, color: metaColor(vendedorStats.marcaOtc.vendido, vendedorStats.marcaOtc.objetivo) }}>
+                {money(vendedorStats.marcaOtc.vendido)} / {money(vendedorStats.marcaOtc.objetivo)}
+              </div>
+            </div>
+            {vendedorStats.hoy && (
+              <div className="card" style={{ padding: 14, gridColumn: "1 / -1" }}>
+                <div style={{ fontSize: 11, color: "#9AA7BD" }}>CALIFICACIÓN · EFECTIVIDAD DEL DÍA (TODOS LOS INDICADORES)</div>
+                <div className="mono" style={{ fontSize: 22, color: vendedorStats.hoy.efectividadPct >= 80 ? "#3DDC97" : vendedorStats.hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B" }}>
+                  {vendedorStats.hoy.efectividadPct.toFixed(0)}%
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       <div style={{ marginTop: 22, textAlign: "left" }}>
         <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>TOP CLIENTES · MAYOR ESTANCIA</div>
@@ -1935,10 +2075,12 @@ function diferenciaMinutos(horaA, horaB) {
   return Math.round(bMin - aMin);
 }
 
-function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
+function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
+  const [descargandoImagen, setDescargandoImagen] = useState(false);
+  const capturaRef = useRef(null);
 
   useEffect(() => {
     let activo = true;
@@ -1959,6 +2101,30 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
     return () => { activo = false; };
   }, [nombreRuta, analisis?.fecha]);
 
+  // Al entrar a modo captura, descarga automáticamente una imagen PNG del
+  // resumen (sin que el usuario tenga que tomar screenshot a mano).
+  useEffect(() => {
+    if (!modoCaptura || !analisis) return;
+    let cancelado = false;
+    setDescargandoImagen(true);
+    const t = setTimeout(async () => {
+      try {
+        if (!capturaRef.current || cancelado) return;
+        const canvas = await html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 2 });
+        if (cancelado) return;
+        const link = document.createElement("a");
+        link.download = `mesa_control_${(nombreRuta || "ruta").replace(/\s+/g, "_")}_${analisis.fecha}.png`;
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      } catch (e) {
+        console.error("No se pudo generar la imagen:", e);
+      } finally {
+        if (!cancelado) setDescargandoImagen(false);
+      }
+    }, 250); // pequeño respiro para que el DOM termine de pintar el resumen
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [modoCaptura, analisis, nombreRuta]);
+
   if (!analisis) {
     return (
       <div>
@@ -1976,14 +2142,17 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        {modoCaptura && descargandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
         <button className="btn-ghost" onClick={() => setModoCaptura((m) => !m)}>
-          {modoCaptura ? "Ver detalle completo" : "Ver resumen (para captura)"}
+          {modoCaptura ? "Ver detalle completo" : "Ver resumen (descarga imagen)"}
         </button>
       </div>
 
       {modoCaptura ? (
-        <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} />
+        <div ref={capturaRef}>
+          <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} tiempos={tiempos} vendedorStats={vendedorStats} />
+        </div>
       ) : (
         <>
       <div className="card" style={{ padding: "12px 16px", marginBottom: 16 }}>
@@ -1995,6 +2164,14 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
         <KpiCard icon={<Clock size={14} />} label="Hora de inicio" value={horaInicio || "—"} />
         <KpiCard icon={<Target size={14} />} label="Volumen total" value={unidades(volumenTotal)} accent="#F2B134" />
         <KpiCard icon={<AlertCircle size={14} />} label="Visitas < 3 min" value={menores3.length} accent={menores3.length > 0 ? "#FF6B6B" : "#3DDC97"} />
+        {vendedorStats?.hoy && (
+          <KpiCard
+            icon={<Star size={14} />}
+            label="Calificación · Efectividad del día"
+            value={`${vendedorStats.hoy.efectividadPct.toFixed(0)}%`}
+            accent={vendedorStats.hoy.efectividadPct >= 80 ? "#3DDC97" : vendedorStats.hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B"}
+          />
+        )}
       </div>
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
@@ -2117,7 +2294,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor }) {
   );
 }
 
-function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, onRefresh, refrescando, onLogout }) {
+function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
@@ -2136,12 +2313,18 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes"].includes(t.key))} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} />
 
       {tab === "dia" ? (
-        <DiaKpis hoy={vendedor.hoy} mensajeDia={mensajeDia} rutaCodigo={vendedor.name.replace("RUTA ", "").trim()} />
+        <DiaKpis
+          hoy={vendedor.hoy}
+          mensajeDia={mensajeDia}
+          rutaCodigo={vendedor.name.replace("RUTA ", "").trim()}
+          esPeor={peorVendedorNombre === vendedor.name}
+          esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
+        />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} />
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : (
@@ -2534,7 +2717,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador")
                 : undefined
             }
             estadoTabs={estadoTabsActividades}
@@ -2659,13 +2842,13 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                   </button>
                 </div>
                 <div style={{ overflowX: "auto" }}>
-                  <TablaPorRutaHoy porVendedor={stats.porVendedor} />
+                  <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
                 </div>
               </div>
 
               {verTablaHoyCompleta && (
                 <ModalTablaCompleta titulo="POR RUTA · HOY" onClose={() => setVerTablaHoyCompleta(false)}>
-                  <TablaPorRutaHoy porVendedor={stats.porVendedor} />
+                  <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
                 </ModalTablaCompleta>
               )}
             </>
@@ -2707,6 +2890,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                 nombreRuta={rutaMesaSeleccionada}
                 nombreVendedor={NOMBRES[rutaMesaSeleccionada]}
                 revisor={revisorNombre}
+                vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
               />
             </>
           ) : objTab === "cuponera" ? (
@@ -2721,6 +2905,22 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "actividades_mes" ? (
             <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
+          ) : objTab === "cotizador" ? (
+            <div className="card" style={{ padding: 30, textAlign: "center" }}>
+              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>COTIZADOR MARLBORO</div>
+              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
+                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
+              </p>
+              <a
+                href="https://cotizador-marlboro.vercel.app"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px" }}
+              >
+                Abrir cotizador
+              </a>
+            </div>
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
