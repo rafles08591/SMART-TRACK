@@ -2121,10 +2121,6 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   const [errorImagen, setErrorImagen] = useState(null);
   const capturaRef = useRef(null);
 
-  // Los navegadores de escritorio normalmente no tienen navigator.share, así
-  // que esto sirve para distinguir "celular con share sheet" de "escritorio".
-  const soportaCompartirArchivos = typeof navigator !== "undefined" && typeof navigator.share === "function" && typeof navigator.canShare === "function";
-
   useEffect(() => {
     let activo = true;
     setTiemposCargando(true);
@@ -2180,17 +2176,6 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
         canvas.toBlob((blob) => {
           if (!blob || cancelado) return;
           const url = URL.createObjectURL(blob);
-
-          if (!soportaCompartirArchivos) {
-            // Escritorio: descarga directa, como ya funcionaba.
-            const link = document.createElement("a");
-            link.download = nombreArchivo;
-            link.href = url;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-          }
-
           setImagenLista({ blob, nombreArchivo, url });
         }, "image/png");
       } catch (e) {
@@ -2257,7 +2242,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         {modoCaptura && generandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
-        {modoCaptura && soportaCompartirArchivos && imagenLista && (
+        {modoCaptura && imagenLista && (
           <button className="btn" onClick={guardarOCompartirImagen}>
             <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar / Compartir imagen
           </button>
@@ -2266,14 +2251,9 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
           {modoCaptura ? "Ver detalle completo" : "Ver resumen (imagen)"}
         </button>
       </div>
-      {modoCaptura && soportaCompartirArchivos && imagenLista && (
+      {modoCaptura && imagenLista && (
         <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 12, textAlign: "right" }}>
-          Toca "Guardar / Compartir imagen" para elegir dónde guardarla (Fotos, Archivos, etc.).
-        </div>
-      )}
-      {modoCaptura && !soportaCompartirArchivos && imagenLista && (
-        <div style={{ fontSize: 11, color: "#3DDC97", marginBottom: 12, textAlign: "right" }}>
-          Imagen descargada.
+          Toca "Guardar / Compartir imagen" para guardarla (según tu dispositivo, se descarga o te deja elegir dónde guardarla).
         </div>
       )}
       {modoCaptura && errorImagen && (
