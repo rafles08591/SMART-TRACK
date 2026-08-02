@@ -2910,11 +2910,13 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
   const captura = useCapturaImagen();
   const [form, setForm] = useState(null);
   const [subiendoImagen, setSubiendoImagen] = useState(false);
+  const [nuevoCodigoTexto, setNuevoCodigoTexto] = useState("");
   const fileRef = useRef(null);
 
-  // Códigos de artículo que sí aparecen en los archivos de OTC del día ya
-  // subidos, para que el gerente elija de la lista real en vez de adivinar.
-  const codigosDisponibles = [...new Set((data.otcDia || []).map((r) => r.codigoArticulo).filter(Boolean))].sort();
+  // Solo de referencia (no se usan para armar botones): códigos que ya
+  // aparecieron en archivos de OTC del día subidos, por si al gerente le
+  // sirve de guía al capturar los suyos a mano.
+  const codigosVistosEnOtc = [...new Set((data.otcDia || []).map((r) => r.codigoArticulo).filter(Boolean))].sort();
 
   function iniciarEdicion() {
     setForm({
@@ -2927,6 +2929,7 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
       codigosParticipantes: [...(rally.codigosParticipantes || [])],
       unidad: rally.unidad || "dinero",
     });
+    setNuevoCodigoTexto("");
   }
 
   function toggleRuta(nombreRuta) {
@@ -2939,11 +2942,15 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
     });
   }
 
-  function toggleCodigo(codigo) {
-    setForm((f) => {
-      const yaEsta = f.codigosParticipantes.includes(codigo);
-      return { ...f, codigosParticipantes: yaEsta ? f.codigosParticipantes.filter((c) => c !== codigo) : [...f.codigosParticipantes, codigo] };
-    });
+  function agregarCodigoManual() {
+    const codigo = nuevoCodigoTexto.trim();
+    if (!codigo) return;
+    setForm((f) => (f.codigosParticipantes.includes(codigo) ? f : { ...f, codigosParticipantes: [...f.codigosParticipantes, codigo] }));
+    setNuevoCodigoTexto("");
+  }
+
+  function quitarCodigoManual(codigo) {
+    setForm((f) => ({ ...f, codigosParticipantes: f.codigosParticipantes.filter((c) => c !== codigo) }));
   }
 
   function actualizarObjetivo(nombreRuta, campo, valor) {
@@ -3059,25 +3066,41 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
                 <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
                   CÓDIGOS DE ARTÍCULO QUE SE SUMAN (OTC)
                 </div>
-                {codigosDisponibles.length === 0 ? (
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <input
+                    type="text"
+                    value={nuevoCodigoTexto}
+                    onChange={(e) => setNuevoCodigoTexto(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarCodigoManual(); } }}
+                    placeholder="Escribe el código y agrégalo (ej. 304)"
+                    style={{ flex: 1, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }}
+                  />
+                  <button className="btn" onClick={agregarCodigoManual}>
+                    <Plus size={14} style={{ verticalAlign: "-2px" }} /> Agregar
+                  </button>
+                </div>
+
+                {form.codigosParticipantes.length === 0 ? (
                   <div style={{ fontSize: 12, color: "#9AA7BD" }}>
-                    Aún no hay códigos disponibles — sube primero un archivo de "Avance del día (OTC)" para que aparezcan aquí.
+                    No has agregado ningún código todavía — si no agregas ninguno, se suma TODO el OTC sin filtrar.
                   </div>
                 ) : (
-                  <>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {codigosDisponibles.map((codigo) => (
-                        <button key={codigo} className={form.codigosParticipantes.includes(codigo) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleCodigo(codigo)}>
-                          {codigo}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {form.codigosParticipantes.map((codigo) => (
+                      <div key={codigo} style={{ display: "flex", alignItems: "center", gap: 6, background: "#131C30", border: "1px solid #1E2A42", borderRadius: 8, padding: "6px 8px 6px 12px" }}>
+                        <span style={{ fontSize: 12, color: "#E8EDF5" }}>{codigo}</span>
+                        <button className="btn-ghost" style={{ padding: "2px 4px" }} onClick={() => quitarCodigoManual(codigo)}>
+                          <Trash2 size={12} color="#FF6B6B" />
                         </button>
-                      ))}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>
-                      {form.codigosParticipantes.length === 0
-                        ? "Si no eliges ninguno, se suma TODO el OTC sin filtrar por código."
-                        : `Se sumará solo el OTC de estos ${form.codigosParticipantes.length} código(s).`}
-                    </div>
-                  </>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {codigosVistosEnOtc.length > 0 && (
+                  <div style={{ fontSize: 11, color: "#5b6478", marginTop: 8 }}>
+                    Códigos vistos en tus archivos de OTC ya subidos (por si sirve de referencia): {codigosVistosEnOtc.join(", ")}
+                  </div>
                 )}
               </div>
 
