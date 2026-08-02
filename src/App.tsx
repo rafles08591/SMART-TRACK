@@ -1951,50 +1951,50 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
       </div>
 
       <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>TIEMPOS DE RUTA</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
-        <div className="card" style={{ padding: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, textAlign: "left" }}>
+        <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>SALIDA CLO</div>
           <div className="mono" style={{ fontSize: 16 }}>{horaSalidaClo || "—"}</div>
         </div>
-        <div className="card" style={{ padding: 12 }}>
+        <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>INICIO DE RUTA</div>
           <div className="mono" style={{ fontSize: 16 }}>{horaInicio || "—"}</div>
         </div>
-        <div className="card" style={{ padding: 12 }}>
+        <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>CLO → INICIO</div>
           <div className="mono" style={{ fontSize: 16, color: minClo2Inicio != null && minClo2Inicio > 15 ? "#FF6B6B" : "#3DDC97" }}>
             {minClo2Inicio != null ? `${minClo2Inicio} min` : "—"}
           </div>
         </div>
-        <div className="card" style={{ padding: 12, gridColumn: "1 / -1" }}>
+        <div className="card" style={{ padding: 12, flex: "1 1 100%" }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>HORA EN QUE TERMINÓ LA RUTA (REGRESO A CLO)</div>
           <div className="mono" style={{ fontSize: 16 }}>{horaFinRuta || "—"}</div>
         </div>
       </div>
 
       <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 22 }}>INDICADORES DE VISITAS</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
-        <div className="card" style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, textAlign: "left" }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS TOTALES</div>
           <div className="mono" style={{ fontSize: 22 }}>{todos.length}</div>
         </div>
-        <div className="card" style={{ padding: 14 }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VOLUMEN TOTAL</div>
           <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(volumenTotal)}</div>
         </div>
-        <div className="card" style={{ padding: 14 }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>ESTANCIA &lt; 3 MIN</div>
           <div className="mono" style={{ fontSize: 22, color: menores3.length > 0 ? "#FF6B6B" : "#3DDC97" }}>{menores3.length}</div>
         </div>
-        <div className="card" style={{ padding: 14 }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>INICIO NO-GPS</div>
           <div className="mono" style={{ fontSize: 22, color: noGps > 0 ? "#FF6B6B" : "#3DDC97" }}>{noGps} / {todos.length}</div>
         </div>
-        <div className="card" style={{ padding: 14 }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VENTA 0.3</div>
           <div className="mono" style={{ fontSize: 22 }}>{clientesVolumen03.length}</div>
         </div>
-        <div className="card" style={{ padding: 14 }}>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>CON DESCUENTO</div>
           <div className="mono" style={{ fontSize: 22 }}>{clientesConDescuento.length}</div>
         </div>
@@ -2003,19 +2003,19 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
       {vendedorStats && (
         <>
           <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 22 }}>VENTAS DEL PERIODO (ESTA RUTA)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8, textAlign: "left" }}>
-            <div className="card" style={{ padding: 14 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, textAlign: "left" }}>
+            <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>MARCAS ESTRATÉGICAS</div>
               <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(vendedorStats.volumenEstrategicas)}</div>
             </div>
-            <div className="card" style={{ padding: 14 }}>
+            <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>OTC</div>
               <div className="mono" style={{ fontSize: 18, color: metaColor(vendedorStats.marcaOtc.vendido, vendedorStats.marcaOtc.objetivo) }}>
                 {money(vendedorStats.marcaOtc.vendido)} / {money(vendedorStats.marcaOtc.objetivo)}
               </div>
             </div>
             {vendedorStats.hoy && (
-              <div className="card" style={{ padding: 14, gridColumn: "1 / -1" }}>
+              <div className="card" style={{ padding: 14, flex: "1 1 100%" }}>
                 <div style={{ fontSize: 11, color: "#9AA7BD" }}>CALIFICACIÓN · EFECTIVIDAD DEL DÍA (TODOS LOS INDICADORES)</div>
                 <div className="mono" style={{ fontSize: 22, color: vendedorStats.hoy.efectividadPct >= 80 ? "#3DDC97" : vendedorStats.hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B" }}>
                   {vendedorStats.hoy.efectividadPct.toFixed(0)}%
@@ -2107,7 +2107,12 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   const [tiemposCargando, setTiemposCargando] = useState(true);
   const [generandoImagen, setGenerandoImagen] = useState(false);
   const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
+  const [errorImagen, setErrorImagen] = useState(null);
   const capturaRef = useRef(null);
+
+  // Los navegadores de escritorio normalmente no tienen navigator.share, así
+  // que esto sirve para distinguir "celular con share sheet" de "escritorio".
+  const soportaCompartirArchivos = typeof navigator !== "undefined" && typeof navigator.share === "function" && typeof navigator.canShare === "function";
 
   useEffect(() => {
     let activo = true;
@@ -2128,37 +2133,55 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
     return () => { activo = false; };
   }, [nombreRuta, analisis?.fecha]);
 
-  // Al entrar a modo captura, genera la imagen sola (esto sí se puede hacer
-  // en automático). Pero GUARDARLA o COMPARTIRLA se deja para un botón que
-  // el propio usuario toca — los navegadores exigen que Web Share API (y a
-  // veces hasta la descarga) se dispare directo desde un toque, si no, en
-  // celular puede fallar en silencio y no verse nada guardado.
+  // Al entrar a modo captura, genera la imagen. En escritorio la descarga
+  // sola de una vez (como ya funcionaba antes). En celular, la deja lista y
+  // aparece un botón para que el usuario la guarde/comparta con un toque
+  // directo (Web Share API exige un gesto real del usuario para funcionar).
   useEffect(() => {
     if (!modoCaptura || !analisis) {
       setImagenLista(null);
+      setErrorImagen(null);
       return;
     }
     let cancelado = false;
     setGenerandoImagen(true);
+    setErrorImagen(null);
     setImagenLista(null);
     const t = setTimeout(async () => {
       try {
         if (!capturaRef.current || cancelado) return;
-        const canvas = await html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 2 });
+        if (document.fonts && document.fonts.ready) {
+          try { await document.fonts.ready; } catch (e) { /* seguir de todos modos */ }
+        }
+        const canvas = await html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 2, useCORS: true });
         if (cancelado) return;
         const nombreArchivo = `mesa_control_${(nombreRuta || "ruta").replace(/\s+/g, "_")}_${analisis.fecha}.png`;
+
         canvas.toBlob((blob) => {
           if (!blob || cancelado) return;
           const url = URL.createObjectURL(blob);
+
+          if (!soportaCompartirArchivos) {
+            // Escritorio: descarga directa, como ya funcionaba.
+            const link = document.createElement("a");
+            link.download = nombreArchivo;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
+
           setImagenLista({ blob, nombreArchivo, url });
         }, "image/png");
       } catch (e) {
         console.error("No se pudo generar la imagen:", e);
+        if (!cancelado) setErrorImagen(e?.message || "No se pudo generar la imagen.");
       } finally {
         if (!cancelado) setGenerandoImagen(false);
       }
     }, 250); // pequeño respiro para que el DOM termine de pintar el resumen
     return () => { cancelado = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modoCaptura, analisis, nombreRuta]);
 
   // Libera el Object URL cuando ya no se necesita (se generó uno nuevo, se
@@ -2170,9 +2193,8 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   }, [imagenLista]);
 
   // Se llama DIRECTO desde el onClick del botón (gesto de usuario real), para
-  // que tanto el share sheet como la descarga funcionen de forma confiable
-  // en celular (sobre todo iOS Safari, donde si no viene de un toque directo
-  // simplemente no pasa nada visible).
+  // que el share sheet funcione de forma confiable en celular (sobre todo
+  // iOS Safari, donde si no viene de un toque directo no pasa nada visible).
   async function guardarOCompartirImagen() {
     if (!imagenLista) return;
     const { blob, nombreArchivo, url } = imagenLista;
@@ -2215,7 +2237,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         {modoCaptura && generandoImagen && <span style={{ fontSize: 12, color: "#9AA7BD" }}>Generando imagen...</span>}
-        {modoCaptura && imagenLista && (
+        {modoCaptura && soportaCompartirArchivos && imagenLista && (
           <button className="btn" onClick={guardarOCompartirImagen}>
             <Download size={14} style={{ verticalAlign: "-2px" }} /> Guardar / Compartir imagen
           </button>
@@ -2224,9 +2246,19 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
           {modoCaptura ? "Ver detalle completo" : "Ver resumen (imagen)"}
         </button>
       </div>
-      {modoCaptura && imagenLista && (
+      {modoCaptura && soportaCompartirArchivos && imagenLista && (
         <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 12, textAlign: "right" }}>
-          Toca "Guardar / Compartir imagen" — en celular te va a abrir el menú para guardar en Fotos o Archivos.
+          Toca "Guardar / Compartir imagen" para elegir dónde guardarla (Fotos, Archivos, etc.).
+        </div>
+      )}
+      {modoCaptura && !soportaCompartirArchivos && imagenLista && (
+        <div style={{ fontSize: 11, color: "#3DDC97", marginBottom: 12, textAlign: "right" }}>
+          Imagen descargada.
+        </div>
+      )}
+      {modoCaptura && errorImagen && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#3a1414", border: "1px solid #FF6B6B", color: "#FF6B6B", fontSize: 12, borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+          <AlertCircle size={14} /> No se pudo generar la imagen: {errorImagen}
         </div>
       )}
 
