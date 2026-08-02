@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import {
-  Truck, Target, Users, Upload, LogOut, Star, MapPin, Flag,
+  Truck, Target, Users, Upload, LogOut, Star, MapPin, Flag, Download,
   Plus, Trash2, Calendar, ChevronRight, AlertCircle, CheckCircle2, Clock, MessageSquare,
   RefreshCw, Ticket, Camera, Image as ImageIcon, Ban,
 } from "lucide-react";
@@ -2037,15 +2037,21 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
       </div>
 
       {(() => {
-        const clientesAlerta = todos.filter((r) => r.alerta);
+        const clientesAlerta = todos
+          .filter((r) => r.alerta)
+          .slice()
+          .sort((a, b) => a.tiempoEstancia - b.tiempoEstancia); // los más graves (menor estancia) primero
         if (clientesAlerta.length === 0) return null;
+        const LIMITE_CAPTURA = 40;
+        const mostrados = clientesAlerta.slice(0, LIMITE_CAPTURA);
+        const restantes = clientesAlerta.length - mostrados.length;
         return (
           <div style={{ marginTop: 22, textAlign: "left" }}>
             <div style={{ fontSize: 12, color: "#FF6B6B", marginBottom: 8, fontWeight: 700 }}>
               CLIENTES EN ALERTA ({clientesAlerta.length}) · ESTANCIA &lt; 3 MIN O INICIO NO-GPS
             </div>
             <div className="card" style={{ padding: 12 }}>
-              {clientesAlerta.map((r, i) => (
+              {mostrados.map((r, i) => (
                 <div
                   key={i}
                   style={{
@@ -2057,6 +2063,11 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
                   <span className="mono">{r.tiempoEstancia} min · {r.tipoInicio || "SIN DATO"}</span>
                 </div>
               ))}
+              {restantes > 0 && (
+                <div style={{ fontSize: 11, color: "#9AA7BD", paddingTop: 8, borderTop: "1px solid #3a1414" }}>
+                  + {restantes} más (se muestran los {LIMITE_CAPTURA} más graves; ve el detalle completo en la app)
+                </div>
+              )}
             </div>
           </div>
         );
@@ -2151,9 +2162,18 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
       try {
         if (!capturaRef.current || cancelado) return;
         if (document.fonts && document.fonts.ready) {
-          try { await document.fonts.ready; } catch (e) { /* seguir de todos modos */ }
+          try {
+            await Promise.race([document.fonts.ready, new Promise((res) => setTimeout(res, 2000))]);
+          } catch (e) { /* seguir de todos modos */ }
         }
-        const canvas = await html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 2, useCORS: true });
+        // Límite de tiempo de seguridad: si html2canvas se cuelga (rutas con
+        // muchos clientes en alerta pueden tardar demasiado o trabar la
+        // pestaña), se aborta con un error visible en vez de dejar la
+        // pantalla en blanco para siempre.
+        const canvas = await Promise.race([
+          html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 1.3, useCORS: true }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse (más de 20s). Prueba con una ruta con menos clientes en alerta.")), 20000)),
+        ]);
         if (cancelado) return;
         const nombreArchivo = `mesa_control_${(nombreRuta || "ruta").replace(/\s+/g, "_")}_${analisis.fecha}.png`;
 
