@@ -1007,11 +1007,45 @@ export default function App() {
     XLSX.writeFile(wb, "plantilla_objetivos.xlsx");
   }
 
+  // Convierte las filas crudas (leídas con header:1) de una hoja en formato
+  // "largo": una fila por cada combinación ruta+artículo, con columnas
+  // Codigo_Vendedor, Codigo_Articulo, Nombre corto (opcional) y Cantidad.
+  // Es el formato más simple y confiable — se intenta primero.
+  function convertirCargaLarga(filas) {
+    if (!filas || filas.length === 0) return { items: [], error: "El archivo está vacío." };
+    const encabezado = (filas[0] || []).map((v) => String(v || "").trim().toLowerCase());
+    const idxRuta = encabezado.findIndex((h) => h.includes("codigo_vendedor") || h.includes("codigo vendedor") || h === "vendedor" || h === "ruta");
+    const idxFA = encabezado.findIndex((h) => h.includes("codigo_articulo") || h.includes("codigo articulo") || h === "fa" || h === "articulo");
+    const idxMarca = encabezado.findIndex((h) => h.includes("nombre corto") || h.includes("marca") || h.includes("descripcion"));
+    const idxCantidad = encabezado.findIndex((h) => h.includes("cantidad"));
+
+    if (idxRuta === -1 || idxFA === -1 || idxCantidad === -1) {
+      return { items: [], error: "No se encontraron las columnas Codigo_Vendedor, Codigo_Articulo y Cantidad." };
+    }
+
+    const itemsMap = {};
+    for (let i = 1; i < filas.length; i++) {
+      const fila = filas[i] || [];
+      const rutaCodigo = String(fila[idxRuta] || "").trim().toUpperCase();
+      const fa = String(fila[idxFA] || "").trim().toUpperCase();
+      if (!rutaCodigo || !fa) continue;
+      const marca = idxMarca !== -1 ? String(fila[idxMarca] || "").trim() : fa;
+      const cantidad = Number(fila[idxCantidad]);
+      const nombreRuta = `RUTA ${rutaCodigo}`;
+      const key = `${fa}|${marca}`;
+      if (!itemsMap[key]) itemsMap[key] = { fa, marca, porRuta: {} };
+      itemsMap[key].porRuta[nombreRuta] = { inicial: isNaN(cantidad) ? 0 : cantidad, modificada: null };
+    }
+    const items = Object.values(itemsMap);
+    return { items, error: items.length === 0 ? "No se encontraron filas válidas." : null };
+  }
+
   // Convierte las filas crudas (leídas con header:1) de la hoja "Carga
   // Propuesta" en una lista de artículos. Formato esperado (tabla dinámica):
   // una fila de encabezado con "Etiquetas de fila", J201, J202, ... J207;
   // luego, por cada código FA, una fila solo con el código (sin cantidades)
   // seguida de una o más filas de marca con la cantidad por ruta.
+  // (Se usa solo como respaldo si ninguna hoja viene en formato "largo".)
   function convertirCargaPropuesta(filas) {
     let indiceEncabezado = -1;
     const columnasRuta = {}; // { "RUTA J201": indiceColumna, ... }
@@ -1060,23 +1094,40 @@ export default function App() {
     reader.onload = (evt) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: "binary" });
-        const nombreHoja = wb.SheetNames.find((n) => n.trim().toLowerCase() === "carga propuesta") || wb.SheetNames[0];
-        const sheet = wb.Sheets[nombreHoja];
-        const filas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-        const { items, error } = convertirCargaPropuesta(filas);
-        if (error) {
-          setCargasStatus(error);
+        let resultado = null;
+        let hojaUsada = null;
+
+        // 1) Buscar primero alguna hoja en formato "largo" (más confiable).
+        for (const nombreHoja of wb.SheetNames) {
+          const filas = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { header: 1, defval: "" });
+          const intento = convertirCargaLarga(filas);
+          if (!intento.error) {
+            resultado = intento;
+            hojaUsada = nombreHoja;
+            break;
+          }
+        }
+
+        // 2) Si ninguna hoja vino en formato largo, usar "Carga Propuesta" (tabla dinámica).
+        if (!resultado) {
+          hojaUsada = wb.SheetNames.find((n) => n.trim().toLowerCase() === "carga propuesta") || wb.SheetNames[0];
+          const filas = XLSX.utils.sheet_to_json(wb.Sheets[hojaUsada], { header: 1, defval: "" });
+          resultado = convertirCargaPropuesta(filas);
+        }
+
+        if (resultado.error) {
+          setCargasStatus(resultado.error);
           return;
         }
-        if (items.length === 0) {
+        if (resultado.items.length === 0) {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items } });
-        setCargasStatus(`Carga actualizada: ${items.length} artículos, hoja "${nombreHoja}".`);
+        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items: resultado.items } });
+        setCargasStatus(`Carga actualizada: ${resultado.items.length} artículos, hoja "${hojaUsada}".`);
       } catch (err) {
         console.error(err);
-        setCargasStatus("No se pudo leer el archivo. Verifica que tenga la hoja \"Carga Propuesta\".");
+        setCargasStatus("No se pudo leer el archivo. Verifica el formato.");
       }
     };
     reader.readAsBinaryString(file);
@@ -1088,15 +1139,20 @@ export default function App() {
       alert("No hay una carga cargada todavía.");
       return;
     }
-    const rutas = Object.keys(cargas.items[0]?.porRuta || {});
-    const filas = cargas.items.map((it) => {
-      const fila = { FA: it.fa, MARCA: it.marca };
-      rutas.forEach((r) => {
-        const codigo = r.replace("RUTA ", "");
-        const porRuta = it.porRuta[r] || { inicial: 0, modificada: null };
-        fila[codigo] = porRuta.modificada != null ? porRuta.modificada : porRuta.inicial;
+    // Mismo formato "largo" con el que se sube: una fila por cada
+    // combinación ruta + artículo, con la cantidad final (propuesta del
+    // vendedor si la cambió, o la inicial si no).
+    const filas = [];
+    cargas.items.forEach((it) => {
+      Object.entries(it.porRuta).forEach(([nombreRuta, porRuta]) => {
+        const cantidad = porRuta.modificada != null ? porRuta.modificada : porRuta.inicial;
+        filas.push({
+          Codigo_Vendedor: nombreRuta.replace("RUTA ", ""),
+          Codigo_Articulo: it.fa,
+          "Nombre corto": it.marca,
+          Cantidad: cantidad,
+        });
       });
-      return fila;
     });
     const ws = XLSX.utils.json_to_sheet(filas);
     const wb = XLSX.utils.book_new();
