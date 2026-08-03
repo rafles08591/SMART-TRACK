@@ -263,7 +263,7 @@ function defaultData() {
     // Cargas: Supervisor-1/Gerente suben la "Carga Propuesta" (FA, marca,
     // cantidad por ruta). Cada vendedor puede proponer su propia cantidad;
     // si no la cambia, se usa la inicial. Se bloquea al descargar.
-    cargas: { fecha: null, bloqueado: false, items: [] },
+    cargas: { fecha: null, bloqueado: false, items: [], enviosPorRuta: {} },
     // Rally OTC: configurado por gerente, visible para todos los roles.
     // objetivos es un mapa { "RUTA J201": { dia, final }, ... } solo para
     // las rutas participantes.
@@ -1123,7 +1123,7 @@ export default function App() {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items: resultado.items } });
+        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} } });
         setCargasStatus(`Carga actualizada: ${resultado.items.length} artículos, hoja "${hojaUsada}".`);
       } catch (err) {
         console.error(err);
@@ -3610,8 +3610,9 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta }) {
  *   modifica, se usa la inicial. Al descargar, se bloquea la edición.
  */
 function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar }) {
-  const cargas = data.cargas || { fecha: null, bloqueado: false, items: [] };
+  const cargas = data.cargas || { fecha: null, bloqueado: false, items: [], enviosPorRuta: {} };
   const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
+  const yaEnviado = !!cargas.enviosPorRuta?.[vendedorActual];
 
   function actualizarModificada(itemIndex, nombreRuta, valor) {
     if (cargas.bloqueado) return;
@@ -3619,7 +3620,14 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
       if (i !== itemIndex) return it;
       return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
     });
-    persist({ ...data, cargas: { ...cargas, items } });
+    // Cualquier edición nueva apaga el foquito verde hasta que vuelva a
+    // darle "Enviar" — así el staff sabe que hay cambios sin confirmar.
+    const enviosPorRuta = { ...(cargas.enviosPorRuta || {}), [nombreRuta]: false };
+    persist({ ...data, cargas: { ...cargas, items, enviosPorRuta } });
+  }
+
+  function enviarCambios() {
+    persist({ ...data, cargas: { ...cargas, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [vendedorActual]: true } } });
   }
 
   return (
@@ -3646,8 +3654,36 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
           </div>
           {cargasStatus && <div style={{ fontSize: 12, color: "#9AA7BD" }}>{cargasStatus}</div>}
           {cargas.bloqueado && (
-            <div style={{ fontSize: 11, color: "#FF6B6B", marginTop: 6 }}>
-              Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades. Sube un archivo nuevo para reiniciar el ciclo.
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+              <div style={{ fontSize: 11, color: "#FF6B6B" }}>
+                Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades.
+              </div>
+              <button className="btn-ghost" onClick={() => persist({ ...data, cargas: { ...cargas, bloqueado: false } })}>
+                <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reactivar edición
+              </button>
+            </div>
+          )}
+
+          {cargas.items.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>ESTATUS POR RUTA</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {RUTAS.map((nombreRuta) => {
+                  const enviado = !!cargas.enviosPorRuta?.[nombreRuta];
+                  return (
+                    <div
+                      key={nombreRuta}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "5px 10px", borderRadius: 8,
+                        border: `1px solid ${enviado ? "#3DDC97" : "#1E2A42"}`, color: enviado ? "#3DDC97" : "#9AA7BD",
+                      }}
+                    >
+                      <span style={{ width: 8, height: 8, borderRadius: 4, background: enviado ? "#3DDC97" : "#5b6478", display: "inline-block" }} />
+                      {nombreRuta}{NOMBRES[nombreRuta] ? ` · ${NOMBRES[nombreRuta]}` : ""}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -3664,10 +3700,22 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
               <div style={{ fontSize: 12, color: "#FF6B6B" }}>Esta carga ya se descargó — ya no se puede modificar.</div>
             </div>
           )}
+          {!cargas.bloqueado && (
+            <div className="card" style={{ padding: 12, marginBottom: 14, border: `1px solid ${yaEnviado ? "#3DDC97" : "#F2B134"}` }}>
+              <div style={{ fontSize: 12, color: yaEnviado ? "#3DDC97" : "#F2B134" }}>
+                {yaEnviado ? "Ya enviaste tus cambios — el gerente/supervisor ya los puede ver." : "Aún no has enviado tus cambios."}
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
             Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
           </div>
           <TablaCargaVendedor items={cargas.items} nombreRuta={vendedorActual} bloqueado={cargas.bloqueado} onModificar={actualizarModificada} />
+          {!cargas.bloqueado && (
+            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={enviarCambios}>
+              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar cambios
+            </button>
+          )}
         </>
       ) : (
         <div className="card" style={{ padding: 16 }}>
@@ -3690,6 +3738,7 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, onModificar }) {
             <th style={{ padding: "8px 16px" }}>FA</th>
             <th>Marca</th>
             <th>Cantidad inicial</th>
+
             <th>Tu propuesta</th>
           </tr>
         </thead>
