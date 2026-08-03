@@ -3615,20 +3615,26 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
   const yaEnviado = !!cargas.enviosPorRuta?.[vendedorActual];
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
 
-  function actualizarModificada(itemIndex, nombreRuta, valor) {
-    if (cargas.bloqueado) return;
-    const items = cargas.items.map((it, i) => {
-      if (i !== itemIndex) return it;
-      return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
-    });
-    // Cualquier edición nueva apaga el foquito verde hasta que vuelva a
-    // darle "Enviar" — así el staff sabe que hay cambios sin confirmar.
-    const enviosPorRuta = { ...(cargas.enviosPorRuta || {}), [nombreRuta]: false };
-    persist({ ...data, cargas: { ...cargas, items, enviosPorRuta } });
+  // Edición 100% local (borrador): mientras se escribe, NO se guarda nada en
+  // Supabase — así una sincronización en tiempo real de otro dispositivo
+  // nunca puede "regresar" el número a medio escribir. Solo al presionar
+  // "Enviar" se manda todo de un jalón.
+  const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
+  const [borrador, setBorrador] = useState({});
+  useEffect(() => { setBorrador({}); }, [rutaActiva]);
+
+  function cambiarLocal(itemIndex, valor) {
+    setBorrador((b) => ({ ...b, [itemIndex]: valor }));
   }
 
-  function enviarCambios() {
-    persist({ ...data, cargas: { ...cargas, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [vendedorActual]: true } } });
+  function enviarPara(nombreRuta) {
+    const items = cargas.items.map((it, i) => {
+      if (borrador[i] === undefined) return it;
+      const valor = borrador[i];
+      return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
+    });
+    persist({ ...data, cargas: { ...cargas, items, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [nombreRuta]: true } } });
+    setBorrador({});
   }
 
   return (
@@ -3704,23 +3710,30 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
                   );
                 })}
               </div>
-              {rutaVistaStaff && (
-                <div>
-                  <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
-                    Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargas.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
+              {rutaVistaStaff && (() => {
+                const enviadoEstaRuta = !!cargas.enviosPorRuta?.[rutaVistaStaff];
+                return (
+                  <div>
+                    <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
+                      Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargas.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
+                    </div>
+                    <TablaCargaVendedor items={cargas.items} nombreRuta={rutaVistaStaff} bloqueado={cargas.bloqueado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
+                    {!cargas.bloqueado && (
+                      <button
+                        className="btn"
+                        style={{
+                          marginTop: 12, width: "100%",
+                          background: enviadoEstaRuta ? "#3DDC97" : undefined, borderColor: enviadoEstaRuta ? "#3DDC97" : undefined,
+                          color: enviadoEstaRuta ? "#0B1220" : undefined,
+                        }}
+                        onClick={() => enviarPara(rutaVistaStaff)}
+                      >
+                        <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {enviadoEstaRuta ? "Carga enviada correctamente ✓" : "Enviar / confirmar esta carga"}
+                      </button>
+                    )}
                   </div>
-                  <TablaCargaVendedor items={cargas.items} nombreRuta={rutaVistaStaff} bloqueado={cargas.bloqueado} onModificar={actualizarModificada} />
-                  {!cargas.bloqueado && (
-                    <button
-                      className="btn"
-                      style={{ marginTop: 12, width: "100%" }}
-                      onClick={() => persist({ ...data, cargas: { ...cargas, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [rutaVistaStaff]: true } } })}
-                    >
-                      <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar / confirmar esta carga
-                    </button>
-                  )}
-                </div>
-              )}
+                );
+              })()}
             </div>
           )}
         </div>
@@ -3740,16 +3753,16 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
           {!cargas.bloqueado && (
             <div className="card" style={{ padding: 12, marginBottom: 14, border: `1px solid ${yaEnviado ? "#3DDC97" : "#F2B134"}` }}>
               <div style={{ fontSize: 12, color: yaEnviado ? "#3DDC97" : "#F2B134" }}>
-                {yaEnviado ? "Ya enviaste tus cambios — no puedes seguir editando hasta que gerente/supervisor lo reactive." : "Aún no has enviado tus cambios."}
+                {yaEnviado ? "Ya enviaste tus cambios correctamente — no puedes seguir editando hasta que gerente/supervisor lo reactive." : "Aún no has enviado tus cambios."}
               </div>
             </div>
           )}
           <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
-            Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
+            Escribe la cantidad que consideres — no se guarda hasta que le des "Enviar cambios". Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
           </div>
-          <TablaCargaVendedor items={cargas.items} nombreRuta={vendedorActual} bloqueado={cargas.bloqueado || yaEnviado} onModificar={actualizarModificada} />
+          <TablaCargaVendedor items={cargas.items} nombreRuta={vendedorActual} bloqueado={cargas.bloqueado || yaEnviado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
           {!cargas.bloqueado && !yaEnviado && (
-            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={enviarCambios}>
+            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={() => enviarPara(vendedorActual)}>
               <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar cambios
             </button>
           )}
@@ -3766,11 +3779,13 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
   );
 }
 
-function TablaCargaVendedor({ items, nombreRuta, bloqueado, onModificar }) {
+function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCambiarLocal }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {items.map((it, i) => {
         const porRuta = it.porRuta[nombreRuta] || { inicial: 0, modificada: null };
+        const valorGuardado = porRuta.modificada != null ? porRuta.modificada : porRuta.inicial;
+        const valorMostrado = valoresLocales[i] !== undefined ? valoresLocales[i] : valorGuardado;
         return (
           <div key={i} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 140px", minWidth: 0 }}>
@@ -3785,8 +3800,8 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, onModificar }) {
               <div style={{ fontSize: 10, color: "#9AA7BD" }}>Tu propuesta</div>
               <input
                 type="number"
-                value={porRuta.modificada != null ? porRuta.modificada : porRuta.inicial}
-                onChange={(e) => onModificar(i, nombreRuta, e.target.value)}
+                value={valorMostrado}
+                onChange={(e) => onCambiarLocal(i, e.target.value)}
                 onFocus={(e) => e.target.select()}
                 disabled={bloqueado}
                 style={{ width: 80, padding: "6px 8px", textAlign: "center", fontSize: 14, boxSizing: "border-box" }}
