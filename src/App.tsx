@@ -52,6 +52,8 @@ const OBJETIVO_TABS = [
   { key: "actividades_mes", label: "ACTIVIDADES MES", unit: "special" },
   { key: "cotizador", label: "COTIZADOR", unit: "special" },
   { key: "rally_otc", label: "RALLY OTC", unit: "special" },
+  { key: "avisos", label: "AVISOS", unit: "special" },
+  { key: "cargas", label: "CARGAS", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -256,6 +258,12 @@ function defaultData() {
       semana: { semanaId: null, items: [] },
       mes: { mesId: null, items: [] },
     },
+    // Avisos grupales: Supervisor-1 y Gerente publican, todos los roles ven.
+    avisos: [],
+    // Cargas: Supervisor-1/Gerente suben la "Carga Propuesta" (FA, marca,
+    // cantidad por ruta). Cada vendedor puede proponer su propia cantidad;
+    // si no la cambia, se usa la inicial. Se bloquea al descargar.
+    cargas: { fecha: null, bloqueado: false, items: [] },
     // Rally OTC: configurado por gerente, visible para todos los roles.
     // objetivos es un mapa { "RUTA J201": { dia, final }, ... } solo para
     // las rutas participantes.
@@ -362,11 +370,13 @@ export default function App() {
   const [otcDiaStatus, setOtcDiaStatus] = useState("");
   const [ventasPeriodoStatus, setVentasPeriodoStatus] = useState("");
   const [mesaControlStatus, setMesaControlStatus] = useState("");
+  const [cargasStatus, setCargasStatus] = useState("");
   const fileInputRef = useRef(null);
   const objFileInputRef = useRef(null);
   const avanceDiaFileInputRef = useRef(null);
   const otcDiaFileInputRef = useRef(null);
   const ventasPeriodoFileInputRef = useRef(null);
+  const cargasFileInputRef = useRef(null);
   // Ventas del periodo: ahora viven en su propia tabla de Postgres
   // (ventas_periodo), no dentro del JSON grande de ventas_app_state.
   const [ventasPeriodo, setVentasPeriodoState] = useState([]);
@@ -997,6 +1007,105 @@ export default function App() {
     XLSX.writeFile(wb, "plantilla_objetivos.xlsx");
   }
 
+  // Convierte las filas crudas (leídas con header:1) de la hoja "Carga
+  // Propuesta" en una lista de artículos. Formato esperado (tabla dinámica):
+  // una fila de encabezado con "Etiquetas de fila", J201, J202, ... J207;
+  // luego, por cada código FA, una fila solo con el código (sin cantidades)
+  // seguida de una o más filas de marca con la cantidad por ruta.
+  function convertirCargaPropuesta(filas) {
+    let indiceEncabezado = -1;
+    const columnasRuta = {}; // { "RUTA J201": indiceColumna, ... }
+    for (let i = 0; i < filas.length; i++) {
+      const fila = filas[i] || [];
+      const rutasEnFila = fila
+        .map((v, idx) => ({ v: String(v || "").trim(), idx }))
+        .filter((c) => /^J\d{3}$/i.test(c.v));
+      if (rutasEnFila.length >= 3) {
+        indiceEncabezado = i;
+        rutasEnFila.forEach((c) => { columnasRuta[`RUTA ${c.v.toUpperCase()}`] = c.idx; });
+        break;
+      }
+    }
+    if (indiceEncabezado === -1) {
+      return { items: [], error: "No se encontró el encabezado con las rutas (J201, J202, ...) en la hoja \"Carga Propuesta\"." };
+    }
+
+    const items = [];
+    let faActual = null;
+    for (let i = indiceEncabezado + 1; i < filas.length; i++) {
+      const fila = filas[i] || [];
+      const col1 = String(fila[1] || "").trim();
+      if (!col1) continue;
+      if (/^FA\d+/i.test(col1)) {
+        faActual = col1.toUpperCase();
+        continue;
+      }
+      if (col1.toLowerCase() === "total general" || col1.toLowerCase().includes("en blanco")) continue;
+
+      const porRuta = {};
+      Object.entries(columnasRuta).forEach(([ruta, idx]) => {
+        const val = Number(fila[idx]);
+        porRuta[ruta] = { inicial: isNaN(val) ? 0 : val, modificada: null };
+      });
+      items.push({ fa: faActual || "SIN_FA", marca: col1, porRuta });
+    }
+    return { items, error: null };
+  }
+
+  function handleCargasFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const nombreHoja = wb.SheetNames.find((n) => n.trim().toLowerCase() === "carga propuesta") || wb.SheetNames[0];
+        const sheet = wb.Sheets[nombreHoja];
+        const filas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        const { items, error } = convertirCargaPropuesta(filas);
+        if (error) {
+          setCargasStatus(error);
+          return;
+        }
+        if (items.length === 0) {
+          setCargasStatus("No se encontraron artículos válidos en el archivo.");
+          return;
+        }
+        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items } });
+        setCargasStatus(`Carga actualizada: ${items.length} artículos, hoja "${nombreHoja}".`);
+      } catch (err) {
+        console.error(err);
+        setCargasStatus("No se pudo leer el archivo. Verifica que tenga la hoja \"Carga Propuesta\".");
+      }
+    };
+    reader.readAsBinaryString(file);
+  }
+
+  function descargarCargasModificadas() {
+    const cargas = data.cargas;
+    if (!cargas?.items?.length) {
+      alert("No hay una carga cargada todavía.");
+      return;
+    }
+    const rutas = Object.keys(cargas.items[0]?.porRuta || {});
+    const filas = cargas.items.map((it) => {
+      const fila = { FA: it.fa, MARCA: it.marca };
+      rutas.forEach((r) => {
+        const codigo = r.replace("RUTA ", "");
+        const porRuta = it.porRuta[r] || { inicial: 0, modificada: null };
+        fila[codigo] = porRuta.modificada != null ? porRuta.modificada : porRuta.inicial;
+      });
+      return fila;
+    });
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Carga Modificada");
+    XLSX.writeFile(wb, `carga_modificada_${cargas.fecha || fechaHoyISO()}.xlsx`);
+    // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
+    persist({ ...data, cargas: { ...cargas, bloqueado: true } });
+  }
+
   function downloadOtcSemanalTemplate() {
     const ws = XLSX.utils.json_to_sheet([
       { Vendedor: "J201 - J201 - FRANCISCO JAVIER MONTES MADERO", "Fecha Venta": "27/07/2026 00:00:00", "TOTAL $": 1234.5 },
@@ -1538,6 +1647,10 @@ export default function App() {
           onMesaControlFile={handleMesaControlFile}
           mesaControlFileInputRef={mesaControlFileInputRef}
           mesaControlStatus={mesaControlStatus}
+          onCargasFile={handleCargasFile}
+          cargasFileInputRef={cargasFileInputRef}
+          cargasStatus={cargasStatus}
+          onDescargarCargas={descargarCargasModificadas}
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
@@ -1819,25 +1932,87 @@ function RepartidorAhogadoView({ stats }) {
 // repartidor "hundiéndose" en medio — puramente decorativo, sin imágenes externas.
 function IlustracionAguaTiburones({ nombres }) {
   return (
-    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "linear-gradient(180deg, #0a1a2e 0%, #0d3b52 55%, #062736 100%)" }}>
-      <svg viewBox="0 0 400 200" style={{ width: "100%", display: "block" }} xmlns="http://www.w3.org/2000/svg">
-        <g transform="translate(200,70)">
-          <circle cx="0" cy="0" r="9" fill="#F2B134" />
-          <path d="M -14 8 Q 0 22 14 8" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
-          <path d="M -8 6 L -20 -10" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
-          <path d="M 8 6 L 20 -10" stroke="#F2B134" strokeWidth="5" fill="none" strokeLinecap="round" />
+    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "linear-gradient(180deg, #1a5270 0%, #0d3b52 30%, #06202e 65%, #020c12 100%)" }}>
+      <svg viewBox="0 0 400 260" style={{ width: "100%", display: "block" }} xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="rayo1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#bfe6ff" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#bfe6ff" stopOpacity="0" />
+          </linearGradient>
+          <radialGradient id="superficie" cx="50%" cy="0%" r="80%">
+            <stop offset="0%" stopColor="#4fa3c7" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#4fa3c7" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* Luz de superficie y rayos de sol atravesando el agua */}
+        <rect x="0" y="0" width="400" height="90" fill="url(#superficie)" />
+        <polygon points="60,0 110,0 40,260 -30,260" fill="url(#rayo1)" />
+        <polygon points="180,0 220,0 260,260 200,260" fill="url(#rayo1)" />
+        <polygon points="300,0 340,0 400,220 340,260" fill="url(#rayo1)" />
+
+        {/* Burbujas subiendo */}
+        <g fill="#bfe6ff" opacity="0.5">
+          <circle cx="205" cy="60" r="3" />
+          <circle cx="214" cy="80" r="2.2" />
+          <circle cx="198" cy="95" r="4" />
+          <circle cx="221" cy="105" r="2" />
+          <circle cx="192" cy="120" r="2.6" />
         </g>
-        <g fill="#1c2b36" stroke="#0a1a2e" strokeWidth="1.5">
-          <path d="M 70 130 Q 85 95 100 130 Q 85 122 70 130 Z" />
-          <path d="M 190 140 Q 208 100 226 140 Q 208 130 190 140 Z" />
-          <path d="M 300 132 Q 316 98 332 132 Q 316 124 300 132 Z" />
+
+        {/* Repartidor hundiéndose: cuerpo completo, brazos hacia arriba, cabeza hacia atrás */}
+        <g transform="translate(205,128)">
+          <circle cx="0" cy="-32" r="10" fill="#F2B134" />
+          <path d="M -3 -24 Q 0 -8 -2 10 Q -3 28 2 42" stroke="#F2B134" strokeWidth="7" fill="none" strokeLinecap="round" />
+          <path d="M -4 -18 L -26 -34" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
+          <path d="M 3 -18 L 25 -32" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
+          <path d="M -2 30 L -16 52" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
+          <path d="M 2 32 L 14 54" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
         </g>
-        <path d="M 0 150 Q 25 138 50 150 T 100 150 T 150 150 T 200 150 T 250 150 T 300 150 T 350 150 T 400 150 V 200 H 0 Z" fill="#0d3b52" opacity="0.9" />
-        <path d="M 0 165 Q 30 150 60 165 T 120 165 T 180 165 T 240 165 T 300 165 T 360 165 T 400 165 V 200 H 0 Z" fill="#093347" />
+
+        {/* Tiburones completos acechando desde distintos ángulos */}
+        <g fill="#16232c" stroke="#0a141a" strokeWidth="1">
+          {/* Tiburón 1: viene de la izquierda */}
+          <g transform="translate(60,150) scale(1.05)">
+            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
+            <path d="M46,-2 L58,-24 L66,0 Z" />
+            <path d="M30,16 L20,30 L44,19 Z" />
+            <path d="M126,3 L138,-6 L130,10 Z" />
+          </g>
+          {/* Tiburón 2: viene de la derecha, más cerca */}
+          <g transform="translate(360,145) scale(-1.25,1.25)">
+            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
+            <path d="M46,-2 L58,-24 L66,0 Z" />
+            <path d="M30,16 L20,30 L44,19 Z" />
+            <path d="M126,3 L138,-6 L130,10 Z" />
+          </g>
+          {/* Tiburón 3: viene de abajo */}
+          <g transform="translate(230,225) scale(0.95) rotate(-18)">
+            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
+            <path d="M46,-2 L58,-24 L66,0 Z" />
+            <path d="M30,16 L20,30 L44,19 Z" />
+            <path d="M126,3 L138,-6 L130,10 Z" />
+          </g>
+        </g>
+
+        {/* Fondo marino: rocas y algas */}
+        <g fill="#04141c">
+          <ellipse cx="40" cy="255" rx="50" ry="14" />
+          <ellipse cx="150" cy="258" rx="65" ry="16" />
+          <ellipse cx="290" cy="256" rx="70" ry="15" />
+          <ellipse cx="370" cy="258" rx="40" ry="12" />
+        </g>
+        <g stroke="#0d3b2e" strokeWidth="4" fill="none" strokeLinecap="round" opacity="0.8">
+          <path d="M100,258 Q95,230 105,205 Q112,190 102,170" />
+          <path d="M320,258 Q328,225 315,200 Q308,185 320,165" />
+        </g>
+
+        {/* Superficie del agua */}
+        <path d="M0 40 Q 25 28 50 40 T 100 40 T 150 40 T 200 40 T 250 40 T 300 40 T 350 40 T 400 40 V 0 H 0 Z" fill="#2c7ba0" opacity="0.35" />
       </svg>
-      <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, padding: "0 14px 16px", marginTop: -18 }}>
+      <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, padding: "0 14px 16px", marginTop: -18, position: "relative" }}>
         {nombres.map((n, i) => (
-          <div key={i} style={{ background: "rgba(255,107,107,0.15)", border: "1px solid #FF6B6B", borderRadius: 8, padding: "6px 10px", fontSize: 11, color: "#FF6B6B", fontWeight: 700, textAlign: "center" }}>
+          <div key={i} style={{ background: "rgba(255,107,107,0.18)", border: "1px solid #FF6B6B", borderRadius: 8, padding: "6px 10px", fontSize: 11, color: "#FF6B6B", fontWeight: 700, textAlign: "center" }}>
             {n}
           </div>
         ))}
@@ -2627,7 +2802,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -2658,6 +2833,10 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         <CuponeraView data={data} persist={persist} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
         <RallyOtcView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "avisos" ? (
+        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} />
+      ) : tab === "cargas" ? (
+        <CargasView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
@@ -3194,6 +3373,296 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
   );
 }
 
+/**
+ * Pestaña AVISOS — visible para todos los roles. Supervisor-1 y Gerente
+ * pueden publicar (texto, imagen, archivo, o cualquier combinación); el
+ * resto solo puede ver. Los archivos se suben al mismo bucket de Storage
+ * que las promociones y el rally.
+ */
+function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta }) {
+  const todosLosAvisos = data.avisos || [];
+  // Si se ve como una ruta específica (vendedor), solo se muestran los
+  // avisos "para todos" o los que la incluyan explícitamente a ella.
+  const avisos = verComoRuta
+    ? todosLosAvisos.filter((a) => !a.destinatarios || a.destinatarios === "todos" || (Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta)))
+    : todosLosAvisos;
+
+  const [texto, setTexto] = useState("");
+  const [archivo, setArchivo] = useState(null); // { url, nombre, esImagen }
+  const [subiendo, setSubiendo] = useState(false);
+  const [paraTodos, setParaTodos] = useState(true);
+  const [rutasElegidas, setRutasElegidas] = useState([]);
+  const fileRef = useRef(null);
+
+  function toggleRutaDestino(nombreRuta) {
+    setRutasElegidas((rs) => (rs.includes(nombreRuta) ? rs.filter((r) => r !== nombreRuta) : [...rs, nombreRuta]));
+  }
+
+  async function subirArchivo(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      alert("El archivo pesa más de 8MB. Usa uno más ligero.");
+      return;
+    }
+    setSubiendo(true);
+    try {
+      const extension = (file.name.split(".").pop() || "bin").toLowerCase();
+      const nombreArchivo = `aviso_${Date.now()}.${extension}`;
+      const { error } = await supabase.storage.from("promociones").upload(nombreArchivo, file, { cacheControl: "3600", upsert: false });
+      if (error) {
+        alert(`No se pudo subir el archivo: ${error.message}`);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
+      setArchivo({ url: urlData.publicUrl, nombre: file.name, esImagen: file.type.startsWith("image/") });
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  function publicarAviso() {
+    if (!texto.trim() && !archivo) {
+      alert("Escribe un texto o adjunta una imagen/archivo.");
+      return;
+    }
+    if (!paraTodos && rutasElegidas.length === 0) {
+      alert("Elige al menos una ruta destinataria, o marca \"Para todos\".");
+      return;
+    }
+    const nuevo = {
+      id: "aviso_" + Date.now(),
+      texto: texto.trim(),
+      archivoUrl: archivo?.url || null,
+      archivoNombre: archivo?.nombre || null,
+      esImagen: archivo?.esImagen || false,
+      autor: revisorNombre || "Staff",
+      fecha: new Date().toISOString(),
+      destinatarios: paraTodos ? "todos" : rutasElegidas,
+    };
+    persist({ ...data, avisos: [nuevo, ...todosLosAvisos] });
+    setTexto("");
+    setArchivo(null);
+    setParaTodos(true);
+    setRutasElegidas([]);
+  }
+
+  function eliminarAviso(id) {
+    persist({ ...data, avisos: todosLosAvisos.filter((a) => a.id !== id) });
+  }
+
+  function formatFechaHora(iso) {
+    const d = new Date(iso);
+    return d.toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  return (
+    <div>
+      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>AVISOS</div>
+
+      {puedeCrear && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 8 }}>NUEVO AVISO</div>
+          <textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder="Escribe el aviso (opcional si adjuntas una imagen o archivo)..."
+            rows={3}
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
+          />
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <button className="btn-ghost" onClick={() => fileRef.current?.click()} disabled={subiendo}>
+              {subiendo ? "Subiendo..." : archivo ? "Cambiar archivo" : "Adjuntar imagen/archivo"}
+            </button>
+            <input ref={fileRef} type="file" style={{ display: "none" }} onChange={subirArchivo} />
+            {archivo && (
+              <>
+                <span style={{ fontSize: 12, color: "#9AA7BD" }}>{archivo.nombre}</span>
+                <button className="btn-ghost" onClick={() => setArchivo(null)}><Ban size={13} color="#FF6B6B" /></button>
+              </>
+            )}
+          </div>
+          {archivo?.esImagen && <img src={archivo.url} alt="" style={{ maxWidth: 200, borderRadius: 8, marginBottom: 10, display: "block" }} />}
+
+          <div style={{ marginBottom: 10 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>DESTINATARIOS</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <button className={paraTodos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setParaTodos(true)}>Para todos</button>
+              <button className={!paraTodos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setParaTodos(false)}>Elegir rutas específicas</button>
+            </div>
+            {!paraTodos && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {RUTAS.map((nombreRuta) => (
+                  <button key={nombreRuta} className={rutasElegidas.includes(nombreRuta) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRutaDestino(nombreRuta)}>
+                    {nombreRuta}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button className="btn" onClick={publicarAviso}>
+            <Plus size={14} style={{ verticalAlign: "-2px" }} /> Publicar aviso
+          </button>
+        </div>
+      )}
+
+      {avisos.length === 0 ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>No hay avisos por el momento.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {avisos.map((a) => (
+            <div key={a.id} className="card" style={{ padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>{a.autor} · {formatFechaHora(a.fecha)}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {!verComoRuta && (
+                    <span style={{ fontSize: 10, color: "#9AA7BD", border: "1px solid #1E2A42", borderRadius: 6, padding: "2px 8px" }}>
+                      Para: {!a.destinatarios || a.destinatarios === "todos" ? "Todos" : a.destinatarios.join(", ")}
+                    </span>
+                  )}
+                  {puedeCrear && (
+                    <button className="btn-ghost" onClick={() => eliminarAviso(a.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+                  )}
+                </div>
+              </div>
+              {a.texto && <p style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap", marginBottom: a.archivoUrl ? 10 : 0 }}>{a.texto}</p>}
+              {a.archivoUrl && (
+                a.esImagen ? (
+                  <img src={a.archivoUrl} alt="" style={{ maxWidth: "100%", borderRadius: 8, display: "block" }} />
+                ) : (
+                  <a href={a.archivoUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+                    <Download size={13} /> {a.archivoNombre || "Descargar archivo"}
+                  </a>
+                )
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Pestaña CARGAS — para vendedor, Supervisor-1 y Gerente.
+ * - Supervisor-1/Gerente suben la "Carga Propuesta" (FA, marca, cantidad
+ *   inicial por ruta) y pueden descargar el archivo final ya con las
+ *   propuestas de cada vendedor (usa la inicial si no la modificaron).
+ * - Vendedor ve su propia lista y puede proponer su cantidad; si no la
+ *   modifica, se usa la inicial. Al descargar, se bloquea la edición.
+ */
+function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar }) {
+  const cargas = data.cargas || { fecha: null, bloqueado: false, items: [] };
+  const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
+
+  function actualizarModificada(itemIndex, nombreRuta, valor) {
+    if (cargas.bloqueado) return;
+    const items = cargas.items.map((it, i) => {
+      if (i !== itemIndex) return it;
+      return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
+    });
+    persist({ ...data, cargas: { ...cargas, items } });
+  }
+
+  return (
+    <div>
+      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>CARGAS</div>
+
+      {esStaffConPermiso && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
+              {cargas.fecha ? `Carga del ${cargas.fecha}` : "Sin carga cargada"} {cargas.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => cargasFileInputRef.current?.click()}>
+                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir archivo de cargas
+              </button>
+              <input ref={cargasFileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={onUpload} />
+              {cargas.items.length > 0 && (
+                <button className="btn-ghost" onClick={onDescargar}>
+                  <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar archivo modificado
+                </button>
+              )}
+            </div>
+          </div>
+          {cargasStatus && <div style={{ fontSize: 12, color: "#9AA7BD" }}>{cargasStatus}</div>}
+          {cargas.bloqueado && (
+            <div style={{ fontSize: 11, color: "#FF6B6B", marginTop: 6 }}>
+              Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades. Sube un archivo nuevo para reiniciar el ciclo.
+            </div>
+          )}
+        </div>
+      )}
+
+      {cargas.items.length === 0 ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+          No hay una carga cargada por el momento.
+        </div>
+      ) : rol === "vendedor" ? (
+        <>
+          {cargas.bloqueado && (
+            <div className="card" style={{ padding: 12, marginBottom: 14, border: "1px solid #FF6B6B" }}>
+              <div style={{ fontSize: 12, color: "#FF6B6B" }}>Esta carga ya se descargó — ya no se puede modificar.</div>
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
+            Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
+          </div>
+          <TablaCargaVendedor items={cargas.items} nombreRuta={vendedorActual} bloqueado={cargas.bloqueado} onModificar={actualizarModificada} />
+        </>
+      ) : (
+        <div className="card" style={{ padding: 16 }}>
+          <div style={{ fontSize: 13, color: "#9AA7BD" }}>
+            {cargas.items.length} artículos cargados para {Object.keys(cargas.items[0]?.porRuta || {}).length} rutas.
+            Cada vendedor ya puede entrar a su propia pestaña "CARGAS" para revisar y, si quiere, ajustar su cantidad propuesta.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TablaCargaVendedor({ items, nombreRuta, bloqueado, onModificar }) {
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+            <th style={{ padding: "8px 16px" }}>FA</th>
+            <th>Marca</th>
+            <th>Cantidad inicial</th>
+            <th>Tu propuesta</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it, i) => {
+            const porRuta = it.porRuta[nombreRuta] || { inicial: 0, modificada: null };
+            return (
+              <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
+                <td style={{ padding: "8px 16px" }}>{it.fa}</td>
+                <td>{it.marca}</td>
+                <td className="mono">{porRuta.inicial}</td>
+                <td>
+                  <input
+                    type="number"
+                    value={porRuta.modificada != null ? porRuta.modificada : porRuta.inicial}
+                    onChange={(e) => onModificar(i, nombreRuta, e.target.value)}
+                    disabled={bloqueado}
+                    style={{ width: 90, padding: "4px 6px" }}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // Checklist de actividades (día/semana/mes). "Fija" reaparece siempre al
 // reiniciar el ciclo; "temporal" solo existe por este ciclo y se borra sola
 // al pasar el siguiente, a menos que se haya quedado pendiente.
@@ -3298,7 +3767,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -3465,7 +3934,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             setTab={setObjTab}
             tabs={
               esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "rally_otc"].includes(t.key))
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "rally_otc", "avisos"].includes(t.key))
                 : esSupervisor1
                 ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador")
                 : undefined
@@ -3684,6 +4153,13 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             </div>
           ) : objTab === "rally_otc" ? (
             <RallyOtcView data={data} persist={persist} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
+          ) : objTab === "avisos" ? (
+            <AvisosView data={data} persist={persist} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} />
+          ) : objTab === "cargas" ? (
+            <CargasView
+              data={data} persist={persist} puesto={puesto} rol="staff"
+              onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
+            />
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
