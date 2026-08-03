@@ -3710,6 +3710,15 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
                     Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargas.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
                   </div>
                   <TablaCargaVendedor items={cargas.items} nombreRuta={rutaVistaStaff} bloqueado={cargas.bloqueado} onModificar={actualizarModificada} />
+                  {!cargas.bloqueado && (
+                    <button
+                      className="btn"
+                      style={{ marginTop: 12, width: "100%" }}
+                      onClick={() => persist({ ...data, cargas: { ...cargas, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [rutaVistaStaff]: true } } })}
+                    >
+                      <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar / confirmar esta carga
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -3759,40 +3768,33 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
 
 function TablaCargaVendedor({ items, nombreRuta, bloqueado, onModificar }) {
   return (
-    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-            <th style={{ padding: "8px 16px" }}>FA</th>
-            <th>Marca</th>
-            <th>Cantidad inicial</th>
-
-            <th>Tu propuesta</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it, i) => {
-            const porRuta = it.porRuta[nombreRuta] || { inicial: 0, modificada: null };
-            return (
-              <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
-                <td style={{ padding: "8px 16px" }}>{it.fa}</td>
-                <td>{it.marca}</td>
-                <td className="mono">{porRuta.inicial}</td>
-                <td>
-                  <input
-                    type="number"
-                    value={porRuta.modificada != null ? porRuta.modificada : porRuta.inicial}
-                    onChange={(e) => onModificar(i, nombreRuta, e.target.value)}
-                    onFocus={(e) => e.target.select()}
-                    disabled={bloqueado}
-                    style={{ width: 90, padding: "4px 6px" }}
-                  />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {items.map((it, i) => {
+        const porRuta = it.porRuta[nombreRuta] || { inicial: 0, modificada: null };
+        return (
+          <div key={i} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 140px", minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.marca}</div>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>{it.fa}</div>
+            </div>
+            <div style={{ textAlign: "center", minWidth: 56 }}>
+              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Inicial</div>
+              <div className="mono" style={{ fontSize: 15, color: "#E8EDF5" }}>{porRuta.inicial}</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Tu propuesta</div>
+              <input
+                type="number"
+                value={porRuta.modificada != null ? porRuta.modificada : porRuta.inicial}
+                onChange={(e) => onModificar(i, nombreRuta, e.target.value)}
+                onFocus={(e) => e.target.select()}
+                disabled={bloqueado}
+                style={{ width: 80, padding: "6px 8px", textAlign: "center", fontSize: 14, boxSizing: "border-box" }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
