@@ -260,6 +260,12 @@ function defaultData() {
     },
     // Avisos grupales: Supervisor-1 y Gerente publican, todos los roles ven.
     avisos: [],
+    // Preferencia de recibir avisos, solo aplica a Supervisor-2 y Liquidación
+    // (los demás roles siempre reciben). true = sí recibe.
+    preferenciasAvisos: { supervisor2: true, liquidacion: true },
+    // Última vez que cada quien entró a Avisos, para saber si hay nuevos
+    // (y parpadear la pestaña). Clave = nombre de ruta o rol de staff.
+    avisosVistoPor: {},
     // Cargas: Supervisor-1/Gerente suben la "Carga Propuesta" (FA, marca,
     // cantidad por ruta). Cada vendedor puede proponer su propia cantidad;
     // si no la cambia, se usa la inicial. Se bloquea al descargar.
@@ -1715,11 +1721,7 @@ export default function App() {
 
       {role === "liquidacion" && (
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
-          <TiemposView
-            identidad={NOMBRES[staffUsername] || "Sulema Ponce"}
-            misAreas={["Liquidación"]}
-            onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
-          />
+          <TabsLiquidacion data={data} persist={persist} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
 
@@ -2083,12 +2085,17 @@ function ObjetivoTabs({ tab, setTab, tabs, estadoTabs }) {
     <div style={{ display: "flex", gap: 8, margin: "14px 0", flexWrap: "wrap" }}>
       <style>{`
         @keyframes parpadeoRojoTab { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.55); } 50% { box-shadow: 0 0 0 5px rgba(255,107,107,0); } }
+        @keyframes parpadeoNaranjaIntensoTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.12); }
+          50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.45); }
+        }
         .tab-pendiente { border: 1px solid #FF6B6B !important; color: #FF6B6B !important; animation: parpadeoRojoTab 1.4s ease-in-out infinite; }
         .tab-completo { border: 1px solid #3DDC97 !important; color: #3DDC97 !important; }
+        .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
       `}</style>
       {lista.map((t) => {
         const estado = estadoTabs && estadoTabs[t.key];
-        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : "";
+        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : "";
         return (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`${tab === t.key ? "btn" : "btn-ghost"} ${claseExtra}`} style={{ fontSize: 13, flex: 1 }}>
@@ -2873,7 +2880,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined }} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined, avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined }} />
 
       {tab === "dia" ? (
         <DiaKpis
@@ -2890,7 +2897,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       ) : tab === "rally_otc" ? (
         <RallyOtcView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : tab === "avisos" ? (
-        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} />
+        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
       ) : tab === "cargas" ? (
         <CargasView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : (
@@ -3435,13 +3442,87 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
  * resto solo puede ver. Los archivos se suben al mismo bucket de Storage
  * que las promociones y el rally.
  */
-function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta }) {
+// Filtra los avisos relevantes para un viewerKey dado (misma lógica que usa
+// AvisosView para decidir qué mostrar), respetando destinatarios y la
+// preferencia de recibir avisos.
+function avisosRelevantesPara(data, viewerKey, verComoRuta) {
+  if ((viewerKey === "supervisor2" || viewerKey === "liquidacion") && data.preferenciasAvisos?.[viewerKey] === false) return [];
   const todosLosAvisos = data.avisos || [];
-  // Si se ve como una ruta específica (vendedor), solo se muestran los
-  // avisos "para todos" o los que la incluyan explícitamente a ella.
-  const avisos = verComoRuta
+  return verComoRuta
     ? todosLosAvisos.filter((a) => !a.destinatarios || a.destinatarios === "todos" || (Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta)))
     : todosLosAvisos;
+}
+
+// true si a este viewerKey le llegó al menos un aviso nuevo desde la última
+// vez que entró a la pestaña — se usa para el parpadeo naranja de la pestaña.
+function hayAvisoNuevoPara(data, viewerKey, verComoRuta) {
+  if (!viewerKey) return false;
+  const avisos = avisosRelevantesPara(data, viewerKey, verComoRuta);
+  if (avisos.length === 0) return false;
+  const ultimaVisita = data.avisosVistoPor?.[viewerKey];
+  if (!ultimaVisita) return true;
+  return avisos.some((a) => new Date(a.fecha) > new Date(ultimaVisita));
+}
+
+// Vista dedicada de Liquidación (Sulema): un mini switch entre TIEMPOS
+// (su pantalla de siempre) y AVISOS (nuevo), ya que ella no usa el sistema
+// de pestañas de VendorView/StaffView.
+function TabsLiquidacion({ data, persist, staffUsername, onLogout }) {
+  const [tab, setTab] = useState("tiempos");
+  const hayNuevo = hayAvisoNuevoPara(data, "liquidacion", null);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button className={tab === "tiempos" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("tiempos")}>TIEMPOS</button>
+        <button
+          className={`${tab === "avisos" ? "btn" : "btn-ghost"} ${hayNuevo ? "tab-aviso-nuevo" : ""}`}
+          style={{ flex: 1 }}
+          onClick={() => setTab("avisos")}
+        >
+          AVISOS
+        </button>
+      </div>
+      <style>{`
+        @keyframes parpadeoNaranjaIntensoTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.12); }
+          50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.45); }
+        }
+        .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
+      `}</style>
+      {tab === "tiempos" ? (
+        <TiemposView
+          identidad={NOMBRES[staffUsername] || "Sulema Ponce"}
+          misAreas={["Liquidación"]}
+          onLogout={onLogout}
+        />
+      ) : (
+        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} viewerKey="liquidacion" />
+      )}
+    </div>
+  );
+}
+
+
+function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, viewerKey }) {
+  const todosLosAvisos = data.avisos || [];
+  const avisos = avisosRelevantesPara(data, viewerKey, verComoRuta);
+  const puedeElegirPreferencia = viewerKey === "supervisor2" || viewerKey === "liquidacion";
+  const recibeAvisos = puedeElegirPreferencia ? data.preferenciasAvisos?.[viewerKey] !== false : true;
+
+  // Marca esta pestaña como "vista ahorita" para apagar el parpadeo naranja.
+  useEffect(() => {
+    if (!viewerKey) return;
+    const ahora = new Date().toISOString();
+    const yaVisto = data.avisosVistoPor?.[viewerKey];
+    if (!yaVisto || Date.now() - new Date(yaVisto).getTime() > 3000) {
+      persist({ ...data, avisosVistoPor: { ...(data.avisosVistoPor || {}), [viewerKey]: ahora } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerKey]);
+
+  function cambiarPreferenciaAvisos(valor) {
+    persist({ ...data, preferenciasAvisos: { ...(data.preferenciasAvisos || {}), [viewerKey]: valor } });
+  }
 
   const [texto, setTexto] = useState("");
   const [archivo, setArchivo] = useState(null); // { url, nombre, esImagen }
@@ -3517,6 +3598,22 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta }) {
     <div>
       <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>AVISOS</div>
 
+      {puedeElegirPreferencia && (
+        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+          <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>¿QUIERES RECIBIR AVISOS?</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className={recibeAvisos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => cambiarPreferenciaAvisos(true)}>Sí, quiero recibir avisos</button>
+            <button className={!recibeAvisos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => cambiarPreferenciaAvisos(false)}>No, no quiero recibir avisos</button>
+          </div>
+        </div>
+      )}
+
+      {puedeElegirPreferencia && !recibeAvisos ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+          Desactivaste la recepción de avisos. Si cambias de opinión, actívala arriba.
+        </div>
+      ) : (
+        <>
       {puedeCrear && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 8 }}>NUEVO AVISO</div>
@@ -3596,6 +3693,8 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta }) {
             </div>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>
   );
@@ -3933,6 +4032,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
     actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
+    avisos: hayAvisoNuevoPara(data, puesto, null) ? "aviso_nuevo" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
@@ -4305,7 +4405,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
           ) : objTab === "rally_otc" ? (
             <RallyOtcView data={data} persist={persist} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
-            <AvisosView data={data} persist={persist} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} />
+            <AvisosView data={data} persist={persist} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} viewerKey={puesto} />
           ) : objTab === "cargas" ? (
             <CargasView
               data={data} persist={persist} puesto={puesto} rol="staff"
