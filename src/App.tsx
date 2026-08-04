@@ -511,13 +511,16 @@ export default function App() {
       if (error) {
         console.error("Supabase save error:", error);
         setStatus(`Error Supabase: ${error.message} | code: ${error.code || "?"} | details: ${error.details || error.hint || "-"}`);
+        return { ok: false, error };
       } else {
         console.log("Guardado OK en Supabase", saved);
         setStatus("");
+        return { ok: true };
       }
     } catch (err) {
       console.error("Error de red al guardar:", err);
       setStatus(`Error de red: ${err?.message || String(err)}`);
+      return { ok: false, error: err };
     }
   }
 
@@ -559,7 +562,10 @@ export default function App() {
   async function persistParcialFresco(calcularCambios) {
     const fresca = await obtenerDataFresca();
     const cambios = calcularCambios(fresca);
-    await persist({ ...fresca, ...cambios });
+    const resultado = await persist({ ...fresca, ...cambios });
+    if (!resultado?.ok) {
+      throw new Error(resultado?.error?.message || "No se pudo guardar el cambio.");
+    }
   }
 
   async function persistCargas(calcularNuevoCargas) {
