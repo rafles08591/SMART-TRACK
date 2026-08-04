@@ -100,7 +100,7 @@ export function unidadYaRegistradaHoy(data, rutaId) {
 }
 
 function codigoQR(unidad) {
-  return unidad ? `QR-${unidad.economico}` : "";
+  return unidad ? `QR-${unidad.placas}` : "";
 }
 
 function capturarUbicacion() {
@@ -196,9 +196,9 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
       const u = unidades.find((x) => x.id === r.unidadId);
       return {
         Fecha: new Date(r.fecha).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }),
-        Unidad: u?.economico || "",
         Placas: u?.placas || "",
         Ruta: u?.ruta || r.ruta || "",
+        Conductor: u?.conductor || "",
         "Capturó": r.capturadoPor || "",
         "QR verificado": r.qrVerificado ? "Sí" : "No",
         "Ubicación": r.ubicacion ? `${r.ubicacion.lat}, ${r.ubicacion.lng}` : "No disponible",
@@ -291,27 +291,40 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const asignaciones = data.asignacionesUnidades || {};
   const revisiones = data.revisionesUnidades || [];
   const seguridad = data.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
+  const [errorGuardado, setErrorGuardado] = useState(null);
 
   // Wrappers "tipo setState" (aceptan valor o función actualizadora) que en
   // realidad parten siempre del dato más reciente de Supabase antes de
   // guardar — igual que ya se hace con "cargas", para que dos personas
   // editando la flotilla casi al mismo tiempo no se pisen entre sí.
+  // Si el guardado falla (por ejemplo, sin conexión), se muestra el error en
+  // vez de fallar en silencio dejando la pantalla como si sí se hubiera guardado.
+  async function ejecutarPersistConfig(calcularCambios) {
+    try {
+      setErrorGuardado(null);
+      await persistConfigUnidades(calcularCambios);
+    } catch (err) {
+      console.error("Error guardando cambios de Unidades:", err);
+      setErrorGuardado(err?.message || "No se pudo guardar el cambio. Revisa tu conexión e intenta de nuevo.");
+    }
+  }
+
   function setUnidades(actualizador) {
-    persistConfigUnidades((fresca) => {
+    ejecutarPersistConfig((fresca) => {
       const actuales = fresca.unidadesFlota || [];
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { unidadesFlota: nuevas };
     });
   }
   function setAsignaciones(actualizador) {
-    persistConfigUnidades((fresca) => {
+    ejecutarPersistConfig((fresca) => {
       const actuales = fresca.asignacionesUnidades || {};
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { asignacionesUnidades: nuevas };
     });
   }
   function setSeguridad(actualizador) {
-    persistConfigUnidades((fresca) => {
+    ejecutarPersistConfig((fresca) => {
       const actuales = fresca.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { seguridadUnidades: nuevas };
@@ -378,6 +391,11 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   return (
     <div style={{ fontFamily: "'Inter', sans-serif", color: T.ink }}>
       <EstilosUnidades />
+      {errorGuardado && (
+        <div className="ru-card" style={{ padding: "12px 14px", marginBottom: 16, background: T.lateSoft, borderColor: T.late, color: T.late, fontSize: 12.5, fontWeight: 500 }}>
+          No se pudo guardar el último cambio: {errorGuardado}
+        </div>
+      )}
       <VistaPanel
         esGerente={esGerente}
         esLiquidacion={esLiquidacion}
@@ -505,7 +523,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         const ahora = new Date();
         try {
           const url = await procesarYSubirFotoOdometro(file, {
-            linea1: `${unidadActual?.economico} · ${ruta} · ${ahora.toLocaleString("es-MX")}`,
+            linea1: `${unidadActual?.placas} · ${ruta} · ${ahora.toLocaleString("es-MX")}`,
             linea2: ubicacion ? `GPS ${ubicacion.lat}, ${ubicacion.lng}` : "GPS no disponible",
           });
           setFoto(url);
@@ -554,7 +572,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         </div>
         <div className="ru-h" style={{ fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Revisión registrada</div>
         <div style={{ fontSize: 13.5, color: T.muted, marginBottom: 20 }}>
-          Unidad {unidad?.economico} · ruta {unidad?.ruta} · {new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" })}
+          Unidad {unidad?.placas} · ruta {unidad?.ruta} · {new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" })}
         </div>
         <button className="ru-btn active" style={{ margin: "0 auto" }} onClick={reiniciar}>Registrar otra unidad</button>
       </div>
@@ -587,8 +605,8 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
             <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: T.primarySoft, borderRadius: 10, marginBottom: 16 }}>
               <Truck size={22} color={T.primary} />
               <div>
-                <div className="ru-h" style={{ fontWeight: 600, fontSize: 15 }}>{unidadActual?.economico || "Sin unidad asignada"}</div>
-                <div className="ru-mono" style={{ fontSize: 12, color: T.muted }}>{unidadActual?.placas} · Ruta {ruta}</div>
+                <div className="ru-h" style={{ fontWeight: 600, fontSize: 15 }}>{unidadActual?.placas || "Sin unidad asignada"}</div>
+                <div className="ru-mono" style={{ fontSize: 12, color: T.muted }}>{unidadActual?.conductor ? `${unidadActual.conductor} · ` : ""}Ruta {ruta}</div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
@@ -616,7 +634,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
                 {unidadesRuta.map((u) => {
                   const last = lastByUnidad[u.id];
                   const dias = last ? diasDesde(last.fecha) : null;
-                  return <option key={u.id} value={u.id}>{u.economico} · {u.placas} {dias !== null ? `· última revisión hace ${dias}d` : "· sin revisión previa"}</option>;
+                  return <option key={u.id} value={u.id}>{u.placas}{u.conductor ? ` · ${u.conductor}` : ""} {dias !== null ? `· última revisión hace ${dias}d` : "· sin revisión previa"}</option>;
                 })}
               </select>
             </Campo>
@@ -806,7 +824,7 @@ function VerificarQR({ unidadActual, onExito }) {
         <span className="ru-h" style={{ fontWeight: 600, fontSize: 15 }}>Escanea el QR pegado en la unidad</span>
       </div>
       <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
-        Confirma que estás físicamente junto a {unidadActual?.economico}.
+        Confirma que estás físicamente junto a {unidadActual?.placas}.
       </div>
 
       <div style={{ position: "relative", background: T.ink, borderRadius: 10, overflow: "hidden", marginBottom: 14, aspectRatio: "4/3" }}>
@@ -951,9 +969,8 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                   <div key={u.id} className="ru-card" style={{ padding: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                       <div>
-                        <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>{u.economico}</div>
-                        <div className="ru-mono" style={{ fontSize: 11.5, color: T.muted }}>{u.placas}</div>
-                        <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4 }}>Ruta {u.ruta}{u.campo ? ` · ${u.campo}` : ""}</div>
+                        <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>{u.placas}</div>
+                        <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4 }}>Ruta {u.ruta}{u.conductor ? ` · ${u.conductor}` : ""}</div>
                       </div>
                       <DialDias dias={dias} />
                     </div>
@@ -989,7 +1006,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: T.bg, textAlign: "left" }}>
-                  {["Fecha", "Unidad", "Ruta", "Capturó", "Verificación", "Estado"].map((h) => (
+                  {["Fecha", "Placas", "Ruta", "Capturó", "Verificación", "Estado"].map((h) => (
                     <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
                   ))}
                 </tr>
@@ -1006,7 +1023,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                         <td className="ru-mono" style={{ padding: "8px 12px", fontSize: 12 }}>
                           {new Date(r.fecha).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
                         </td>
-                        <td style={{ padding: "8px 12px" }}>{u?.economico}</td>
+                        <td style={{ padding: "8px 12px" }}>{u?.placas}</td>
                         <td style={{ padding: "8px 12px" }}>{u?.ruta || r.ruta}</td>
                         <td style={{ padding: "8px 12px" }}>{r.capturadoPor}</td>
                         <td style={{ padding: "8px 12px" }}>
@@ -1116,6 +1133,11 @@ function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asig
       <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
         Esta es la unidad que le aparecerá al conductor para confirmar al iniciar sesión. Cámbiala aquí si hubo un cambio de unidad.
       </div>
+      {unidades.length === 0 && (
+        <div className="ru-card" style={{ padding: "12px 14px", marginBottom: 14, background: T.warnSoft, borderColor: T.warn, fontSize: 12.5, color: T.warn, fontWeight: 500 }}>
+          Todavía no hay ninguna unidad dada de alta — por eso todas las rutas muestran "Sin unidad asignada". {esGerente ? "Agrega la primera unidad en \"Agregar unidad\" (más abajo) y luego regresa aquí para asignarla a su ruta." : "Pide al Gerente que dé de alta las unidades de la flotilla."}
+        </div>
+      )}
       <div className="ru-card" style={{ overflow: "hidden", marginBottom: 20 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
@@ -1138,7 +1160,7 @@ function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asig
                   >
                     <option value="">Sin unidad asignada</option>
                     {unidades.map((u) => (
-                      <option key={u.id} value={u.id}>{u.economico} · {u.placas} {u.ruta !== r.id ? `(actualmente en ${u.ruta})` : ""}</option>
+                      <option key={u.id} value={u.id}>{u.placas}{u.conductor ? ` · ${u.conductor}` : ""} {u.ruta !== r.id ? `(actualmente en ${u.ruta})` : ""}</option>
                     ))}
                   </select>
                 </td>
@@ -1168,7 +1190,7 @@ function EditarUnidades({ unidades, setUnidades, asignaciones, setAsignaciones }
 
   function iniciarEdicion(u) {
     setEditandoId(u.id);
-    setBorrador({ economico: u.economico, placas: u.placas, ruta: u.ruta, campo: u.campo });
+    setBorrador({ placas: u.placas, ruta: u.ruta, conductor: u.conductor });
   }
 
   function guardarEdicion(id) {
@@ -1194,7 +1216,7 @@ function EditarUnidades({ unidades, setUnidades, asignaciones, setAsignaciones }
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 600 }}>
           <thead>
             <tr style={{ background: T.bg, textAlign: "left" }}>
-              {["Económico", "Placas", "Ruta", "Campo / zona", "Código QR", ""].map((h) => (
+              {["Placas", "Ruta", "Conductor", "Código QR", ""].map((h) => (
                 <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
               ))}
             </tr>
@@ -1206,14 +1228,13 @@ function EditarUnidades({ unidades, setUnidades, asignaciones, setAsignaciones }
                 <tr key={u.id} style={{ borderTop: `1px solid ${T.border}` }}>
                   {enEdicion ? (
                     <>
-                      <td style={{ padding: "6px 12px" }}><input className="ru-input" value={borrador.economico} onChange={(e) => setBorrador((b) => ({ ...b, economico: e.target.value }))} /></td>
                       <td style={{ padding: "6px 12px" }}><input className="ru-input" value={borrador.placas} onChange={(e) => setBorrador((b) => ({ ...b, placas: e.target.value }))} /></td>
                       <td style={{ padding: "6px 12px" }}>
                         <select className="ru-input" value={borrador.ruta} onChange={(e) => setBorrador((b) => ({ ...b, ruta: e.target.value }))}>
                           {RUTAS_UNIDADES.map((r) => <option key={r.id} value={r.id}>{r.id}</option>)}
                         </select>
                       </td>
-                      <td style={{ padding: "6px 12px" }}><input className="ru-input" value={borrador.campo} onChange={(e) => setBorrador((b) => ({ ...b, campo: e.target.value }))} /></td>
+                      <td style={{ padding: "6px 12px" }}><input className="ru-input" value={borrador.conductor} onChange={(e) => setBorrador((b) => ({ ...b, conductor: e.target.value }))} /></td>
                       <td className="ru-mono" style={{ padding: "8px 12px", color: T.muted, fontSize: 12 }}>{codigoQR(borrador)}</td>
                       <td style={{ padding: "6px 12px", whiteSpace: "nowrap" }}>
                         <button className="ru-btn active" style={{ padding: "5px 10px" }} onClick={() => guardarEdicion(u.id)}>Guardar</button>
@@ -1222,10 +1243,9 @@ function EditarUnidades({ unidades, setUnidades, asignaciones, setAsignaciones }
                     </>
                   ) : (
                     <>
-                      <td style={{ padding: "8px 12px", fontWeight: 500 }}>{u.economico}</td>
-                      <td className="ru-mono" style={{ padding: "8px 12px" }}>{u.placas}</td>
+                      <td className="ru-mono" style={{ padding: "8px 12px", fontWeight: 500 }}>{u.placas}</td>
                       <td style={{ padding: "8px 12px" }}>{u.ruta}</td>
-                      <td style={{ padding: "8px 12px", color: T.muted }}>{u.campo || "—"}</td>
+                      <td style={{ padding: "8px 12px", color: T.muted }}>{u.conductor || "—"}</td>
                       <td className="ru-mono" style={{ padding: "8px 12px", color: T.muted, fontSize: 12 }}>{codigoQR(u)}</td>
                       <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
                         <button className="ru-btn" style={{ padding: "5px 8px" }} onClick={() => iniciarEdicion(u)} aria-label="Editar"><Pencil size={13} /></button>
@@ -1244,27 +1264,25 @@ function EditarUnidades({ unidades, setUnidades, asignaciones, setAsignaciones }
 }
 
 function GestionUnidades({ unidades, setUnidades, rutasVisibles }) {
-  const [economico, setEconomico] = useState("");
   const [placas, setPlacas] = useState("");
   const [ruta, setRuta] = useState(rutasVisibles[0]?.id || "");
-  const [campo, setCampo] = useState("");
+  const [conductor, setConductor] = useState("");
 
   function agregar() {
-    if (!economico || !ruta) return;
-    setUnidades((prev) => [...prev, { id: `U-${Date.now()}`, economico, placas, ruta, campo }]);
-    setEconomico(""); setPlacas(""); setCampo("");
+    if (!placas || !ruta) return;
+    setUnidades((prev) => [...prev, { id: `U-${Date.now()}`, placas, ruta, conductor }]);
+    setPlacas(""); setConductor("");
   }
 
   return (
     <div className="ru-card" style={{ padding: 16, marginBottom: 18, background: T.primarySoft, borderColor: T.primary }}>
       <div className="ru-h" style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 10, color: T.primary }}>Agregar unidad</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.4fr auto", gap: 8 }}>
-        <input className="ru-input" placeholder="Económico (ej. U-101)" value={economico} onChange={(e) => setEconomico(e.target.value)} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr auto", gap: 8 }}>
         <input className="ru-input" placeholder="Placas" value={placas} onChange={(e) => setPlacas(e.target.value)} />
         <select className="ru-input" value={ruta} onChange={(e) => setRuta(e.target.value)}>
           {rutasVisibles.map((r) => <option key={r.id} value={r.id}>{r.id}</option>)}
         </select>
-        <input className="ru-input" placeholder="Campo / zona (opcional)" value={campo} onChange={(e) => setCampo(e.target.value)} />
+        <input className="ru-input" placeholder="Conductor (opcional)" value={conductor} onChange={(e) => setConductor(e.target.value)} />
         <button className="ru-btn active" onClick={agregar}>Agregar</button>
       </div>
     </div>
