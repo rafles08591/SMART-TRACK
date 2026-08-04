@@ -310,21 +310,21 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   }
 
   function setUnidades(actualizador) {
-    ejecutarPersistConfig((fresca) => {
+    return ejecutarPersistConfig((fresca) => {
       const actuales = fresca.unidadesFlota || [];
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { unidadesFlota: nuevas };
     });
   }
   function setAsignaciones(actualizador) {
-    ejecutarPersistConfig((fresca) => {
+    return ejecutarPersistConfig((fresca) => {
       const actuales = fresca.asignacionesUnidades || {};
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { asignacionesUnidades: nuevas };
     });
   }
   function setSeguridad(actualizador) {
-    ejecutarPersistConfig((fresca) => {
+    return ejecutarPersistConfig((fresca) => {
       const actuales = fresca.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { seguridadUnidades: nuevas };
@@ -504,8 +504,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setPaso((p) => p + 1);
   }
 
-  async function manejarFotoOdometro(e) {
-    const file = e.target.files?.[0];
+  async function manejarFotoOdometro(file) {
     if (!file) return;
     setKmEstado("procesando"); setKmError("");
     try {
@@ -697,11 +696,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
                 </div>
               ) : (
                 <div>
-                  <label className="ru-btn" style={{ cursor: "pointer" }}>
-                    <Camera size={15} /> {kmEstado === "procesando" ? "Leyendo odómetro…" : "Escanear odómetro"}
-                    <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={manejarFotoOdometro} disabled={kmEstado === "procesando"} />
-                  </label>
-                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>Apunta la cámara al odómetro digital del tablero.</div>
+                  <CapturaCamaraOdometro onCapturar={manejarFotoOdometro} procesando={kmEstado === "procesando"} />
                   {kmError && (
                     <div style={{ fontSize: 12, color: T.late, marginTop: 6 }}>
                       {kmError} <button className="ru-btn" style={{ marginLeft: 6 }} onClick={reintentarLecturaKm}>Reintentar</button>
@@ -760,6 +755,88 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Cámara en vivo para la foto del odómetro (funciona igual en celular y en
+// computadora, a diferencia de un <input type="file" capture="environment">
+// que en computadora solo abre el explorador de archivos). Si el navegador
+// no puede acceder a la cámara (sin permiso, sin cámara, etc.), cae a un
+// selector de archivo normal para no dejar al usuario sin poder continuar.
+function CapturaCamaraOdometro({ onCapturar, procesando }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const [camara, setCamara] = useState("iniciando"); // iniciando | activa | no_disponible
+
+  useEffect(() => {
+    let activo = true;
+    async function iniciar() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        if (!activo) { stream.getTracks().forEach((t) => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setCamara("activa");
+      } catch (e) {
+        setCamara("no_disponible");
+      }
+    }
+    iniciar();
+    return () => {
+      activo = false;
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  function tomarFoto() {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      onCapturar(new File([blob], `odometro_${Date.now()}.jpg`, { type: "image/jpeg" }));
+    }, "image/jpeg", 0.85);
+  }
+
+  if (camara === "no_disponible") {
+    return (
+      <div>
+        <label className="ru-btn" style={{ cursor: "pointer" }}>
+          <Camera size={15} /> {procesando ? "Leyendo odómetro…" : "Elegir foto del odómetro"}
+          <input
+            type="file" accept="image/*" style={{ display: "none" }} disabled={procesando}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onCapturar(f); }}
+          />
+        </label>
+        <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+          No se pudo acceder a la cámara (revisa los permisos del navegador). Puedes elegir una foto ya tomada.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ position: "relative", background: T.ink, borderRadius: 10, overflow: "hidden", marginBottom: 10, aspectRatio: "4/3", maxWidth: 340 }}>
+        <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: camara === "activa" ? "block" : "none" }} />
+        {camara !== "activa" && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "white" }}>
+            <Camera size={22} />
+            <span style={{ fontSize: 12 }}>Activando cámara…</span>
+          </div>
+        )}
+      </div>
+      <button className="ru-btn active" onClick={tomarFoto} disabled={camara !== "activa" || procesando}>
+        <Camera size={15} /> {procesando ? "Leyendo odómetro…" : "Tomar foto del odómetro"}
+      </button>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>Apunta la cámara al odómetro digital del tablero y toma la foto.</div>
     </div>
   );
 }
@@ -1127,6 +1204,27 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
 }
 
 function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asignaciones, setAsignaciones }) {
+  // Selección local optimista: en cuanto se elige una opción se refleja de
+  // inmediato en pantalla (sin esperar el viaje de ida y vuelta a Supabase),
+  // y solo se descarta si el guardado real termina fallando (ver "Guardando…"
+  // / aviso de error arriba del panel).
+  const [seleccionLocal, setSeleccionLocal] = useState({});
+  const [guardandoPorRuta, setGuardandoPorRuta] = useState({});
+
+  async function cambiarAsignacion(rutaId, unidadId) {
+    setSeleccionLocal((prev) => ({ ...prev, [rutaId]: unidadId }));
+    setGuardandoPorRuta((prev) => ({ ...prev, [rutaId]: true }));
+    try {
+      await setAsignaciones((prev) => ({ ...prev, [rutaId]: unidadId }));
+    } finally {
+      setGuardandoPorRuta((prev) => {
+        const next = { ...prev };
+        delete next[rutaId];
+        return next;
+      });
+    }
+  }
+
   return (
     <div>
       <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>Unidad por defecto de cada ruta</div>
@@ -1147,25 +1245,31 @@ function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asig
             </tr>
           </thead>
           <tbody>
-            {rutasVisibles.map((r) => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${T.border}` }}>
-                <td style={{ padding: "8px 12px", fontWeight: 500 }}>{r.id}</td>
-                <td style={{ padding: "8px 12px" }}>
-                  <select
-                    className="ru-input"
-                    style={{ maxWidth: 260 }}
-                    value={asignaciones[r.id] || ""}
-                    disabled={!esGerente}
-                    onChange={(e) => setAsignaciones((prev) => ({ ...prev, [r.id]: e.target.value }))}
-                  >
-                    <option value="">Sin unidad asignada</option>
-                    {unidades.map((u) => (
-                      <option key={u.id} value={u.id}>{u.placas}{u.conductor ? ` · ${u.conductor}` : ""} {u.ruta !== r.id ? `(actualmente en ${u.ruta})` : ""}</option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-            ))}
+            {rutasVisibles.map((r) => {
+              const valorMostrado = seleccionLocal[r.id] !== undefined ? seleccionLocal[r.id] : (asignaciones[r.id] || "");
+              return (
+                <tr key={r.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                  <td style={{ padding: "8px 12px", fontWeight: 500 }}>{r.id}</td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <select
+                        className="ru-input"
+                        style={{ maxWidth: 260 }}
+                        value={valorMostrado}
+                        disabled={!esGerente}
+                        onChange={(e) => cambiarAsignacion(r.id, e.target.value)}
+                      >
+                        <option value="">Sin unidad asignada</option>
+                        {unidades.map((u) => (
+                          <option key={u.id} value={u.id}>{u.placas}{u.conductor ? ` · ${u.conductor}` : ""} {u.ruta !== r.id ? `(actualmente en ${u.ruta})` : ""}</option>
+                        ))}
+                      </select>
+                      {guardandoPorRuta[r.id] && <span style={{ fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>Guardando…</span>}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
