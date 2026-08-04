@@ -1270,7 +1270,7 @@ function GestionUnidades({ unidades, setUnidades, rutasVisibles }) {
 
   function agregar() {
     if (!placas || !ruta) return;
-    setUnidades((prev) => [...prev, { id: `U-${Date.now()}`, placas, ruta, conductor }]);
+    setUnidades((prev) => [...prev, { id: `U-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, placas, ruta, conductor }]);
     setPlacas(""); setConductor("");
   }
 
