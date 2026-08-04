@@ -189,6 +189,10 @@ function analizarMesaControl(mesaControl, vendedorName) {
 
   const fecha = propios[0].fecha;
   const horaInicio = propios.reduce((min, r) => (r.inicio && (!min || r.inicio < min) ? r.inicio : min), null);
+  // Hora del último cliente atendido (salida de la última visita), útil para
+  // ver cuánto tiempo pasó entre terminar con el último cliente y el
+  // regreso físico a CLO.
+  const horaUltimoCliente = propios.reduce((max, r) => (r.final && (!max || r.final > max) ? r.final : max), null);
 
   const conAlerta = propios.map((r) => ({
     ...r,
@@ -210,10 +214,15 @@ function analizarMesaControl(mesaControl, vendedorName) {
   const volumenTotal = propios.reduce((s, r) => s + (Number(r.volumen) || 0), 0);
   const clientesVolumen03 = propios.filter((r) => Math.abs((Number(r.volumen) || 0) - 0.3) < 0.0001);
   const clientesConDescuento = propios.filter((r) => (Number(r.descuento) || 0) > 0);
+  // Visitas efectivas = clientes distintos que sí compraron (volumen > 0).
+  // Un cliente visitado pero sin compra no cuenta.
+  const visitasEfectivas = new Set(
+    propios.filter((r) => (Number(r.volumen) || 0) > 0).map((r) => (r.cliente || "").trim().toLowerCase()).filter(Boolean)
+  ).size;
 
   return {
-    fecha, horaInicio, top5, menores3, tipoInicioConteo, tipoFinConteo,
-    volumenTotal, clientesVolumen03, clientesConDescuento, todos: conAlerta,
+    fecha, horaInicio, horaUltimoCliente, top5, menores3, tipoInicioConteo, tipoFinConteo,
+    volumenTotal, clientesVolumen03, clientesConDescuento, visitasEfectivas, todos: conAlerta,
   };
 }
 
@@ -2514,13 +2523,17 @@ function ModalTablaCompleta({ titulo, onClose, children }) {
 
 
 function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats }) {
-  const { fecha, horaInicio, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, todos } = analisis;
+  const { fecha, horaInicio, horaUltimoCliente, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, visitasEfectivas, todos } = analisis;
   const gps = tipoInicioConteo["GPS"] || 0;
   const noGps = todos.length - gps;
 
+  const horaIngresoClo = formatHoraTiempos(tiempos?.ingreso_clo?.ts);
   const horaSalidaClo = formatHoraTiempos(tiempos?.salida_ruta?.ts);
   const horaFinRuta = formatHoraTiempos(tiempos?.ingreso_clo_fin?.ts);
   const minClo2Inicio = diferenciaMinutos(horaSalidaClo, horaInicio);
+  const msEnRuta = tiempos?.salida_ruta?.ts && tiempos?.ingreso_clo_fin?.ts
+    ? tiempos.ingreso_clo_fin.ts - tiempos.salida_ruta.ts
+    : null;
 
   return (
     <div className="card" style={{ padding: 24, textAlign: "center", border: "1px solid #2A3852" }}>
@@ -2537,6 +2550,10 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
       <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>TIEMPOS DE RUTA</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, textAlign: "left" }}>
         <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>INGRESO A CLO</div>
+          <div className="mono" style={{ fontSize: 16 }}>{horaIngresoClo || "—"}</div>
+        </div>
+        <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>SALIDA CLO</div>
           <div className="mono" style={{ fontSize: 16 }}>{horaSalidaClo || "—"}</div>
         </div>
@@ -2550,9 +2567,17 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
             {minClo2Inicio != null ? `${minClo2Inicio} min` : "—"}
           </div>
         </div>
+        <div className="card" style={{ padding: 12, flex: "1 1 30%", minWidth: 140 }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>HORA DEL ÚLTIMO CLIENTE</div>
+          <div className="mono" style={{ fontSize: 16 }}>{horaUltimoCliente || "—"}</div>
+        </div>
         <div className="card" style={{ padding: 12, flex: "1 1 100%" }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>HORA EN QUE TERMINÓ LA RUTA (REGRESO A CLO)</div>
           <div className="mono" style={{ fontSize: 16 }}>{horaFinRuta || "—"}</div>
+        </div>
+        <div className="card" style={{ padding: 12, flex: "1 1 100%" }}>
+          <div style={{ fontSize: 10, color: "#9AA7BD" }}>TIEMPO TOTAL EN RUTA</div>
+          <div className="mono" style={{ fontSize: 16, color: "#F2B134" }}>{msEnRuta != null ? formatCrono(msEnRuta) : "—"}</div>
         </div>
       </div>
 
@@ -2561,6 +2586,10 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
         <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS TOTALES</div>
           <div className="mono" style={{ fontSize: 22 }}>{todos.length}</div>
+        </div>
+        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
+          <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS EFECTIVAS</div>
+          <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{visitasEfectivas}</div>
         </div>
         <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VOLUMEN TOTAL</div>
@@ -2593,9 +2622,9 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
               <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(vendedorStats.volumenEstrategicas)}</div>
             </div>
             <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
-              <div style={{ fontSize: 11, color: "#9AA7BD" }}>OTC</div>
-              <div className="mono" style={{ fontSize: 18, color: metaColor(vendedorStats.marcaOtc.vendido, vendedorStats.marcaOtc.objetivo) }}>
-                {money(vendedorStats.marcaOtc.vendido)} / {money(vendedorStats.marcaOtc.objetivo)}
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>OTC · DESEMPEÑO DEL DÍA</div>
+              <div className="mono" style={{ fontSize: 18, color: metaColor(vendedorStats.hoy?.otc?.vendido, vendedorStats.hoy?.otc?.objetivo) }}>
+                {money(vendedorStats.hoy?.otc?.vendido)} / {money(vendedorStats.hoy?.otc?.objetivo)}
               </div>
             </div>
             {vendedorStats.hoy && (
@@ -2684,15 +2713,32 @@ function formatHoraTiempos(ts) {
   return new Date(ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-// Compara dos horas en formato "HH:MM:SS" / "HH:MM" y regresa la diferencia
-// en minutos (positivo = la segunda es más tarde que la primera).
+// Convierte una hora en texto ("HH:MM", "HH:MM:SS", o 12h con "a.m."/"p.m.")
+// a minutos totales desde medianoche. Regresa null si no puede interpretarla.
+function horaAMinutos(hora) {
+  if (!hora) return null;
+  const m = String(hora).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])\.?\s*\.?m\.?$/i);
+  if (m) {
+    let h = Number(m[1]);
+    const min = Number(m[2]);
+    const seg = m[3] ? Number(m[3]) : 0;
+    const esPM = m[4].toLowerCase() === "p";
+    if (esPM && h < 12) h += 12;
+    if (!esPM && h === 12) h = 0;
+    return h * 60 + min + seg / 60;
+  }
+  const partes = String(hora).trim().split(":").map(Number);
+  if (partes.some((n) => isNaN(n))) return null;
+  const [h, min, seg] = partes;
+  return (h || 0) * 60 + (min || 0) + (seg || 0) / 60;
+}
+
+// Compara dos horas (en cualquiera de los formatos que acepta horaAMinutos)
+// y regresa la diferencia en minutos (positivo = la segunda es más tarde que la primera).
 function diferenciaMinutos(horaA, horaB) {
-  if (!horaA || !horaB) return null;
-  const aParts = horaA.split(":").map(Number);
-  const bParts = horaB.split(":").map(Number);
-  if (aParts.some(isNaN) || bParts.some(isNaN)) return null;
-  const aMin = aParts[0] * 60 + aParts[1] + (aParts[2] || 0) / 60;
-  const bMin = bParts[0] * 60 + bParts[1] + (bParts[2] || 0) / 60;
+  const aMin = horaAMinutos(horaA);
+  const bMin = horaAMinutos(horaB);
+  if (aMin == null || bMin == null) return null;
   return Math.round(bMin - aMin);
 }
 
