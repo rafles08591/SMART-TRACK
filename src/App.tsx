@@ -425,6 +425,13 @@ export default function App() {
   }, []);
 
   const [refrescando, setRefrescando] = useState(false);
+  // Cola de guardados "trae lo más reciente, modifícalo, guarda" (cargas,
+  // revisiones de unidades, configuración de unidades). Sin esto, si alguien
+  // hace varios de estos cambios muy seguidos (ej. asignar 10 rutas una tras
+  // otra), el segundo cambio puede leer la base ANTES de que el primero
+  // termine de guardar, y al escribir borra sin querer el primero. Con la
+  // cola, cada uno espera a que el anterior termine antes de leer y guardar.
+  const colaPersistenciaFrescaRef = useRef(Promise.resolve());
 
   async function loadData() {
     try {
@@ -559,13 +566,21 @@ export default function App() {
   // tiempo desde pestañas abiertas desde antes (cargas, revisiones de
   // unidades) — así nadie pisa por accidente el cambio más reciente de otra
   // persona con datos que tenía desactualizados en pantalla.
-  async function persistParcialFresco(calcularCambios) {
-    const fresca = await obtenerDataFresca();
-    const cambios = calcularCambios(fresca);
-    const resultado = await persist({ ...fresca, ...cambios });
-    if (!resultado?.ok) {
-      throw new Error(resultado?.error?.message || "No se pudo guardar el cambio.");
-    }
+  function persistParcialFresco(calcularCambios) {
+    const ejecutar = async () => {
+      const fresca = await obtenerDataFresca();
+      const cambios = calcularCambios(fresca);
+      const resultado = await persist({ ...fresca, ...cambios });
+      if (!resultado?.ok) {
+        throw new Error(resultado?.error?.message || "No se pudo guardar el cambio.");
+      }
+    };
+    // Se encadena sobre la cola: este cambio no empieza a leer la base hasta
+    // que el cambio anterior (si lo hay) ya terminó de guardar por completo.
+    // Si el anterior falló, igual se sigue con este (no se atora la cola).
+    const tarea = colaPersistenciaFrescaRef.current.then(ejecutar, ejecutar);
+    colaPersistenciaFrescaRef.current = tarea.catch(() => {});
+    return tarea;
   }
 
   async function persistCargas(calcularNuevoCargas) {
