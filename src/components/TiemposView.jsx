@@ -11,8 +11,6 @@ import {
   Radio,
   AlertCircle,
   History,
-  Play,
-  Square,
   Check,
   ChevronRight,
   Download,
@@ -185,6 +183,9 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const [reiniciando, setReiniciando] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedRuta, setSelectedRuta] = useState(RUTAS_TIEMPOS[0]);
+  const [selectedAccion, setSelectedAccion] = useState("");
+  const [registrando, setRegistrando] = useState(false);
 
   const activoRef = useRef(activo);
   const historialRef = useRef(historial);
@@ -346,6 +347,49 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const rutasHoy = activo.fecha === hoy ? activo.rutas : {};
   const segundosDesdeSync = lastSync ? Math.max(0, Math.floor((now - lastSync) / 1000)) : null;
 
+  // Acciones que la identidad conectada todavía puede reportar para la ruta
+  // seleccionada (según lo que ya esté marcado): una por cada checkpoint
+  // instantáneo pendiente, y entrada/salida por cada zona de duración manual.
+  const accionesDisponibles = (ruta) => {
+    const r = normalizarRuta(rutasHoy[ruta], ruta);
+    const opciones = [];
+    AREAS.forEach((a) => {
+      if (!a.manual || !misAreas.includes(a.nombre)) return;
+      const area = r.areas[a.key];
+      if (a.tipo === "instante") {
+        if (!area.ts) opciones.push({ value: `${a.key}|instante`, label: `Marcar ${a.nombre.toLowerCase()}` });
+      } else {
+        if (!area.entrada) opciones.push({ value: `${a.key}|entrada`, label: `Marcar entrada a ${a.nombre}` });
+        else if (!area.salida) opciones.push({ value: `${a.key}|salida`, label: `Marcar salida de ${a.nombre}` });
+      }
+    });
+    return opciones;
+  };
+
+  const opcionesAccion = accionesDisponibles(selectedRuta);
+
+  useEffect(() => {
+    if (!opcionesAccion.some((o) => o.value === selectedAccion)) {
+      setSelectedAccion(opcionesAccion[0]?.value || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRuta, JSON.stringify(opcionesAccion)]);
+
+  const registrarAccionSeleccionada = async () => {
+    if (!selectedAccion) return;
+    const [areaKey, modo] = selectedAccion.split("|");
+    const area = AREAS.find((a) => a.key === areaKey);
+    if (!area) return;
+    setRegistrando(true);
+    try {
+      if (modo === "instante") await marcarInstante(selectedRuta, area.key, area.nombre);
+      else if (modo === "entrada") await marcarEntrada(selectedRuta, area.key, area.nombre);
+      else if (modo === "salida") await marcarSalida(selectedRuta, area.key, area.nombre);
+    } finally {
+      setRegistrando(false);
+    }
+  };
+
   const historialOrdenado = historial
     .slice()
     .sort((a, b) => (b.fecha === a.fecha ? b.finalizadoTs - a.finalizadoTs : b.fecha.localeCompare(a.fecha)));
@@ -464,6 +508,45 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         <span style={{ color: "#F2B134", fontWeight: 700 }}>{misAreas.join(", ") || "—"}</span>
       </div>
 
+      {misAreas.length > 0 && (
+        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+          <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>REPORTAR ACCIÓN</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              value={selectedRuta}
+              onChange={(e) => setSelectedRuta(e.target.value)}
+              style={{ flex: "1 1 140px", minWidth: 120 }}
+            >
+              {RUTAS_TIEMPOS.map((ruta) => (
+                <option key={ruta} value={ruta}>{ruta}</option>
+              ))}
+            </select>
+            <select
+              value={selectedAccion}
+              onChange={(e) => setSelectedAccion(e.target.value)}
+              disabled={opcionesAccion.length === 0}
+              style={{ flex: "2 1 220px", minWidth: 200 }}
+            >
+              {opcionesAccion.length === 0 ? (
+                <option value="">Sin acciones pendientes</option>
+              ) : (
+                opcionesAccion.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))
+              )}
+            </select>
+            <button
+              className="btn"
+              onClick={registrarAccionSeleccionada}
+              disabled={!selectedAccion || registrando}
+              style={{ flex: "0 0 auto" }}
+            >
+              <Check size={13} style={{ verticalAlign: "-2px" }} /> {registrando ? "Registrando..." : "Registrar"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>RUTAS DE HOY</div>
         {misAreas.length > 0 && (
@@ -509,7 +592,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                 <div>
                   {AREAS.map((a) => {
                     const area = r.areas[a.key];
-                    const esMiArea = a.manual && misAreas.includes(a.nombre);
 
                     if (a.tipo === "instante") {
                       return (
@@ -532,11 +614,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                             </div>
                             {area.ts && <CheckCircle2 size={16} color="#3DDC97" />}
                           </div>
-                          {esMiArea && !area.ts && (
-                            <button className="btn" style={{ width: "100%", marginTop: 8 }} onClick={() => marcarInstante(ruta, a.key, a.nombre)}>
-                              <Check size={13} style={{ verticalAlign: "-2px" }} /> Marcar {a.nombre.toLowerCase()}
-                            </button>
-                          )}
                         </div>
                       );
                     }
@@ -577,16 +654,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                             )}
                           </div>
                         </div>
-                        {esMiArea && !area.entrada && (
-                          <button className="btn" style={{ width: "100%", marginTop: 8 }} onClick={() => marcarEntrada(ruta, a.key, a.nombre)}>
-                            <Play size={13} style={{ verticalAlign: "-2px" }} /> Marcar entrada
-                          </button>
-                        )}
-                        {esMiArea && activaAhora && (
-                          <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={() => marcarSalida(ruta, a.key, a.nombre)}>
-                            <Square size={13} style={{ verticalAlign: "-2px" }} /> Marcar salida
-                          </button>
-                        )}
                       </div>
                     );
                   })}

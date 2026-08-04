@@ -5,7 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import {
-  Truck, Target, Users, Upload, LogOut, Star, MapPin, Flag, Download,
+  Truck, Target, Users, Upload, LogOut, Star, MapPin, Flag, Download, ClipboardPaste,
   Plus, Trash2, Calendar, ChevronRight, AlertCircle, CheckCircle2, Clock, MessageSquare,
   RefreshCw, Ticket, Camera, Image as ImageIcon, Ban,
 } from "lucide-react";
@@ -54,6 +54,7 @@ const OBJETIVO_TABS = [
   { key: "rally_otc", label: "RALLY OTC", unit: "special" },
   { key: "avisos", label: "AVISOS", unit: "special" },
   { key: "cargas", label: "CARGAS", unit: "special" },
+  { key: "pwst", label: "PWST", unit: "special" },
 ];
 const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
 const MARCA_KEYS_ALL = { ...MARCA_KEYS, "otc": "otc" };
@@ -923,22 +924,39 @@ export default function App() {
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
   }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo]);
 
+  async function procesarFilasOtcSemanal(filas) {
+    const registros = convertirFilasOtcDia(filas);
+    if (registros.length === 0) {
+      setStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+    persist({ ...data, otcSemanal: registros });
+    const fechas = [...new Set(registros.map((r) => r.fecha))];
+    setStatus(`OTC semanal cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+  }
+
   async function handleOtcSemanalFile(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     try {
       const filas = await parsearArchivoComoFilas(file);
-      const registros = convertirFilasOtcDia(filas);
-      if (registros.length === 0) {
-        setStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
-        return;
-      }
-      persist({ ...data, otcSemanal: registros });
-      const fechas = [...new Set(registros.map((r) => r.fecha))];
-      setStatus(`OTC semanal cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+      await procesarFilasOtcSemanal(filas);
     } catch (err) {
       setStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha Venta y TOTAL $.");
+    }
+  }
+
+  function handleOtcSemanalTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      procesarFilasOtcSemanal(filas);
+    } catch (err) {
+      setStatus("No se pudo interpretar el texto pegado.");
     }
   }
 
@@ -1371,23 +1389,51 @@ export default function App() {
     return { historial: [...historialSinEsasFechas, ...registrosNuevos], fechas: [...fechasNuevas].sort() };
   }
 
+  async function procesarFilasAvanceDia(filas) {
+    const registros = convertirFilasAvanceDia(filas);
+    if (registros.length === 0) {
+      setAvanceDiaStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+    persist({ ...data, avanceDia: registros });
+    const fechas = [...new Set(registros.map((r) => r.fecha))];
+    setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+  }
+
   async function handleAvanceDiaFile(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     try {
       const filas = await parsearArchivoComoFilas(file);
-      const registros = convertirFilasAvanceDia(filas);
-      if (registros.length === 0) {
-        setAvanceDiaStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
-        return;
-      }
-      persist({ ...data, avanceDia: registros });
-      const fechas = [...new Set(registros.map((r) => r.fecha))];
-      setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+      await procesarFilasAvanceDia(filas);
     } catch (err) {
       setAvanceDiaStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha, Articulo, Paquetes y Total $.");
     }
+  }
+
+  function handleAvanceDiaTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setAvanceDiaStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      procesarFilasAvanceDia(filas);
+    } catch (err) {
+      setAvanceDiaStatus("No se pudo interpretar el texto pegado.");
+    }
+  }
+
+  async function procesarFilasOtcDia(filas) {
+    const registros = convertirFilasOtcDia(filas);
+    if (registros.length === 0) {
+      setOtcDiaStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+    persist({ ...data, otcDia: registros });
+    const fechas = [...new Set(registros.map((r) => r.fecha))];
+    setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
 
   async function handleOtcDiaFile(e) {
@@ -1396,16 +1442,22 @@ export default function App() {
     if (!file) return;
     try {
       const filas = await parsearArchivoComoFilas(file);
-      const registros = convertirFilasOtcDia(filas);
-      if (registros.length === 0) {
-        setOtcDiaStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
-        return;
-      }
-      persist({ ...data, otcDia: registros });
-      const fechas = [...new Set(registros.map((r) => r.fecha))];
-      setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+      await procesarFilasOtcDia(filas);
     } catch (err) {
       setOtcDiaStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha Venta y TOTAL $.");
+    }
+  }
+
+  function handleOtcDiaTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setOtcDiaStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      procesarFilasOtcDia(filas);
+    } catch (err) {
+      setOtcDiaStatus("No se pudo interpretar el texto pegado.");
     }
   }
 
@@ -1432,82 +1484,99 @@ export default function App() {
     return { error: ultimoError };
   }
 
+  async function procesarFilasVentasPeriodo(filas, etiquetaOrigen) {
+    setVentasPeriodoStatus(`Procesando ${etiquetaOrigen}...`);
+    const registros = convertirFilasVentasPeriodo(filas);
+    if (registros.length === 0) {
+      setVentasPeriodoStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+
+    const fechas = [...new Set(registros.map((r) => r.fecha))];
+    // Momento justo antes de insertar: al borrar después, solo se quitan
+    // las filas de esas fechas que ya existían ANTES de este momento (las
+    // recién insertadas quedan intactas, sin importar el orden en que
+    // Postgres procese cada fila).
+    const momentoAntes = new Date().toISOString();
+
+    const filasParaInsertar = registros.map((r) => ({
+      vendedor: r.vendedor,
+      fecha: r.fecha,
+      marca: r.marca,
+      paquetes: r.paquetes,
+      monto: r.monto,
+      cliente: r.cliente,
+    }));
+
+    // 1) Insertar primero, en lotes por seguridad (más chicos, con reintento
+    // automático si falla por un problema de red momentáneo). Si un lote
+    // falla incluso tras los reintentos, se sigue con los siguientes en
+    // vez de detener todo — así se aprovecha lo que sí logre pasar con una
+    // conexión inestable (datos móviles, por ejemplo).
+    const TAMANO_LOTE = 150;
+    let lotesConError = 0;
+    const totalLotes = Math.ceil(filasParaInsertar.length / TAMANO_LOTE);
+    for (let i = 0; i < filasParaInsertar.length; i += TAMANO_LOTE) {
+      const lote = filasParaInsertar.slice(i, i + TAMANO_LOTE);
+      const loteNum = Math.floor(i / TAMANO_LOTE) + 1;
+      setVentasPeriodoStatus(`Guardando lote ${loteNum} de ${totalLotes} (${Math.min(i + TAMANO_LOTE, filasParaInsertar.length)} de ${filasParaInsertar.length} registros)...`);
+      const { error: insError } = await conReintento(() => supabase.from("ventas_periodo").insert(lote));
+      if (insError) {
+        console.error(`Error insertando lote ${loteNum}:`, insError);
+        lotesConError++;
+      }
+    }
+
+    if (lotesConError > 0) {
+      setVentasPeriodoStatus(`Se guardó parte de la información, pero ${lotesConError} de ${totalLotes} lotes fallaron por la conexión. No se borró nada de lo anterior — vuelve a subir/pegar lo mismo para completar lo que falta (es seguro repetirlo).`);
+      await cargarVentasPeriodo(data.periodo);
+      return;
+    }
+
+    // 2) Ya que TODO el insert tuvo éxito, se borra lo viejo de esas fechas.
+    const { error: delError } = await conReintento(() =>
+      supabase
+        .from("ventas_periodo")
+        .delete()
+        .in("fecha", fechas)
+        .lt("created_at", momentoAntes)
+    );
+
+    if (delError) {
+      console.error("Error borrando ventas previas:", delError);
+      setVentasPeriodoStatus(`Se guardaron los datos nuevos, pero no se pudo limpiar lo anterior de esas fechas: ${delError.message}. Puedes usar "Borrar todo" y volver a subir si ves duplicados.`);
+      await cargarVentasPeriodo(data.periodo);
+      return;
+    }
+
+    await cargarVentasPeriodo(data.periodo);
+    setVentasPeriodoStatus(`Periodo actualizado: ${registros.length} registros (${etiquetaOrigen}) para ${fechas.join(", ")}.`);
+  }
+
   async function handleVentasPeriodoFile(e) {
     const files = Array.from(e.target.files || []).slice(0, 2);
     e.target.value = "";
     if (files.length === 0) return;
     try {
-      setVentasPeriodoStatus(`Procesando ${files.length} archivo${files.length > 1 ? "s" : ""}...`);
-
       const filasPorArchivo = await Promise.all(files.map(parsearArchivoComoFilas));
-      const registros = convertirFilasVentasPeriodo(filasPorArchivo.flat());
-      if (registros.length === 0) {
-        setVentasPeriodoStatus("No se encontraron filas válidas. Revisa el formato del archivo.");
-        return;
-      }
-
-      const fechas = [...new Set(registros.map((r) => r.fecha))];
-      // Momento justo antes de insertar: al borrar después, solo se quitan
-      // las filas de esas fechas que ya existían ANTES de este momento (las
-      // recién insertadas quedan intactas, sin importar el orden en que
-      // Postgres procese cada fila).
-      const momentoAntes = new Date().toISOString();
-
-      const filasParaInsertar = registros.map((r) => ({
-        vendedor: r.vendedor,
-        fecha: r.fecha,
-        marca: r.marca,
-        paquetes: r.paquetes,
-        monto: r.monto,
-        cliente: r.cliente,
-      }));
-
-      // 1) Insertar primero, en lotes por seguridad (más chicos, con reintento
-      // automático si falla por un problema de red momentáneo). Si un lote
-      // falla incluso tras los reintentos, se sigue con los siguientes en
-      // vez de detener todo — así se aprovecha lo que sí logre pasar con una
-      // conexión inestable (datos móviles, por ejemplo).
-      const TAMANO_LOTE = 150;
-      let lotesConError = 0;
-      const totalLotes = Math.ceil(filasParaInsertar.length / TAMANO_LOTE);
-      for (let i = 0; i < filasParaInsertar.length; i += TAMANO_LOTE) {
-        const lote = filasParaInsertar.slice(i, i + TAMANO_LOTE);
-        const loteNum = Math.floor(i / TAMANO_LOTE) + 1;
-        setVentasPeriodoStatus(`Guardando lote ${loteNum} de ${totalLotes} (${Math.min(i + TAMANO_LOTE, filasParaInsertar.length)} de ${filasParaInsertar.length} registros)...`);
-        const { error: insError } = await conReintento(() => supabase.from("ventas_periodo").insert(lote));
-        if (insError) {
-          console.error(`Error insertando lote ${loteNum}:`, insError);
-          lotesConError++;
-        }
-      }
-
-      if (lotesConError > 0) {
-        setVentasPeriodoStatus(`Se guardó parte de la información, pero ${lotesConError} de ${totalLotes} lotes fallaron por la conexión. No se borró nada de lo anterior — vuelve a subir el mismo archivo para completar lo que falta (es seguro repetirlo).`);
-        await cargarVentasPeriodo(data.periodo);
-        return;
-      }
-
-      // 2) Ya que TODO el insert tuvo éxito, se borra lo viejo de esas fechas.
-      const { error: delError } = await conReintento(() =>
-        supabase
-          .from("ventas_periodo")
-          .delete()
-          .in("fecha", fechas)
-          .lt("created_at", momentoAntes)
-      );
-
-      if (delError) {
-        console.error("Error borrando ventas previas:", delError);
-        setVentasPeriodoStatus(`Se guardaron los datos nuevos, pero no se pudo limpiar lo anterior de esas fechas: ${delError.message}. Puedes usar "Borrar todo" y volver a subir si ves duplicados.`);
-        await cargarVentasPeriodo(data.periodo);
-        return;
-      }
-
-      await cargarVentasPeriodo(data.periodo);
-      setVentasPeriodoStatus(`Periodo actualizado: ${registros.length} registros (${files.length} archivo${files.length > 1 ? "s" : ""}) para ${fechas.join(", ")}.`);
+      await procesarFilasVentasPeriodo(filasPorArchivo.flat(), `${files.length} archivo${files.length > 1 ? "s" : ""}`);
     } catch (err) {
       console.error(err);
       setVentasPeriodoStatus("No se pudo leer el archivo. Verifica que tenga las columnas Vendedor, Fecha, Articulo, Paquetes y Total $.");
+    }
+  }
+
+  async function handleVentasPeriodoTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setVentasPeriodoStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      await procesarFilasVentasPeriodo(filas, "texto pegado");
+    } catch (err) {
+      console.error(err);
+      setVentasPeriodoStatus("No se pudo interpretar el texto pegado.");
     }
   }
 
@@ -1586,6 +1655,44 @@ export default function App() {
     return { historial: resultado, resumen };
   }
 
+  async function procesarFilasMesaControl(filas, etiquetaOrigen) {
+    const registros = convertirFilasMesaControl(filas);
+    if (registros.length === 0) {
+      setMesaControlStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+
+    const { historial: mesaControlMerged, resumen } = fusionarMesaControlPorRuta(data?.mesaControl || [], registros);
+
+    const next = { ...(data || defaultData()), mesaControl: mesaControlMerged };
+    setData(next);
+
+    const { error } = await supabase
+      .from("ventas_app_state")
+      .upsert({
+        id: STATE_ID,
+        data: next,
+        updated_at: new Date().toISOString(),
+      })
+      .select();
+
+    if (error) {
+      console.error("Error guardando mesa de control:", error);
+      setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
+    } else {
+      const detalle = resumen
+        .map((r) => {
+          if (r.accion === "sumado") {
+            const nota = r.duplicados > 0 ? ` (se ignoraron ${r.duplicados} ya registradas)` : "";
+            return `${r.ruta} ${r.fecha}: +${r.agregados} sumadas${nota}`;
+          }
+          return `${r.ruta} ${r.fecha}: reemplazó datos anteriores de la ruta (${r.agregados} visitas)`;
+        })
+        .join(" · ");
+      setMesaControlStatus(`Mesa de control guardada: ${etiquetaOrigen}. ${detalle}. Total acumulado: ${mesaControlMerged.length} visitas.`);
+    }
+  }
+
   async function handleMesaControlFile(e) {
     // Hasta 7 archivos a la vez (uno por ruta), o se puede subir de 1 en 1.
     const files = Array.from(e.target.files || []).slice(0, 7);
@@ -1593,48 +1700,25 @@ export default function App() {
     if (files.length === 0) return;
     try {
       setMesaControlStatus(`Procesando ${files.length} archivo${files.length > 1 ? "s" : ""}...`);
-
       const filasPorArchivo = await Promise.all(files.map(parsearArchivoComoFilas));
-      const registros = convertirFilasMesaControl(filasPorArchivo.flat());
-      if (registros.length === 0) {
-        setMesaControlStatus("No se encontraron filas válidas. Revisa el formato de los archivos.");
-        return;
-      }
-
-      const { historial: mesaControlMerged, resumen } = fusionarMesaControlPorRuta(data?.mesaControl || [], registros);
-
-      const next = { ...(data || defaultData()), mesaControl: mesaControlMerged };
-      setData(next);
-
-      const { error } = await supabase
-        .from("ventas_app_state")
-        .upsert({
-          id: STATE_ID,
-          data: next,
-          updated_at: new Date().toISOString(),
-        })
-        .select();
-
-      if (error) {
-        console.error("Error guardando mesa de control:", error);
-        setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
-      } else {
-        const detalle = resumen
-          .map((r) => {
-            if (r.accion === "sumado") {
-              const nota = r.duplicados > 0 ? ` (se ignoraron ${r.duplicados} ya registradas)` : "";
-              return `${r.ruta} ${r.fecha}: +${r.agregados} sumadas${nota}`;
-            }
-            return `${r.ruta} ${r.fecha}: reemplazó datos anteriores de la ruta (${r.agregados} visitas)`;
-          })
-          .join(" · ");
-        setMesaControlStatus(
-          `Mesa de control guardada: ${files.length} archivo${files.length > 1 ? "s" : ""}. ${detalle}. Total acumulado: ${mesaControlMerged.length} visitas.`
-        );
-      }
+      await procesarFilasMesaControl(filasPorArchivo.flat(), `${files.length} archivo${files.length > 1 ? "s" : ""}`);
     } catch (err) {
       console.error(err);
       setMesaControlStatus(`No se pudo procesar el archivo: ${err?.message || "revisa columnas vendedor, fecha, cliente, inicio, final, Tiempo_estancia, tipoinicio, tipofin, volumen y descuento."}`);
+    }
+  }
+
+  async function handleMesaControlTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setMesaControlStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      await procesarFilasMesaControl(filas, "texto pegado");
+    } catch (err) {
+      console.error(err);
+      setMesaControlStatus("No se pudo interpretar el texto pegado.");
     }
   }
 
@@ -1702,16 +1786,21 @@ export default function App() {
           onAvanceDiaFile={handleAvanceDiaFile}
           avanceDiaFileInputRef={avanceDiaFileInputRef}
           avanceDiaStatus={avanceDiaStatus}
+          onAvanceDiaTexto={handleAvanceDiaTexto}
           onOtcDiaFile={handleOtcDiaFile}
           otcDiaFileInputRef={otcDiaFileInputRef}
           otcDiaStatus={otcDiaStatus}
+          onOtcDiaTexto={handleOtcDiaTexto}
           onVentasPeriodoFile={handleVentasPeriodoFile}
           ventasPeriodoFileInputRef={ventasPeriodoFileInputRef}
           ventasPeriodoStatus={ventasPeriodoStatus}
+          onVentasPeriodoTexto={handleVentasPeriodoTexto}
           onBorrarTodoVentasPeriodo={borrarTodoVentasPeriodo}
           onMesaControlFile={handleMesaControlFile}
           mesaControlFileInputRef={mesaControlFileInputRef}
           mesaControlStatus={mesaControlStatus}
+          onMesaControlTexto={handleMesaControlTexto}
+          onOtcSemanalTexto={handleOtcSemanalTexto}
           onCargasFile={handleCargasFile}
           cargasFileInputRef={cargasFileInputRef}
           cargasStatus={cargasStatus}
@@ -1893,6 +1982,44 @@ function BotonGuardarImagen({ captura, nombreArchivo, etiqueta = "Guardar imagen
       </div>
       {captura.errorImagen && (
         <div style={{ fontSize: 11, color: "#FF6B6B" }}>No se pudo generar: {captura.errorImagen}</div>
+      )}
+    </div>
+  );
+}
+
+// Caja colapsable "Pegar texto" — alternativa a subir un archivo: se copia
+// directo desde la página de origen (Ctrl+C) y se pega aquí (Ctrl+V), sin
+// tener que descargar ni buscar ningún archivo. Reutilizable en cualquier
+// pestaña de carga de datos.
+function PegarTextoBox({ onProcesar, placeholder }) {
+  const [abierto, setAbierto] = useState(false);
+  const [texto, setTexto] = useState("");
+
+  function procesar() {
+    if (!texto.trim()) return;
+    onProcesar(texto);
+    setTexto("");
+    setAbierto(false);
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button className="btn-ghost" onClick={() => setAbierto((a) => !a)}>
+        <ClipboardPaste size={14} style={{ verticalAlign: "-2px" }} /> {abierto ? "Ocultar pegar texto" : "Pegar texto (en vez de subir archivo)"}
+      </button>
+      {abierto && (
+        <div style={{ marginTop: 8 }}>
+          <textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder={placeholder || "Copia las filas (incluyendo el encabezado) desde la página de origen y pégalas aquí..."}
+            rows={6}
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", fontFamily: "monospace" }}
+          />
+          <button className="btn" style={{ marginTop: 8 }} onClick={procesar}>
+            Procesar texto pegado
+          </button>
+        </div>
       )}
     </div>
   );
@@ -2883,7 +3010,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined, avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined }} />
+      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined, avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined }} />
 
       {tab === "dia" ? (
         <DiaKpis
@@ -3451,11 +3578,15 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
 function avisosRelevantesPara(data, viewerKey, verComoRuta) {
   if ((viewerKey === "supervisor2" || viewerKey === "liquidacion") && data.preferenciasAvisos?.[viewerKey] === false) return [];
   const todosLosAvisos = data.avisos || [];
-  const descartados = data.avisosDescartadosPor?.[viewerKey] || [];
   const base = verComoRuta
     ? todosLosAvisos.filter((a) => !a.destinatarios || a.destinatarios === "todos" || (Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta)))
     : todosLosAvisos;
-  return viewerKey ? base.filter((a) => !descartados.includes(a.id)) : base;
+  // Si el que publicó excluyó explícitamente a Liquidación o Supervisor-2 de
+  // ESE aviso en particular, no se lo mostramos a esos roles.
+  if (viewerKey === "supervisor2" || viewerKey === "liquidacion") {
+    return base.filter((a) => !(a.excluidos || []).includes(viewerKey));
+  }
+  return base;
 }
 
 // true si a este viewerKey le llegó al menos un aviso nuevo desde la última
@@ -3534,6 +3665,8 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
   const [subiendo, setSubiendo] = useState(false);
   const [paraTodos, setParaTodos] = useState(true);
   const [rutasElegidas, setRutasElegidas] = useState([]);
+  const [excluirLiquidacion, setExcluirLiquidacion] = useState(false);
+  const [excluirSupervisor2, setExcluirSupervisor2] = useState(false);
   const fileRef = useRef(null);
 
   function toggleRutaDestino(nombreRuta) {
@@ -3573,6 +3706,9 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
       alert("Elige al menos una ruta destinataria, o marca \"Para todos\".");
       return;
     }
+    const excluidos = [];
+    if (excluirLiquidacion) excluidos.push("liquidacion");
+    if (excluirSupervisor2) excluidos.push("supervisor2");
     const nuevo = {
       id: "aviso_" + Date.now(),
       texto: texto.trim(),
@@ -3582,23 +3718,22 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
       autor: revisorNombre || "Staff",
       fecha: new Date().toISOString(),
       destinatarios: paraTodos ? "todos" : rutasElegidas,
+      excluidos,
     };
     persist({ ...data, avisos: [nuevo, ...todosLosAvisos] });
     setTexto("");
     setArchivo(null);
     setParaTodos(true);
     setRutasElegidas([]);
+    setExcluirLiquidacion(false);
+    setExcluirSupervisor2(false);
   }
 
   function eliminarAviso(id) {
     persist({ ...data, avisos: todosLosAvisos.filter((a) => a.id !== id) });
   }
 
-  function descartarAviso(id) {
-    const actuales = data.avisosDescartadosPor?.[viewerKey] || [];
-    if (actuales.includes(id)) return;
-    persist({ ...data, avisosDescartadosPor: { ...(data.avisosDescartadosPor || {}), [viewerKey]: [...actuales, id] } });
-  }
+
 
   function formatFechaHora(iso) {
     const d = new Date(iso);
@@ -3666,6 +3801,18 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
             )}
           </div>
 
+          <div style={{ marginBottom: 10 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>EXCLUIR DE ESTE AVISO (OPCIONAL)</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className={excluirLiquidacion ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setExcluirLiquidacion((v) => !v)}>
+                {excluirLiquidacion ? "✓ " : ""}No enviar a Liquidación
+              </button>
+              <button className={excluirSupervisor2 ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setExcluirSupervisor2((v) => !v)}>
+                {excluirSupervisor2 ? "✓ " : ""}No enviar a Supervisor-2
+              </button>
+            </div>
+          </div>
+
           <button className="btn" onClick={publicarAviso}>
             <Plus size={14} style={{ verticalAlign: "-2px" }} /> Publicar aviso
           </button>
@@ -3686,13 +3833,13 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
                       Para: {!a.destinatarios || a.destinatarios === "todos" ? "Todos" : a.destinatarios.join(", ")}
                     </span>
                   )}
+                  {!verComoRuta && a.excluidos && a.excluidos.length > 0 && (
+                    <span style={{ fontSize: 10, color: "#FF6B6B", border: "1px solid #FF6B6B", borderRadius: 6, padding: "2px 8px" }}>
+                      Sin: {a.excluidos.map((e) => e === "liquidacion" ? "Liquidación" : "Supervisor-2").join(", ")}
+                    </span>
+                  )}
                   {puedeCrear && (
                     <button className="btn-ghost" onClick={() => eliminarAviso(a.id)}><Trash2 size={13} color="#FF6B6B" /></button>
-                  )}
-                  {puedeElegirPreferencia && (
-                    <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => descartarAviso(a.id)}>
-                      <Ban size={12} style={{ verticalAlign: "-2px" }} /> Descartar
-                    </button>
                   )}
                 </div>
               </div>
@@ -4033,7 +4180,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -4377,6 +4524,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
                 Puedes seleccionar hasta 7 archivos a la vez (uno por ruta). Se combinan sin borrar las otras rutas.
               </p>
               <input ref={mesaControlFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onMesaControlFile} />
+              <PegarTextoBox onProcesar={onMesaControlTexto} placeholder="Pega aquí las filas con columnas vendedor, fecha, cliente, inicio, final, Tiempo_estancia, tipoinicio, tipofin, volumen y descuento (incluye el encabezado)." />
               {mesaControlStatus && (
                 <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: (mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? "#3DDC97" : "#FF6B6B" }}>
                   {(mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {mesaControlStatus}
@@ -4427,6 +4575,31 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               data={data} persist={persist} puesto={puesto} rol="staff"
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
             />
+          ) : objTab === "pwst" ? (
+            <div className="card" style={{ padding: 30, textAlign: "center" }}>
+              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
+              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
+                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
+              </p>
+              <a
+                href="https://client.powerstreet.cloud"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px", background: "#1E6FEB", borderColor: "#1E6FEB", color: "#FFFFFF" }}
+              >
+                Abrir PowerStreet
+              </a>
+              {puesto === "gerente" && (
+                <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
+                  <div className="card" style={{ padding: 14, background: "#131C30" }}>
+                    <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>ACCESO (solo visible para Gerente)</div>
+                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Usuario: <span className="mono">jmdrafgal</span></div>
+                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Contraseña: <span className="mono">Pwst12345*</span></div>
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
@@ -4728,6 +4901,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <button className="btn-ghost" onClick={onDownloadTemplate}>Descargar plantilla</button>
           </div>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onFile} />
+          <PegarTextoBox onProcesar={onOtcSemanalTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
           {status && (
             <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: status.startsWith("OTC semanal cargado") ? "#3DDC97" : "#FF6B6B" }}>
               {status.startsWith("OTC semanal cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {status}
@@ -4755,6 +4929,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               </button>
             </div>
             <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
+            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado)." />
             {ventasPeriodoStatus && (
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: ventasPeriodoStatus.startsWith("Periodo actualizado") ? "#3DDC97" : "#FF6B6B" }}>
                 {ventasPeriodoStatus.startsWith("Periodo actualizado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {ventasPeriodoStatus}
@@ -4778,6 +4953,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               </button>
             </div>
             <input ref={avanceDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onAvanceDiaFile} />
+            <PegarTextoBox onProcesar={onAvanceDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Cliente, Articulo, Paquetes y Total $ (incluye el encabezado)." />
             {avanceDiaStatus && (
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
                 {avanceDiaStatus.startsWith("Avance cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {avanceDiaStatus}
@@ -4798,6 +4974,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
               </button>
             </div>
             <input ref={otcDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onOtcDiaFile} />
+            <PegarTextoBox onProcesar={onOtcDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
             {otcDiaStatus && (
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: otcDiaStatus.startsWith("OTC cargado") ? "#3DDC97" : "#FF6B6B" }}>
                 {otcDiaStatus.startsWith("OTC cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {otcDiaStatus}
