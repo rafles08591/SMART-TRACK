@@ -266,6 +266,9 @@ function defaultData() {
     // Última vez que cada quien entró a Avisos, para saber si hay nuevos
     // (y parpadear la pestaña). Clave = nombre de ruta o rol de staff.
     avisosVistoPor: {},
+    // Avisos que cada quien decidió "descartar" (ocultar solo para sí mismo,
+    // sin borrarlo para los demás). Clave = viewerKey, valor = array de ids.
+    avisosDescartadosPor: {},
     // Cargas: Supervisor-1/Gerente suben la "Carga Propuesta" (FA, marca,
     // cantidad por ruta). Cada vendedor puede proponer su propia cantidad;
     // si no la cambia, se usa la inicial. Se bloquea al descargar.
@@ -3448,9 +3451,11 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
 function avisosRelevantesPara(data, viewerKey, verComoRuta) {
   if ((viewerKey === "supervisor2" || viewerKey === "liquidacion") && data.preferenciasAvisos?.[viewerKey] === false) return [];
   const todosLosAvisos = data.avisos || [];
-  return verComoRuta
+  const descartados = data.avisosDescartadosPor?.[viewerKey] || [];
+  const base = verComoRuta
     ? todosLosAvisos.filter((a) => !a.destinatarios || a.destinatarios === "todos" || (Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta)))
     : todosLosAvisos;
+  return viewerKey ? base.filter((a) => !descartados.includes(a.id)) : base;
 }
 
 // true si a este viewerKey le llegó al menos un aviso nuevo desde la última
@@ -3589,6 +3594,12 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
     persist({ ...data, avisos: todosLosAvisos.filter((a) => a.id !== id) });
   }
 
+  function descartarAviso(id) {
+    const actuales = data.avisosDescartadosPor?.[viewerKey] || [];
+    if (actuales.includes(id)) return;
+    persist({ ...data, avisosDescartadosPor: { ...(data.avisosDescartadosPor || {}), [viewerKey]: [...actuales, id] } });
+  }
+
   function formatFechaHora(iso) {
     const d = new Date(iso);
     return d.toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -3677,6 +3688,11 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
                   )}
                   {puedeCrear && (
                     <button className="btn-ghost" onClick={() => eliminarAviso(a.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+                  )}
+                  {puedeElegirPreferencia && (
+                    <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => descartarAviso(a.id)}>
+                      <Ban size={12} style={{ verticalAlign: "-2px" }} /> Descartar
+                    </button>
                   )}
                 </div>
               </div>
