@@ -12,6 +12,7 @@ import {
 import html2canvas from "html2canvas"; // npm install html2canvas
 import CuponeraView from "./components/CuponeraView";
 import TiemposView, { supabaseTiempos } from "./components/TiemposView";
+import UnidadesView, { unidadYaRegistradaHoy } from "./components/UnidadesView";
 import { supabase } from "./supabaseClient";
 
 // ====== SUPABASE ======
@@ -46,6 +47,7 @@ const OBJETIVO_TABS = [
   { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "cuponera", label: "CUPONERA", unit: "special" },
   { key: "tiempos", label: "TIEMPOS", unit: "special" },
+  { key: "unidades", label: "UNIDADES", unit: "special" },
   { key: "rutas", label: "RUTAS", unit: "special" },
   { key: "actividades_dia", label: "ACTIVIDADES DÍA", unit: "special" },
   { key: "actividades_semana", label: "ACTIVIDADES SEMANA", unit: "special" },
@@ -111,6 +113,10 @@ const USERS = [
   { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
   { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
   { username: "LIQUIDACION- SULEMA PONCE", password: "7625", role: "liquidacion" },
+  { username: "MERCH27", password: "2220", role: "merch" },
+  { username: "MERCH28", password: "2220", role: "merch" },
+  { username: "MERCH29", password: "2220", role: "merch" },
+  { username: "MERCH30", password: "2220", role: "merch" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -249,6 +255,13 @@ function defaultData() {
     diasNoLaborables: [],
     otcSemanal: [],
     mesaControl: [],
+    // Módulo "Revisión de Unidades": flotilla, unidad asignada por defecto a
+    // cada ruta/usuario, historial de revisiones diarias, y los puntos de
+    // seguridad configurables por Gerente (QR, GPS, cámara, auditoría).
+    unidadesFlota: [],
+    asignacionesUnidades: {},
+    revisionesUnidades: [],
+    seguridadUnidades: { qr: true, gps: true, kmCamara: true, auditoria: true, probabilidadAuditoria: 20 },
     mensajesDia: {},
     mensajesSupervisores: {},
     // Listado de promociones (antes era una sola imagen/descripción). Cada
@@ -506,6 +519,71 @@ export default function App() {
       console.error("Error de red al guardar:", err);
       setStatus(`Error de red: ${err?.message || String(err)}`);
     }
+  }
+
+  // Trae el documento más reciente directo de Supabase (no lo que esta
+  // pestaña tenga en pantalla). Se usa para acciones sobre "cargas", donde
+  // varias personas (staff subiendo un archivo nuevo, vendedores enviando su
+  // propuesta) pueden guardar casi al mismo tiempo desde pestañas que llevan
+  // rato abiertas con datos desactualizados.
+  async function obtenerDataFresca() {
+    try {
+      const { data: row, error } = await supabase
+        .from("ventas_app_state")
+        .select("data")
+        .eq("id", STATE_ID)
+        .single();
+      if (error || !row?.data) return data;
+      return { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+    } catch (err) {
+      console.error("Error trayendo dato fresco:", err);
+      return data;
+    }
+  }
+
+  // Guarda un cambio sobre "cargas" siempre partiendo del documento más
+  // reciente de Supabase, no del que esta pestaña tenga cargado. Así, si
+  // alguien (staff subiendo un archivo nuevo, o un vendedor enviando su
+  // propuesta) tenía la pantalla abierta desde antes con datos viejos, su
+  // guardado no puede pisar por accidente una carga más reciente subida por
+  // otra persona — cada quien construye sobre lo último de verdad.
+  // "calcularNuevoCargas" recibe el objeto "cargas" fresco y regresa el
+  // nuevo objeto "cargas" a guardar.
+  // Helper genérico: trae el documento más reciente de Supabase, le aplica
+  // los cambios que calcule "calcularCambios" (recibe el documento fresco y
+  // regresa un objeto parcial a fusionar), y guarda el resultado. Se usa
+  // para cualquier campo donde varias personas puedan guardar casi al mismo
+  // tiempo desde pestañas abiertas desde antes (cargas, revisiones de
+  // unidades) — así nadie pisa por accidente el cambio más reciente de otra
+  // persona con datos que tenía desactualizados en pantalla.
+  async function persistParcialFresco(calcularCambios) {
+    const fresca = await obtenerDataFresca();
+    const cambios = calcularCambios(fresca);
+    await persist({ ...fresca, ...cambios });
+  }
+
+  async function persistCargas(calcularNuevoCargas) {
+    await persistParcialFresco((fresca) => ({
+      cargas: calcularNuevoCargas(fresca.cargas || { fecha: null, bloqueado: false, items: [], enviosPorRuta: {} }),
+    }));
+  }
+
+  // Agrega una revisión de unidad al historial, partiendo siempre del
+  // historial más reciente — indispensable aquí porque varios conductores
+  // (rutas J201-J207 y MERCH27-30) pueden enviar su revisión casi al mismo
+  // tiempo, y cada uno solo debe AGREGAR su registro, nunca reemplazar el
+  // historial completo con una copia vieja.
+  async function persistRevisionUnidad(nuevaRevision) {
+    await persistParcialFresco((fresca) => ({
+      revisionesUnidades: [...(fresca.revisionesUnidades || []), nuevaRevision],
+    }));
+  }
+
+  // Cambios de configuración del módulo de Unidades (alta/edición/borrado de
+  // unidades, asignación por ruta, puntos de seguridad) — uso exclusivo de
+  // Gerente casi siempre, pero igual se parte del dato fresco por seguridad.
+  async function persistConfigUnidades(calcularCambios) {
+    await persistParcialFresco(calcularCambios);
   }
 
   // Carga las ventas del periodo directamente desde su propia tabla
@@ -1127,7 +1205,7 @@ export default function App() {
     e.target.value = "";
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: "binary" });
         let resultado = null;
@@ -1159,7 +1237,11 @@ export default function App() {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        persist({ ...data, cargas: { fecha: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} } });
+        // Reemplaza TODO lo anterior (fecha, artículos y envíos por ruta) al
+        // 100%, partiendo siempre del dato más reciente en Supabase — así,
+        // aunque algún vendedor tenga la pantalla abierta desde antes con la
+        // carga vieja, su guardado no puede revivirla por encima de esta.
+        await persistCargas(() => ({ fecha: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} }));
         setCargasStatus(`Carga actualizada: ${resultado.items.length} artículos, hoja "${hojaUsada}".`);
       } catch (err) {
         console.error(err);
@@ -1195,7 +1277,7 @@ export default function App() {
     XLSX.utils.book_append_sheet(wb, ws, "Carga Modificada");
     XLSX.writeFile(wb, `carga_modificada_${cargas.fecha || fechaHoyISO()}.xlsx`);
     // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
-    persist({ ...data, cargas: { ...cargas, bloqueado: true } });
+    persistCargas((cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
   }
 
   function downloadOtcSemanalTemplate() {
@@ -1781,6 +1863,9 @@ export default function App() {
         <StaffView
           data={data}
           persist={persist}
+          persistCargas={persistCargas}
+          persistRevisionUnidad={persistRevisionUnidad}
+          persistConfigUnidades={persistConfigUnidades}
           stats={stats}
           puesto={puesto}
           staffUsername={staffUsername}
@@ -1822,7 +1907,13 @@ export default function App() {
 
       {role === "liquidacion" && (
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
-          <TabsLiquidacion data={data} persist={persist} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
+          <TabsLiquidacion data={data} persist={persist} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
+        </div>
+      )}
+
+      {role === "merch" && (
+        <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
+          <TabsMerch data={data} persist={persist} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
 
@@ -1835,6 +1926,9 @@ export default function App() {
           mensajeDia={mensajesDia[stats.porVendedor.find((v) => v.id === currentVendorId)?.name]}
           data={data}
           persist={persist}
+          persistCargas={persistCargas}
+          persistRevisionUnidad={persistRevisionUnidad}
+          persistConfigUnidades={persistConfigUnidades}
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
@@ -2228,13 +2322,18 @@ function ObjetivoTabs({ tab, setTab, tabs, estadoTabs }) {
           0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.12); }
           50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.45); }
         }
+        @keyframes parpadeoRojoIntensoTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.9); background-color: rgba(255,0,0,0.18); }
+          50% { box-shadow: 0 0 0 10px rgba(255,0,0,0); background-color: rgba(255,0,0,0.55); }
+        }
         .tab-pendiente { border: 1px solid #FF6B6B !important; color: #FF6B6B !important; animation: parpadeoRojoTab 1.4s ease-in-out infinite; }
         .tab-completo { border: 1px solid #3DDC97 !important; color: #3DDC97 !important; }
         .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
+        .tab-pendiente-urgente { border: 2px solid #FF0000 !important; color: #FF0000 !important; font-weight: 800 !important; animation: parpadeoRojoIntensoTab 0.7s ease-in-out infinite; }
       `}</style>
       {lista.map((t) => {
         const estado = estadoTabs && estadoTabs[t.key];
-        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : "";
+        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : estado === "pendiente_urgente" ? "tab-pendiente-urgente" : "";
         return (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`${tab === t.key ? "btn" : "btn-ghost"} ${claseExtra}`} style={{ fontSize: 13, flex: 1 }}>
@@ -3037,11 +3136,12 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   );
 }
 
-function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
+function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas";
+  const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -3056,13 +3156,22 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs tab={tab} setTab={setTab} tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst"].includes(t.key))} estadoTabs={{ rally_otc: data.rallyOtc?.activo ? "completo" : undefined, avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined }} />
+      <ObjetivoTabs
+        tab={tab}
+        setTab={setTab}
+        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst"].includes(t.key))}
+        estadoTabs={{
+          rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
+          avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
+          unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+        }}
+      />
 
       {tab === "dia" ? (
         <DiaKpis
           hoy={vendedor.hoy}
           mensajeDia={mensajeDia}
-          rutaCodigo={vendedor.name.replace("RUTA ", "").trim()}
+          rutaCodigo={rutaCodigo}
           esPeor={peorVendedorNombre === vendedor.name}
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
@@ -3075,7 +3184,9 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       ) : tab === "avisos" ? (
         <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
       ) : tab === "cargas" ? (
-        <CargasView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+        <CargasView data={data} persist={persist} persistCargas={persistCargas} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "unidades" ? (
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
@@ -3649,13 +3760,14 @@ function hayAvisoNuevoPara(data, viewerKey, verComoRuta) {
 // Vista dedicada de Liquidación (Sulema): un mini switch entre TIEMPOS
 // (su pantalla de siempre) y AVISOS (nuevo), ya que ella no usa el sistema
 // de pestañas de VendorView/StaffView.
-function TabsLiquidacion({ data, persist, staffUsername, onLogout }) {
+function TabsLiquidacion({ data, persist, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
   const [tab, setTab] = useState("tiempos");
   const hayNuevo = hayAvisoNuevoPara(data, "liquidacion", null);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button className={tab === "tiempos" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("tiempos")}>TIEMPOS</button>
+        <button className={tab === "unidades" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("unidades")}>UNIDADES</button>
         <button
           className={`${tab === "avisos" ? "btn" : "btn-ghost"} ${hayNuevo ? "tab-aviso-nuevo" : ""}`}
           style={{ flex: 1 }}
@@ -3677,6 +3789,8 @@ function TabsLiquidacion({ data, persist, staffUsername, onLogout }) {
           misAreas={["Liquidación"]}
           onLogout={onLogout}
         />
+      ) : tab === "unidades" ? (
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="liquidacion" puesto={null} identidad={NOMBRES[staffUsername] || "Sulema Ponce"} rutaPropia={null} />
       ) : (
         <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} viewerKey="liquidacion" />
       )}
@@ -3684,6 +3798,55 @@ function TabsLiquidacion({ data, persist, staffUsername, onLogout }) {
   );
 }
 
+// Vista mínima para los usuarios MERCH27-30: solo necesitan registrar su
+// revisión diaria de unidad (pestaña UNIDADES) y ver Avisos. La pestaña
+// UNIDADES parpadea en rojo intenso hasta que registran su revisión de hoy.
+function TabsMerch({ data, persist, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
+  const [tab, setTab] = useState("unidades");
+  const hayNuevo = hayAvisoNuevoPara(data, staffUsername, staffUsername);
+  const yaRegistroHoy = unidadYaRegistradaHoy(data, staffUsername);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div className="display" style={{ fontSize: 18, fontWeight: 700 }}>{staffUsername}</div>
+        <button className="btn-ghost" onClick={onLogout}>Salir</button>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button
+          className={`${tab === "unidades" ? "btn" : "btn-ghost"} ${!yaRegistroHoy ? "tab-pendiente-urgente" : ""}`}
+          style={{ flex: 1 }}
+          onClick={() => setTab("unidades")}
+        >
+          UNIDADES
+        </button>
+        <button
+          className={`${tab === "avisos" ? "btn" : "btn-ghost"} ${hayNuevo ? "tab-aviso-nuevo" : ""}`}
+          style={{ flex: 1 }}
+          onClick={() => setTab("avisos")}
+        >
+          AVISOS
+        </button>
+      </div>
+      <style>{`
+        @keyframes parpadeoNaranjaIntensoTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.12); }
+          50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.45); }
+        }
+        .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
+        @keyframes parpadeoRojoIntensoTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.9); background-color: rgba(255,0,0,0.18); }
+          50% { box-shadow: 0 0 0 10px rgba(255,0,0,0); background-color: rgba(255,0,0,0.55); }
+        }
+        .tab-pendiente-urgente { border: 2px solid #FF0000 !important; color: #FF0000 !important; font-weight: 800 !important; animation: parpadeoRojoIntensoTab 0.7s ease-in-out infinite; }
+      `}</style>
+      {tab === "unidades" ? (
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="merch" puesto={null} identidad={staffUsername} rutaPropia={staffUsername} />
+      ) : (
+        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={staffUsername} viewerKey={staffUsername} />
+      )}
+    </div>
+  );
+}
 
 function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, viewerKey }) {
   const todosLosAvisos = data.avisos || [];
@@ -3917,7 +4080,7 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
  * - Vendedor ve su propia lista y puede proponer su cantidad; si no la
  *   modifica, se usa la inicial. Al descargar, se bloquea la edición.
  */
-function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar }) {
+function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar }) {
   const cargas = data.cargas || { fecha: null, bloqueado: false, items: [], enviosPorRuta: {} };
   const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
   const yaEnviado = !!cargas.enviosPorRuta?.[vendedorActual];
@@ -3935,13 +4098,23 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
     setBorrador((b) => ({ ...b, [itemIndex]: valor }));
   }
 
-  function enviarPara(nombreRuta) {
-    const items = cargas.items.map((it, i) => {
-      if (borrador[i] === undefined) return it;
-      const valor = borrador[i];
-      return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
+  async function enviarPara(nombreRuta) {
+    await persistCargas((cargasFrescas) => {
+      // Si mientras esta pantalla estaba abierta se subió una carga nueva
+      // (distinta fecha), no tiene sentido aplicar cantidades pensadas para
+      // la carga vieja — se avisa y se refresca con la carga nueva en vez
+      // de arriesgarse a revivir la anterior por encima de esta.
+      if (cargasFrescas.fecha !== cargas.fecha) {
+        alert("La carga se actualizó mientras tenías esta pantalla abierta. Tu vista se va a refrescar con la carga más reciente — revisa tus cantidades y vuelve a enviar.");
+        return cargasFrescas;
+      }
+      const items = cargasFrescas.items.map((it, i) => {
+        if (borrador[i] === undefined) return it;
+        const valor = borrador[i];
+        return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
+      });
+      return { ...cargasFrescas, items, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
     });
-    persist({ ...data, cargas: { ...cargas, items, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [nombreRuta]: true } } });
     setBorrador({});
   }
 
@@ -3973,7 +4146,7 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
               <div style={{ fontSize: 11, color: "#FF6B6B" }}>
                 Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades.
               </div>
-              <button className="btn-ghost" onClick={() => persist({ ...data, cargas: { ...cargas, bloqueado: false } })}>
+              <button className="btn-ghost" onClick={() => persistCargas((cargasFrescas) => ({ ...cargasFrescas, bloqueado: false }))}>
                 <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reactivar edición
               </button>
             </div>
@@ -4007,7 +4180,7 @@ function CargasView({ data, persist, puesto, rol, vendedorActual, onUpload, carg
                       </button>
                       {enviado && (
                         <button
-                          onClick={() => persist({ ...data, cargas: { ...cargas, enviosPorRuta: { ...(cargas.enviosPorRuta || {}), [nombreRuta]: false } } })}
+                          onClick={() => persistCargas((cargasFrescas) => ({ ...cargasFrescas, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: false } }))}
                           title="Reactivar edición para esta ruta"
                           style={{ display: "flex", alignItems: "center", padding: "5px 8px", border: "none", borderLeft: "1px solid #3DDC97", background: "transparent", color: "#3DDC97", cursor: "pointer" }}
                         >
@@ -4226,7 +4399,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -4394,7 +4567,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             setTab={setObjTab}
             tabs={
               esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "rally_otc", "avisos"].includes(t.key))
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "rally_otc", "avisos"].includes(t.key))
                 : esSupervisor1
                 ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador")
                 : undefined
@@ -4588,6 +4761,8 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <CuponeraView data={data} persist={persist} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
           ) : objTab === "tiempos" ? (
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
+          ) : objTab === "unidades" ? (
+            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
@@ -4618,7 +4793,7 @@ function StaffView({ data, persist, stats, puesto, staffUsername, onFile, fileIn
             <AvisosView data={data} persist={persist} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} viewerKey={puesto} />
           ) : objTab === "cargas" ? (
             <CargasView
-              data={data} persist={persist} puesto={puesto} rol="staff"
+              data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
             />
           ) : objTab === "pwst" ? (
