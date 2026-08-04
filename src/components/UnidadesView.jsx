@@ -44,7 +44,9 @@ export const RUTAS_UNIDADES = [
   { id: "J207", grupo: "supervisor" },
   { id: "MERCH27", grupo: "supervisor2" }, { id: "MERCH28", grupo: "supervisor2" },
   { id: "MERCH29", grupo: "supervisor2" }, { id: "MERCH30", grupo: "supervisor2" },
-  { id: "STAFF", grupo: "gerente" },
+  { id: "SUPERVISOR-1", grupo: "supervisor" },
+  { id: "SUPERVISOR-2", grupo: "supervisor2" },
+  { id: "GERENTE", grupo: "gerente" },
 ];
 
 export const SEGURIDAD_UNIDADES_DEFAULT = { qr: true, gps: true, kmCamara: true, auditoria: true, probabilidadAuditoria: 20 };
