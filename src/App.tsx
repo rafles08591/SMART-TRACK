@@ -5241,31 +5241,114 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
             />
-          ) : objTab === "pwst" ? (
-            <div className="card" style={{ padding: 30, textAlign: "center" }}>
-              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
-              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
-                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
-              </p>
-              <a
-                href="https://client.powerstreet.cloud"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn"
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px", background: "#1E6FEB", borderColor: "#1E6FEB", color: "#FFFFFF" }}
-              >
-                Abrir PowerStreet
-              </a>
-              {puesto === "gerente" && (
-                <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
-                  <div className="card" style={{ padding: 14, background: "#131C30" }}>
-                    <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>ACCESO (solo visible para Gerente)</div>
-                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Usuario: <span className="mono">jmdrafgal</span></div>
-                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Contraseña: <span className="mono">Pwst12345*</span></div>
-                  </div>
-                </div>
-              )}
+         ) : objTab === "pwst" ? (
+  <div className="card" style={{ padding: 30, textAlign: "center" }}>
+    <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>
+      PWST · POWERSTREET
+    </div>
+    <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
+      Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
+    </p>
+
+    <a
+      href="https://client.powerstreet.cloud"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="btn"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        textDecoration: "none",
+        padding: "12px 24px",
+        background: "#1E6FEB",
+        borderColor: "#1E6FEB",
+        color: "#FFFFFF",
+      }}
+    >
+      Abrir PowerStreet
+    </a>
+
+    {puesto === "gerente" && (
+      <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
+        <div className="card" style={{ padding: 14, background: "#131C30" }}>
+          <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>
+            ACCESO (solo visible para Gerente)
+          </div>
+          <div style={{ fontSize: 13, color: "#E8EDF5" }}>
+            Usuario: <span className="mono">jmdrafgal</span>
+          </div>
+          <div style={{ fontSize: 13, color: "#E8EDF5" }}>
+            Contraseña: <span className="mono">Pwst12345*</span>
+          </div>
+        </div>
+
+        {/* ===== BOTÓN ACTUALIZAR DESDE POWERSTREET ===== */}
+        <div style={{ marginTop: 20 }}>
+          <button
+            className="btn"
+            style={{
+              background: "#1E6FEB",
+              borderColor: "#1E6FEB",
+              color: "#fff",
+              width: "100%",
+              padding: "12px 20px",
+            }}
+            onClick={async () => {
+              setAvanceDiaStatus("Actualizando desde PowerStreet... espera unos segundos");
+              try {
+                const res = await fetch(
+                  "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ trigger: "avance-dia" }),
+                  }
+                );
+
+                const result = await res.json();
+
+                if (result.success) {
+                  setAvanceDiaStatus(
+                    `Avance cargado: ${result.totalRegistros} registros desde PowerStreet`
+                  );
+                  await loadData();
+                } else {
+                  setAvanceDiaStatus(
+                    "Error: " + (result.message || "No se pudo actualizar")
+                  );
+                }
+              } catch (err) {
+                console.error(err);
+                setAvanceDiaStatus(
+                  "Error de conexión con n8n. Revisa que el workflow esté activo."
+                );
+              }
+            }}
+          >
+            Actualizar Avance del Día desde PowerStreet
+          </button>
+
+          {avanceDiaStatus && (
+            <div
+              style={{
+                marginTop: 12,
+                fontSize: 13,
+                color: avanceDiaStatus.startsWith("Avance cargado")
+                  ? "#3DDC97"
+                  : "#FF6B6B",
+                textAlign: "center",
+              }}
+            >
+              {avanceDiaStatus}
             </div>
+          )}
+        </div>
+        {/* ===== FIN BOTÓN ===== */}
+      </div>
+    )}
+  </div>
+) : (
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
