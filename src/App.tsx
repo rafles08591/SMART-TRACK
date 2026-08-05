@@ -12,7 +12,7 @@ import {
 import html2canvas from "html2canvas"; // npm install html2canvas
 import CuponeraView from "./components/CuponeraView";
 import TiemposView, { supabaseTiempos } from "./components/TiemposView";
-import UnidadesView, { unidadYaRegistradaHoy } from "./components/UnidadesView";
+import UnidadesView, { unidadYaRegistradaHoy, cloDeRuta, CLO_PVR, CLO_TEPIC } from "./components/UnidadesView";
 import { supabase } from "./supabaseClient";
 
 // ====== SUPABASE ======
@@ -38,6 +38,11 @@ const NOMBRES = {
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
   "LIQUIDACION- SULEMA PONCE": "Sulema Ponce",
+  "MERCH04": "Edgar Antonio Caldera López",
+  "MERCH31": "Kenia Nayrit Castillo López",
+  "MERCH32": "César Adrián Espinosa Ramos",
+  "MERCH62": "Omar Sandoval Madrigal",
+  "MERCH63": "Ángel Gabriel Robles Sandoval",
 };
 const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
@@ -48,6 +53,7 @@ const OBJETIVO_TABS = [
   { key: "cuponera", label: "CUPONERA", unit: "special" },
   { key: "tiempos", label: "TIEMPOS", unit: "special" },
   { key: "unidades", label: "UNIDADES", unit: "special" },
+  { key: "tepic", label: "TEPIC", unit: "special" },
   { key: "rutas", label: "RUTAS", unit: "special" },
   { key: "actividades_dia", label: "ACTIVIDADES DÍA", unit: "special" },
   { key: "actividades_semana", label: "ACTIVIDADES SEMANA", unit: "special" },
@@ -137,6 +143,12 @@ const USERS = [
   { username: "MERCH28", password: "2220", role: "merch" },
   { username: "MERCH29", password: "2220", role: "merch" },
   { username: "MERCH30", password: "2220", role: "merch" },
+  // --- CLO TEPIC ---
+  { username: "MERCH04", password: "3049", role: "merch" },
+  { username: "MERCH31", password: "3049", role: "merch" },
+  { username: "MERCH32", password: "3049", role: "merch" },
+  { username: "MERCH62", password: "3049", role: "merch" },
+  { username: "MERCH63", password: "3049", role: "merch" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -3333,7 +3345,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       <ObjetivoTabs
         tab={tab}
         setTab={setTab}
-        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos"].includes(t.key))}
+        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos", "tepic"].includes(t.key))}
         estadoTabs={{
           rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
           avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
@@ -3905,11 +3917,21 @@ function RallyOtcView({ data, persist, persistFresco, puesto, rol, vendedorActua
 // Filtra los avisos relevantes para un viewerKey dado (misma lógica que usa
 // AvisosView para decidir qué mostrar), respetando destinatarios y la
 // preferencia de recibir avisos.
+// Todos los usuarios merch (de ambos CLOs), para poder mandar un aviso
+// dirigido solo al equipo de merchandising sin listarlos uno por uno.
+const USUARIOS_MERCH = USERS.filter((u) => u.role === "merch").map((u) => u.username);
+const DESTINO_EQUIPO_MERCH = "equipo_merch";
+
 function avisosRelevantesPara(data, viewerKey, verComoRuta) {
   if ((viewerKey === "supervisor2" || viewerKey === "liquidacion") && data.preferenciasAvisos?.[viewerKey] === false) return [];
   const todosLosAvisos = data.avisos || [];
   const base = verComoRuta
-    ? todosLosAvisos.filter((a) => !a.destinatarios || a.destinatarios === "todos" || (Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta)))
+    ? todosLosAvisos.filter((a) => {
+        if (!a.destinatarios || a.destinatarios === "todos") return true;
+        // Aviso dirigido a todo el equipo de merchandising (PVR + TEPIC).
+        if (a.destinatarios === DESTINO_EQUIPO_MERCH) return USUARIOS_MERCH.includes(verComoRuta);
+        return Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta);
+      })
     : todosLosAvisos;
   // Si el que publicó excluyó explícitamente a Liquidación o Supervisor-2 de
   // ESE aviso en particular, no se lo mostramos a esos roles.
@@ -4020,7 +4042,7 @@ function TabsMerch({ data, persist, persistFresco, persistRevisionUnidad, persis
         .tab-pendiente-urgente { border: 2px solid #FF0000 !important; color: #FF0000 !important; font-weight: 800 !important; animation: parpadeoRojoIntensoTab 0.7s ease-in-out infinite; }
       `}</style>
       {tab === "unidades" ? (
-        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="merch" puesto={null} identidad={staffUsername} rutaPropia={staffUsername} />
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="merch" puesto={null} identidad={staffUsername} rutaPropia={staffUsername} cloFiltro={cloDeRuta(staffUsername)} />
       ) : (
         <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} verComoRuta={staffUsername} viewerKey={staffUsername} />
       )}
@@ -4052,7 +4074,7 @@ function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, v
   const [texto, setTexto] = useState("");
   const [archivo, setArchivo] = useState(null); // { url, nombre, esImagen }
   const [subiendo, setSubiendo] = useState(false);
-  const [paraTodos, setParaTodos] = useState(true);
+  const [modoDestino, setModoDestino] = useState("todos"); // "todos" | "equipo_merch" | "especificas"
   const [rutasElegidas, setRutasElegidas] = useState([]);
   const [excluirLiquidacion, setExcluirLiquidacion] = useState(false);
   const [excluirSupervisor2, setExcluirSupervisor2] = useState(false);
@@ -4091,8 +4113,8 @@ function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, v
       alert("Escribe un texto o adjunta una imagen/archivo.");
       return;
     }
-    if (!paraTodos && rutasElegidas.length === 0) {
-      alert("Elige al menos una ruta destinataria, o marca \"Para todos\".");
+    if (modoDestino === "especificas" && rutasElegidas.length === 0) {
+      alert("Elige al menos un destinatario, o cambia el modo de envío.");
       return;
     }
     const excluidos = [];
@@ -4106,13 +4128,16 @@ function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, v
       esImagen: archivo?.esImagen || false,
       autor: revisorNombre || "Staff",
       fecha: new Date().toISOString(),
-      destinatarios: paraTodos ? "todos" : rutasElegidas,
+      destinatarios:
+        modoDestino === "todos" ? "todos"
+        : modoDestino === "equipo_merch" ? DESTINO_EQUIPO_MERCH
+        : rutasElegidas,
       excluidos,
     };
     persistFresco((fresca) => ({ avisos: [nuevo, ...(fresca.avisos || [])] }));
     setTexto("");
     setArchivo(null);
-    setParaTodos(true);
+    setModoDestino("todos");
     setRutasElegidas([]);
     setExcluirLiquidacion(false);
     setExcluirSupervisor2(false);
@@ -4175,13 +4200,19 @@ function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, v
 
           <div style={{ marginBottom: 10 }}>
             <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>DESTINATARIOS</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <button className={paraTodos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setParaTodos(true)}>Para todos</button>
-              <button className={!paraTodos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setParaTodos(false)}>Elegir rutas específicas</button>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <button className={modoDestino === "todos" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("todos")}>Para todos</button>
+              <button className={modoDestino === "equipo_merch" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("equipo_merch")}>Solo mi equipo (merch PVR + Tepic)</button>
+              <button className={modoDestino === "especificas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("especificas")}>Elegir específicos</button>
             </div>
-            {!paraTodos && (
+            {modoDestino === "equipo_merch" && (
+              <div style={{ fontSize: 11.5, color: "#9AA7BD" }}>
+                Llega a: {USUARIOS_MERCH.join(", ")}
+              </div>
+            )}
+            {modoDestino === "especificas" && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {RUTAS.map((nombreRuta) => (
+                {[...RUTAS, ...USUARIOS_MERCH].map((nombreRuta) => (
                   <button key={nombreRuta} className={rutasElegidas.includes(nombreRuta) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRutaDestino(nombreRuta)}>
                     {nombreRuta}
                   </button>
@@ -4219,7 +4250,7 @@ function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, v
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {!verComoRuta && (
                     <span style={{ fontSize: 10, color: "#9AA7BD", border: "1px solid #1E2A42", borderRadius: 6, padding: "2px 8px" }}>
-                      Para: {!a.destinatarios || a.destinatarios === "todos" ? "Todos" : a.destinatarios.join(", ")}
+                      Para: {!a.destinatarios || a.destinatarios === "todos" ? "Todos" : a.destinatarios === DESTINO_EQUIPO_MERCH ? "Equipo merch (PVR + Tepic)" : a.destinatarios.join(", ")}
                     </span>
                   )}
                   {!verComoRuta && a.excluidos && a.excluidos.length > 0 && (
@@ -4861,6 +4892,8 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
   const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
   const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
   const [verTablaHoyCompleta, setVerTablaHoyCompleta] = useState(false);
+  const [pwstActualizando, setPwstActualizando] = useState(false);
+  const [pwstStatus, setPwstStatus] = useState("");
   const capturaPorRutaHoy = useCapturaImagen();
 
   function addVendedor() {
@@ -5010,9 +5043,9 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
             setTab={setObjTab}
             tabs={
               esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "rally_otc", "avisos"].includes(t.key))
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "rally_otc", "avisos"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic")
                 : undefined
             }
             estadoTabs={estadoTabsActividades}
@@ -5205,7 +5238,15 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
           ) : objTab === "tiempos" ? (
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
           ) : objTab === "unidades" ? (
-            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
+            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_PVR} />
+          ) : objTab === "tepic" ? (
+            <div>
+              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 4 }}>CLO TEPIC</div>
+              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 14 }}>
+                Unidades y revisiones del CLO Tepic. El reporte combinado de ambos CLOs está al final, junto a la bitácora.
+              </div>
+              <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_TEPIC} />
+            </div>
           ) : objTab === "creditos" ? (
             <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
@@ -5235,120 +5276,89 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
           ) : objTab === "rally_otc" ? (
             <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
-            <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} viewerKey={puesto} />
+            <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1 || esSupervisor2} revisorNombre={revisorNombre} viewerKey={puesto} />
           ) : objTab === "cargas" ? (
             <CargasView
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
             />
-         ) : objTab === "pwst" ? (
-  <div className="card" style={{ padding: 30, textAlign: "center" }}>
-    <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>
-      PWST · POWERSTREET
-    </div>
-    <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
-      Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
-    </p>
+          ) : objTab === "pwst" ? (
+            <div className="card" style={{ padding: 30, textAlign: "center" }}>
+              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
+              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
+                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
+              </p>
+              <a
+                href="https://client.powerstreet.cloud"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px", background: "#1E6FEB", borderColor: "#1E6FEB", color: "#FFFFFF" }}
+              >
+                Abrir PowerStreet
+              </a>
+              {puesto === "gerente" && (
+                <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
+                  <div className="card" style={{ padding: 14, background: "#131C30" }}>
+                    <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>ACCESO (solo visible para Gerente)</div>
+                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Usuario: <span className="mono">jmdrafgal</span></div>
+                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Contraseña: <span className="mono">Pwst12345*</span></div>
+                  </div>
 
-    <a
-      href="https://client.powerstreet.cloud"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="btn"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        textDecoration: "none",
-        padding: "12px 24px",
-        background: "#1E6FEB",
-        borderColor: "#1E6FEB",
-        color: "#FFFFFF",
-      }}
-    >
-      Abrir PowerStreet
-    </a>
-
-    {puesto === "gerente" && (
-      <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
-        <div className="card" style={{ padding: 14, background: "#131C30" }}>
-          <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>
-            ACCESO (solo visible para Gerente)
-          </div>
-          <div style={{ fontSize: 13, color: "#E8EDF5" }}>
-            Usuario: <span className="mono">jmdrafgal</span>
-          </div>
-          <div style={{ fontSize: 13, color: "#E8EDF5" }}>
-            Contraseña: <span className="mono">Pwst12345*</span>
-          </div>
-        </div>
-
-        {/* ===== BOTÓN ACTUALIZAR DESDE POWERSTREET ===== */}
-        <div style={{ marginTop: 20 }}>
-          <button
-            className="btn"
-            style={{
-              background: "#1E6FEB",
-              borderColor: "#1E6FEB",
-              color: "#fff",
-              width: "100%",
-              padding: "12px 20px",
-            }}
-            onClick={async () => {
-              setAvanceDiaStatus("Actualizando desde PowerStreet... espera unos segundos");
-              try {
-                const res = await fetch(
-                  "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ trigger: "avance-dia" }),
-                  }
-                );
-
-                const result = await res.json();
-
-                if (result.success) {
-                  setAvanceDiaStatus(
-                    `Avance cargado: ${result.totalRegistros} registros desde PowerStreet`
-                  );
-                  await loadData();
-                } else {
-                  setAvanceDiaStatus(
-                    "Error: " + (result.message || "No se pudo actualizar")
-                  );
-                }
-              } catch (err) {
-                console.error(err);
-                setAvanceDiaStatus(
-                  "Error de conexión con n8n. Revisa que el workflow esté activo."
-                );
-              }
-            }}
-          >
-            Actualizar Avance del Día desde PowerStreet
-          </button>
-
-          {avanceDiaStatus && (
-            <div
-              style={{
-                marginTop: 12,
-                fontSize: 13,
-                color: avanceDiaStatus.startsWith("Avance cargado")
-                  ? "#3DDC97"
-                  : "#FF6B6B",
-                textAlign: "center",
-              }}
-            >
-              {avanceDiaStatus}
+                  {/* ===== BOTÓN ACTUALIZAR DESDE POWERSTREET (n8n) — MODO PRUEBA =====
+                      Usa el webhook de PRUEBA de n8n ("webhook-test"). Ese webhook solo
+                      responde una vez cada que en el editor de n8n le des clic a
+                      "Listen for test event" antes de presionar este botón aquí.
+                      Cuando el workflow ya esté probado y funcionando, hay que:
+                        1) Activar el workflow en n8n (toggle "Active").
+                        2) Cambiar la URL de abajo de "/webhook-test/" a "/webhook/". */}
+                  <div style={{ marginTop: 20 }}>
+                    <div style={{ fontSize: 11, color: "#F2B134", marginBottom: 8, fontWeight: 600 }}>
+                      MODO PRUEBA — antes de presionar, activa "Listen for test event" en n8n
+                    </div>
+                    <button
+                      className="btn"
+                      style={{ background: "#1E6FEB", borderColor: "#1E6FEB", color: "#fff", width: "100%", padding: "12px 20px" }}
+                      disabled={pwstActualizando}
+                      onClick={async () => {
+                        setPwstActualizando(true);
+                        setPwstStatus("Actualizando desde PowerStreet... espera unos segundos");
+                        try {
+                          const res = await fetch(
+                            "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
+                            {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ trigger: "avance-dia" }),
+                            }
+                          );
+                          const result = await res.json();
+                          if (result.success) {
+                            setPwstStatus(`Avance cargado: ${result.totalRegistros} registros desde PowerStreet`);
+                            if (onRefresh) await onRefresh();
+                          } else {
+                            setPwstStatus("Error: " + (result.message || "No se pudo actualizar"));
+                          }
+                        } catch (err) {
+                          console.error(err);
+                          setPwstStatus("Error de conexión con n8n. Revisa que el workflow esté activo y escuchando el test.");
+                        } finally {
+                          setPwstActualizando(false);
+                        }
+                      }}
+                    >
+                      {pwstActualizando ? "Actualizando..." : "Actualizar Avance del Día desde PowerStreet (prueba)"}
+                    </button>
+                    {pwstStatus && (
+                      <div style={{ marginTop: 12, fontSize: 13, textAlign: "center", color: pwstStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
+                        {pwstStatus}
+                      </div>
+                    )}
+                  </div>
+                  {/* ===== FIN BOTÓN ===== */}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        {/* ===== FIN BOTÓN ===== */}
-      </div>
-    )}
-  </div>
-) : (
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
@@ -5685,64 +5695,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
               </div>
             )}
           </div>
-          {/* ========== BOTÓN ACTUALIZAR DESDE POWERSTREET ========== */}
-{puesto === "gerente" && (
-  <div className="card" style={{ padding: 18, marginBottom: 20, border: "1px solid #1E6FEB" }}>
-    <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>
-      ACTUALIZAR DESDE POWERSTREET
-    </div>
-    <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0, marginBottom: 14 }}>
-      Descarga automáticamente el reporte “Detalle de Ventas por Clientes” de hoy,
-      lo procesa y actualiza el Avance del Día en SMART-TRACK.
-    </p>
 
-    <button
-      className="btn"
-      style={{ background: "#1E6FEB", borderColor: "#1E6FEB", color: "#fff" }}
-      onClick={async () => {
-        setAvanceDiaStatus("Actualizando desde PowerStreet... espera unos segundos");
-        try {
-          const res = await fetch(
-            "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ trigger: "avance-dia" }),
-            }
-          );
-
-          const result = await res.json();
-
-          if (result.success) {
-            setAvanceDiaStatus(`Avance cargado: ${result.totalRegistros} registros desde PowerStreet`);
-            await loadData();
-          } else {
-            setAvanceDiaStatus("Error: " + (result.message || "No se pudo actualizar"));
-          }
-        } catch (err) {
-          console.error(err);
-          setAvanceDiaStatus("Error de conexión con n8n. Revisa que el workflow esté activo.");
-        }
-      }}
-    >
-      Actualizar desde PowerStreet
-    </button>
-
-    {avanceDiaStatus && (
-      <div style={{
-        marginTop: 14,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        fontSize: 13,
-        color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B"
-      }}>
-        {avanceDiaStatus.startsWith("Avance cargado") ? "✅" : "⚠️"} {avanceDiaStatus}
-      </div>
-    )}
-  </div>
-)}
-{/* ========== FIN BOTÓN POWERSTREET ========== */}
           <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
             <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>AVANCE DEL DÍA (REPORTE DEL SISTEMA)</div>
             <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
