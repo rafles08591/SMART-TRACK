@@ -1233,6 +1233,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   const [error, setError] = useState(null);
   const [salidasPorRuta, setSalidasPorRuta] = useState({});
   const [cargandoSalidas, setCargandoSalidas] = useState(true);
+  const [copiado, setCopiado] = useState(null);
   const hoy = todayISO();
 
   useEffect(() => {
@@ -1325,6 +1326,30 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     XLSX.writeFile(libro, `salida_hoy_unidades_${etiqueta}_${hoy}.xlsx`);
   }
 
+  // Arma la lista en el formato exacto que espera el script de autollenado
+  // de la plataforma de Kilometraje, y la copia al portapapeles para
+  // pegarla directo en el snippet (evita capturar 15 unidades a mano).
+  // Solo incluye unidades que YA tienen kilometraje capturado hoy.
+  async function copiarListaKilometrajes() {
+    const conKm = filas.filter(({ revision }) => revision?.operativo?.kilometraje);
+    if (conKm.length === 0) {
+      alert("Todavía no hay ningún kilometraje capturado hoy en este alcance.");
+      return;
+    }
+    const lineas = conKm.map(({ unidad, revision }) =>
+      `  "${unidad.placas}": ${Number(revision.operativo.kilometraje)},`
+    );
+    const texto = `const KILOMETRAJES = {\n${lineas.join("\n")}\n};`;
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(`Copiado: ${conKm.length} unidad${conKm.length === 1 ? "" : "es"}. Pégalo en el snippet y da Ctrl+Enter.`);
+      setTimeout(() => setCopiado(null), 6000);
+    } catch (e) {
+      // Si el navegador bloquea el portapapeles, se muestra para copiar a mano.
+      window.prompt("Copia esta lista (Ctrl+C):", texto);
+    }
+  }
+
   useEffect(() => {
     return () => { if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url); };
   }, [imagenLista]);
@@ -1334,6 +1359,9 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Salida de hoy · Unidad, Chofer, Km y Hora</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button className="ru-btn" onClick={copiarListaKilometrajes}>
+            <Gauge size={14} /> Copiar kilometrajes
+          </button>
           <button className="ru-btn" onClick={descargarExcelResumenHoy}><Download size={14} /> Excel</button>
           {generando && <span style={{ fontSize: 12, color: T.muted }}>Generando…</span>}
           {!generando && !imagenLista && (
@@ -1344,6 +1372,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
           )}
         </div>
       </div>
+      {copiado && <div style={{ fontSize: 12.5, color: T.ok, marginBottom: 10, fontWeight: 500 }}>{copiado}</div>}
       {error && <div style={{ fontSize: 12, color: T.late, marginBottom: 10 }}>No se pudo generar: {error}</div>}
 
       <div ref={capturaRef} className="ru-card" style={{ padding: 18, background: "#FFFFFF" }}>
@@ -1381,6 +1410,53 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Lista, para todo el staff, qué rutas/unidades resultaron elegidas HOY para
+// auditoría aleatoria y de qué punto se les pidió (o se les está pidiendo)
+// foto de evidencia. Solo se basa en revisiones YA ENVIADAS (nunca en
+// checklists a medias) — el sorteo en sí ocurre al momento de confirmar la
+// unidad, así que esta lista se va llenando conforme cada quien termina y
+// envía su revisión del día, no antes.
+function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
+  const hoy = todayISO();
+  const todosLosItems = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
+
+  const auditadasHoy = (revisiones || [])
+    .filter((r) => r.auditoriaAleatoria && String(r.fecha || "").slice(0, 10) === hoy)
+    .map((r) => {
+      const unidad = unidadesVisibles.find((u) => u.id === r.unidadId);
+      const itemInfo = r.evidenciaItem ? todosLosItems.find((it) => it.id === r.evidenciaItem.itemId) : null;
+      return { revision: r, unidad, itemLabel: itemInfo?.label || "Odómetro" };
+    })
+    .filter((a) => a.unidad); // solo dentro del alcance que este staff puede ver
+
+  if (auditadasHoy.length === 0) {
+    return (
+      <div className="ru-card" style={{ padding: "12px 14px", marginBottom: 20, background: T.primarySoft, borderColor: T.primary, fontSize: 12.5, color: T.primary }}>
+        Todavía no hay ninguna revisión auditada enviada hoy en este alcance. En cuanto alguien con auditoría aleatoria envíe su checklist, aparecerá aquí con el punto exacto que se le pidió como evidencia.
+      </div>
+    );
+  }
+
+  return (
+    <div className="ru-card" style={{ padding: 16, marginBottom: 20, borderColor: T.warn }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <AlertTriangle size={15} color={T.warn} />
+        <span className="ru-h" style={{ fontWeight: 600, fontSize: 14 }}>Auditorías de hoy</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {auditadasHoy.map(({ revision, unidad, itemLabel }) => (
+          <div key={revision.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, padding: "6px 0", borderTop: `1px solid ${T.border}` }}>
+            <span>
+              <strong>{unidad.ruta}</strong> · {unidad.placas}{unidad.conductor ? ` · ${unidad.conductor}` : ""}
+            </span>
+            <span style={{ color: T.warn, fontWeight: 500 }}>Evidencia pedida: {itemLabel}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1435,6 +1511,8 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
 
       {(!mostrarGestion || gestion === "tablero") && (
         <>
+          <AuditoriasDeHoy unidadesVisibles={unidadesVisibles} revisiones={revisiones} />
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
             {[
               { k: "ok", label: "Al día" },
@@ -1599,9 +1677,27 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
     { key: "auditoria", titulo: "Auditoría aleatoria", detalle: "Un porcentaje de revisiones se marca al azar y exige foto de evidencia del odómetro." },
   ];
 
+  // Reflejo local optimista: el toggle/slider se ve y se mueve al instante,
+  // sin esperar el viaje de ida y vuelta a Supabase (que ahora va en fila
+  // junto con cualquier otro cambio de configuración de Unidades).
+  const [local, setLocal] = useState({});
+  const valor = (key) => (local[key] !== undefined ? local[key] : seguridad[key]);
+
   function alternar(key) {
     if (!esGerente) return;
-    setSeguridad((prev) => ({ ...prev, [key]: !prev[key] }));
+    const nuevo = !valor(key);
+    setLocal((prev) => ({ ...prev, [key]: nuevo }));
+    setSeguridad((prev) => ({ ...prev, [key]: nuevo }));
+  }
+
+  // El slider dispara "onChange" muchísimas veces mientras se arrastra —
+  // solo se actualiza la vista en cada uno (instantáneo), y el guardado real
+  // a Supabase se manda apenas UNA vez, al soltar el control.
+  function moverSlider(valorNuevo) {
+    setLocal((prev) => ({ ...prev, probabilidadAuditoria: valorNuevo }));
+  }
+  function soltarSlider(valorNuevo) {
+    setSeguridad((prev) => ({ ...prev, probabilidadAuditoria: valorNuevo }));
   }
 
   return (
@@ -1631,13 +1727,13 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
               disabled={!esGerente}
               style={{
                 width: 44, height: 24, borderRadius: 12, border: "none", flexShrink: 0, marginLeft: 16,
-                background: seguridad[p.key] ? T.primary : T.border,
+                background: valor(p.key) ? T.primary : T.border,
                 cursor: esGerente ? "pointer" : "not-allowed", position: "relative", transition: "background .15s",
               }}
-              aria-label={`${seguridad[p.key] ? "Desactivar" : "Activar"} ${p.titulo}`}
+              aria-label={`${valor(p.key) ? "Desactivar" : "Activar"} ${p.titulo}`}
             >
               <span style={{
-                position: "absolute", top: 3, left: seguridad[p.key] ? 23 : 3, width: 18, height: 18,
+                position: "absolute", top: 3, left: valor(p.key) ? 23 : 3, width: 18, height: 18,
                 borderRadius: "50%", background: "white", transition: "left .15s",
               }} />
             </button>
@@ -1645,18 +1741,20 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
         ))}
       </div>
 
-      {seguridad.auditoria && (
+      {valor("auditoria") && (
         <div className="ru-card" style={{ padding: "14px 16px", marginTop: 14 }}>
           <div style={{ fontWeight: 500, fontSize: 13.5, marginBottom: 8 }}>Porcentaje de revisiones auditadas</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <input
               type="range" min="0" max="100" step="5"
-              value={seguridad.probabilidadAuditoria}
+              value={valor("probabilidadAuditoria")}
               disabled={!esGerente}
-              onChange={(e) => setSeguridad((prev) => ({ ...prev, probabilidadAuditoria: Number(e.target.value) }))}
+              onChange={(e) => moverSlider(Number(e.target.value))}
+              onMouseUp={(e) => soltarSlider(Number(e.target.value))}
+              onTouchEnd={(e) => soltarSlider(Number(e.target.value))}
               style={{ flex: 1 }}
             />
-            <span className="ru-mono" style={{ fontSize: 13.5, minWidth: 40 }}>{seguridad.probabilidadAuditoria}%</span>
+            <span className="ru-mono" style={{ fontSize: 13.5, minWidth: 40 }}>{valor("probabilidadAuditoria")}%</span>
           </div>
         </div>
       )}
