@@ -81,6 +81,13 @@ const MARCAS_DIA = [
 // por debajo de este % del ritmo diario necesario de OPEN. Ajustable si hace falta.
 const UMBRAL_BAJO_DESEMPENO = 0.5;
 
+// Umbral mínimo de "visitas efectivas" en Mesa de Control por ruta: si no se
+// supera, la tarjeta de VISITAS EFECTIVAS parpadea en rojo intenso. J202 no
+// tiene umbral definido todavía (no se especificó), así que nunca parpadea.
+const UMBRAL_VISITAS_EFECTIVAS_MC = {
+  J201: 39, J202: 41, J203: 41, J204: 41, J205: 41, J206: 41, J207: 39,
+};
+
 // Mapeo de código de artículo -> etiqueta de marca, usado al importar el reporte
 // crudo del sistema (NUR, Vendedor, Fecha, Cliente, Potencial, Articulo, Paquetes, Contado $, Credito $, Total $)
 const ARTICULO_MARCA_LABEL = {
@@ -759,9 +766,6 @@ export default function App() {
         }
       });
       const visitasEfectivas = visitasSueltas + Object.values(clientesPorDia).reduce((s, set) => s + set.size, 0);
-      const volumenEstrategicas = propias
-        .filter((r) => r.estrategica)
-        .reduce((s, r) => s + (Number(r.monto) || 0), 0);
 
       const marcasOpen = {};
       MARCAS_OPEN.forEach((m) => {
@@ -770,6 +774,12 @@ export default function App() {
           .reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
         marcasOpen[m.key] = buildMarca(v.objetivos?.[m.key] || 0, vendido);
       });
+
+      // "Marcas estratégicas" = suma de paquetes vendidos de las 4 marcas
+      // núcleo (Ice Mix, Bloss Mix, Summ Mix, Faronet) del periodo. Antes
+      // dependía de un campo "estrategica" que ningún importador llega a
+      // activar nunca, así que siempre marcaba 0.
+      const volumenEstrategicas = MARCAS_OPEN.reduce((s, m) => s + marcasOpen[m.key].vendido, 0);
 
       const extraChampBlossSumm = propias
         .filter((r) => r.marca.trim().toLowerCase() === MARCA_CHAM_EXTRA_BLOSS_SUMM)
@@ -1853,6 +1863,11 @@ export default function App() {
         input, select { background:#0F172A; border:1px solid #2A3852; color:#E8EDF5; border-radius:8px; padding:8px 10px; }
         @keyframes splashFade { 0% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes parpadeoRojoIntensoCard {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.9); background-color: rgba(255,0,0,0.10); }
+          50% { box-shadow: 0 0 0 8px rgba(255,0,0,0); background-color: rgba(255,0,0,0.35); }
+        }
+        .card-alerta-intensa { border: 2px solid #FF0000 !important; animation: parpadeoRojoIntensoCard 0.7s ease-in-out infinite; }
       `}</style>
 
       {showSplash && (
@@ -2537,6 +2552,7 @@ function TablaPorRutaHoy({ porVendedor, peorVendedorNombre }) {
           <th>Volumen</th>
           {MARCAS_DIA.map((m) => <th key={m.key}>{m.label}</th>)}
           <th>OTC</th>
+          <th>¿Vendió OTC?</th>
           <th>Sin Vuala</th>
           <th>Visitas</th>
           <th>Efectividad</th>
@@ -2559,6 +2575,16 @@ function TablaPorRutaHoy({ porVendedor, peorVendedorNombre }) {
               </td>
             ))}
             <td style={{ color: metaColor(v.hoy.otc.vendido, v.hoy.otc.objetivo) }}>{money(v.hoy.otc.vendido)}</td>
+            <td>
+              <span style={{
+                display: "inline-block", minWidth: 28, textAlign: "center", borderRadius: 6, padding: "2px 6px",
+                background: v.hoy.otc.vendido > 0 ? "#3DDC9733" : "#FF6B6B33",
+                color: v.hoy.otc.vendido > 0 ? "#3DDC97" : "#FF6B6B",
+                fontWeight: 600,
+              }}>
+                {v.hoy.otc.vendido > 0 ? "Sí" : "No"}
+              </span>
+            </td>
             <td>
               <span style={{
                 display: "inline-block", minWidth: 28, textAlign: "center", borderRadius: 6, padding: "2px 6px",
@@ -2655,6 +2681,10 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
     ? tiempos.ingreso_clo_fin.ts - tiempos.salida_ruta.ts
     : null;
 
+  const codigoRutaMC = (nombreRuta || "").replace("RUTA ", "").trim();
+  const umbralVisitasMC = UMBRAL_VISITAS_EFECTIVAS_MC[codigoRutaMC];
+  const visitasEfectivasBajoUmbral = umbralVisitasMC != null && visitasEfectivas <= umbralVisitasMC;
+
   return (
     <div className="card" style={{ padding: 24, textAlign: "center", border: "1px solid #2A3852" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 4 }}>
@@ -2707,9 +2737,12 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS TOTALES</div>
           <div className="mono" style={{ fontSize: 22 }}>{todos.length}</div>
         </div>
-        <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
+        <div className={`card ${visitasEfectivasBajoUmbral ? "card-alerta-intensa" : ""}`} style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VISITAS EFECTIVAS</div>
-          <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{visitasEfectivas}</div>
+          <div className="mono" style={{ fontSize: 22, color: visitasEfectivasBajoUmbral ? "#FF0000" : "#3DDC97" }}>{visitasEfectivas}</div>
+          {umbralVisitasMC != null && (
+            <div style={{ fontSize: 10, color: visitasEfectivasBajoUmbral ? "#FF6B6B" : "#9AA7BD", marginTop: 2 }}>Meta: más de {umbralVisitasMC}</div>
+          )}
         </div>
         <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
           <div style={{ fontSize: 11, color: "#9AA7BD" }}>VOLUMEN TOTAL</div>
@@ -2747,6 +2780,14 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
                 {money(vendedorStats.hoy?.otc?.vendido)} / {money(vendedorStats.hoy?.otc?.objetivo)}
               </div>
             </div>
+            {vendedorStats.hoy && (
+              <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
+                <div style={{ fontSize: 11, color: "#9AA7BD" }}>¿VENDIÓ SIN VUALA?</div>
+                <div className="mono" style={{ fontSize: 18, color: vendedorStats.hoy.otcSinVuala.cumple ? "#3DDC97" : "#FF6B6B" }}>
+                  {vendedorStats.hoy.otcSinVuala.cumple ? "Sí" : "No"} · {vendedorStats.hoy.otcSinVuala.piezas} pza.
+                </div>
+              </div>
+            )}
             {vendedorStats.hoy && (
               <div className="card" style={{ padding: 14, flex: "1 1 100%" }}>
                 <div style={{ fontSize: 11, color: "#9AA7BD" }}>CALIFICACIÓN · EFECTIVIDAD DEL DÍA (TODOS LOS INDICADORES)</div>
