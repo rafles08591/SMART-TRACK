@@ -40,16 +40,35 @@ const TESSERACT_LINK = "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js";
 // Catálogo fijo de rutas/identidades que participan en Revisión de Unidades.
 // "grupo" usa los mismos valores de "puesto" que ya existen en el resto de
 // la app (supervisor = Supervisor-1, supervisor2 = Supervisor-2, gerente).
+// "clo" separa las plazas: cada CLO ve solo lo suyo, pero comparten todo el
+// mecanismo (checklist, evidencias, seguridad, limpieza). Para abrir un CLO
+// nuevo basta agregar sus rutas aquí con su clave de clo.
+export const CLO_PVR = "PVR";
+export const CLO_TEPIC = "TEPIC";
+
 export const RUTAS_UNIDADES = [
-  { id: "J201", grupo: "supervisor" }, { id: "J202", grupo: "supervisor" }, { id: "J203", grupo: "supervisor" },
-  { id: "J204", grupo: "supervisor" }, { id: "J205", grupo: "supervisor" }, { id: "J206", grupo: "supervisor" },
-  { id: "J207", grupo: "supervisor" },
-  { id: "MERCH27", grupo: "supervisor2" }, { id: "MERCH28", grupo: "supervisor2" },
-  { id: "MERCH29", grupo: "supervisor2" }, { id: "MERCH30", grupo: "supervisor2" },
-  { id: "SUPERVISOR-1", grupo: "supervisor" },
-  { id: "SUPERVISOR-2", grupo: "supervisor2" },
-  { id: "GERENTE", grupo: "gerente" },
+  { id: "J201", grupo: "supervisor", clo: CLO_PVR }, { id: "J202", grupo: "supervisor", clo: CLO_PVR },
+  { id: "J203", grupo: "supervisor", clo: CLO_PVR }, { id: "J204", grupo: "supervisor", clo: CLO_PVR },
+  { id: "J205", grupo: "supervisor", clo: CLO_PVR }, { id: "J206", grupo: "supervisor", clo: CLO_PVR },
+  { id: "J207", grupo: "supervisor", clo: CLO_PVR },
+  { id: "MERCH27", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH28", grupo: "supervisor2", clo: CLO_PVR },
+  { id: "MERCH29", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH30", grupo: "supervisor2", clo: CLO_PVR },
+  // --- CLO TEPIC ---
+  { id: "MERCH04", grupo: "supervisor2", clo: CLO_TEPIC },
+  { id: "MERCH31", grupo: "supervisor2", clo: CLO_TEPIC },
+  { id: "MERCH32", grupo: "supervisor2", clo: CLO_TEPIC },
+  { id: "MERCH62", grupo: "supervisor2", clo: CLO_TEPIC },
+  { id: "MERCH63", grupo: "supervisor2", clo: CLO_TEPIC },
+  // --- Posiciones de staff ---
+  { id: "SUPERVISOR-1", grupo: "supervisor", clo: CLO_PVR },
+  { id: "SUPERVISOR-2", grupo: "supervisor2", clo: CLO_PVR },
+  { id: "GERENTE", grupo: "gerente", clo: CLO_PVR },
 ];
+
+// CLO al que pertenece una ruta (por defecto PVR si no se encuentra).
+export function cloDeRuta(rutaId) {
+  return RUTAS_UNIDADES.find((r) => r.id === rutaId)?.clo || CLO_PVR;
+}
 
 export const SEGURIDAD_UNIDADES_DEFAULT = { qr: true, gps: true, kmCamara: true, auditoria: true, probabilidadAuditoria: 20 };
 
@@ -251,6 +270,7 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
         Fecha: new Date(r.fecha).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" }),
         Placas: u?.placas || "",
         Ruta: u?.ruta || r.ruta || "",
+        CLO: cloDeRuta(u?.ruta || r.ruta),
         Conductor: u?.conductor || "",
         "Capturó": r.capturadoPor || "",
         "QR verificado": r.qrVerificado ? "Sí" : "No",
@@ -273,7 +293,7 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
     });
   const hoja = XLSX.utils.json_to_sheet(filas);
   hoja["!cols"] = [
-    { wch: 11 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 18 },
+    { wch: 11 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 18 },
     { wch: 13 }, { wch: 16 }, { wch: 16 }, { wch: 12 },
     { wch: 13 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 12 }, { wch: 15 }, { wch: 28 }, { wch: 30 },
   ];
@@ -327,7 +347,7 @@ function DialDias({ dias }) {
  * - rutaPropia: código de ruta del conductor (ej. "J201" o "MERCH27"); solo
  *   aplica para rol "vendedor" o "merch".
  */
-export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, rol, puesto, identidad, rutaPropia }) {
+export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, rol, puesto, identidad, rutaPropia, cloFiltro = CLO_PVR }) {
   useEffect(() => {
     if (!document.getElementById("ru-fonts")) {
       const link = document.createElement("link");
@@ -414,20 +434,30 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const grupoFijo = rol === "staff" ? puesto : null;
   const alcanceIrrestricto = esLiquidacion || (esGerente && scopeGerente === "todos");
   const rutasVisibles = useMemo(() => {
-    if (esLiquidacion) return RUTAS_UNIDADES;
-    if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") return RUTAS_UNIDADES.filter((r) => r.grupo === grupoFijo);
-    if (esGerente && scopeGerente !== "todos") return RUTAS_UNIDADES.filter((r) => r.grupo === scopeGerente);
-    return RUTAS_UNIDADES;
-  }, [grupoFijo, esGerente, scopeGerente, esLiquidacion]);
+    // Primero se acota al CLO que se está consultando (PVR o TEPIC): cada
+    // plaza se ve por separado. "todos" solo lo usa el reporte combinado.
+    const delClo = cloFiltro === "todos" ? RUTAS_UNIDADES : RUTAS_UNIDADES.filter((r) => r.clo === cloFiltro);
+    if (esLiquidacion) return delClo;
+    if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") return delClo.filter((r) => r.grupo === grupoFijo);
+    if (esGerente && scopeGerente !== "todos") return delClo.filter((r) => r.grupo === scopeGerente);
+    return delClo;
+  }, [grupoFijo, esGerente, scopeGerente, esLiquidacion, cloFiltro]);
 
   // Con "Todos" (Gerente o Liquidación) se muestran TODAS las unidades sin
   // filtrar por ruta — así, si alguna unidad quedó con una ruta que ya no
   // existe en el catálogo (por ejemplo, si el catálogo de rutas cambió),
   // sigue apareciendo aquí en vez de desaparecer en silencio.
-  const unidadesVisibles = useMemo(
-    () => (alcanceIrrestricto ? unidades : unidades.filter((u) => rutasVisibles.some((r) => r.id === u.ruta))),
-    [unidades, rutasVisibles, alcanceIrrestricto]
-  );
+  // Unidades visibles: siempre acotadas al CLO que se está consultando. Con
+  // alcance completo (Gerente en "Todos" o Liquidación) se agregan además las
+  // unidades cuya ruta ya no exista en el catálogo, para que no desaparezcan
+  // en silencio — pero solo al ver el CLO base, no al consultar otra plaza.
+  const unidadesVisibles = useMemo(() => {
+    if (alcanceIrrestricto && cloFiltro === "todos") return unidades;
+    const enRutasVisibles = unidades.filter((u) => rutasVisibles.some((r) => r.id === u.ruta));
+    if (!alcanceIrrestricto || cloFiltro !== CLO_PVR) return enRutasVisibles;
+    const huerfanas = unidades.filter((u) => !RUTAS_UNIDADES.some((r) => r.id === u.ruta));
+    return [...enRutasVisibles, ...huerfanas];
+  }, [unidades, rutasVisibles, alcanceIrrestricto, cloFiltro]);
 
   const resumen = useMemo(() => {
     const out = { ok: 0, pendiente: 0, atrasada: 0 };
@@ -505,6 +535,8 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
         revisiones={revisiones}
         persistConfigUnidades={persistConfigUnidades}
         alcanceIrrestricto={alcanceIrrestricto}
+        cloFiltro={cloFiltro}
+        puedeReporteCombinado={esGerente || puesto === "supervisor2"}
       />
     </div>
   );
@@ -566,6 +598,11 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
 
   const unidadesRuta = unidades.filter((u) => u.ruta === ruta);
   const unidadActual = unidades.find((u) => u.id === unidadId);
+
+  // Las rutas de reparto (grupo de Supervisor-1: J201-J207) capturan su
+  // kilometraje al marcar "Salida a ruta" en la pestaña TIEMPOS, así que
+  // aquí no se les vuelve a pedir — se les evita capturarlo dos veces.
+  const kmSeCapturaEnTiempos = RUTAS_UNIDADES.find((r) => r.id === ruta)?.grupo === "supervisor";
 
   const stepKeys = useMemo(() => {
     const keys = ["confirmar"];
@@ -692,7 +729,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setEnviado(true);
   }
 
-  const puedeEnviar = (!esAuditoria || !!foto) && !!kilometraje && !subiendoFoto;
+  const puedeEnviar = (!esAuditoria || !!foto) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto;
 
   // Todas las respuestas son obligatorias: no se puede avanzar de un paso
   // con checklist (físico, niveles, documentación) si falta contestar
@@ -830,7 +867,11 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
             </div>
 
             <Campo label="Kilometraje actual">
-              {!seguridad.kmCamara ? (
+              {kmSeCapturaEnTiempos ? (
+                <div style={{ fontSize: 12.5, color: T.muted, background: T.primarySoft, borderRadius: 8, padding: "10px 12px" }}>
+                  Esta ruta captura su kilometraje en la pestaña <strong style={{ color: T.primary }}>TIEMPOS</strong>, al marcar la salida a ruta. Aquí no hace falta capturarlo otra vez.
+                </div>
+              ) : !seguridad.kmCamara ? (
                 <input className="ru-input ru-mono" type="number" placeholder="Ej. 42150" value={kilometraje} onChange={(e) => setKilometraje(e.target.value)} />
               ) : kilometraje ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1225,8 +1266,8 @@ async function obtenerSalidasRutaHoy(fecha) {
     const { data: activoRow } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "board-activo").maybeSingle();
     if (activoRow?.value?.fecha === fecha && activoRow.value.rutas) {
       Object.entries(activoRow.value.rutas).forEach(([ruta, info]) => {
-        const ts = info?.areas?.salida_ruta?.ts;
-        if (ts) mapa[ruta] = ts;
+        const salida = info?.areas?.salida_ruta;
+        if (salida?.ts) mapa[ruta] = { ts: salida.ts, km: salida.km ?? null };
       });
     }
   } catch (e) {
@@ -1239,8 +1280,8 @@ async function obtenerSalidasRutaHoy(fecha) {
       .filter((h) => h.fecha === fecha)
       .forEach((h) => {
         if (mapa[h.ruta] == null) {
-          const ts = h.areas?.salida_ruta?.ts;
-          if (ts) mapa[h.ruta] = ts;
+          const salida = h.areas?.salida_ruta;
+          if (salida?.ts) mapa[h.ruta] = { ts: salida.ts, km: salida.km ?? null };
         }
       });
   } catch (e) {
@@ -1336,19 +1377,32 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     document.body.removeChild(link);
   }
 
+  // El kilometraje puede venir de dos lados: las rutas de reparto lo
+  // capturan en TIEMPOS al marcar la salida a ruta, y el resto lo captura en
+  // su propio checklist de Unidades. Esta función devuelve el que aplique.
+  function kmDeUnidad(unidad, revision) {
+    const kmTiempos = salidasPorRuta[unidad.ruta]?.km;
+    if (kmTiempos != null) return Number(kmTiempos);
+    const kmChecklist = revision?.operativo?.kilometraje;
+    return kmChecklist ? Number(kmChecklist) : null;
+  }
+
   // Excel del resumen de hoy: SIEMPRE una fila por cada unidad visible
   // (igual que la tabla/imagen de arriba), aunque todavía no tenga ningún
   // registro — así nunca sale en blanco, a diferencia de la bitácora
   // detallada de más abajo, que solo lista revisiones ya hechas.
   function descargarExcelResumenHoy() {
-    const filasExcel = filas.map(({ unidad, revision }) => ({
-      Unidad: unidad.placas,
-      Ruta: unidad.ruta,
-      Chofer: unidad.conductor || revision?.capturadoPor || "",
-      "Km": revision?.operativo?.kilometraje || "",
-      "Hora de salida": salidasPorRuta[unidad.ruta] ? new Date(salidasPorRuta[unidad.ruta]).toLocaleTimeString("es-MX") : "Sin salida registrada",
-      "Checklist de hoy": revision ? "Registrado" : "Sin registro",
-    }));
+    const filasExcel = filas.map(({ unidad, revision }) => {
+      const km = kmDeUnidad(unidad, revision);
+      return {
+        Unidad: unidad.placas,
+        Ruta: unidad.ruta,
+        Chofer: unidad.conductor || revision?.capturadoPor || "",
+        "Km": km ?? "",
+        "Hora de salida": salidasPorRuta[unidad.ruta]?.ts ? new Date(salidasPorRuta[unidad.ruta].ts).toLocaleTimeString("es-MX") : "Sin salida registrada",
+        "Checklist de hoy": revision ? "Registrado" : "Sin registro",
+      };
+    });
     const hoja = XLSX.utils.json_to_sheet(filasExcel);
     hoja["!cols"] = [{ wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 18 }, { wch: 16 }];
     const libro = XLSX.utils.book_new();
@@ -1361,14 +1415,14 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   // consola/snippet de la plataforma de Kilometraje — sin tener que armar
   // ni editar nada a mano.
   async function copiarListaKilometrajes() {
-    const conKm = filas.filter(({ revision }) => revision?.operativo?.kilometraje);
+    const conKm = filas
+      .map(({ unidad, revision }) => ({ unidad, km: kmDeUnidad(unidad, revision) }))
+      .filter(({ km }) => km != null);
     if (conKm.length === 0) {
       alert("Todavía no hay ningún kilometraje capturado hoy en este alcance.");
       return;
     }
-    const lineas = conKm.map(({ unidad, revision }) =>
-      `  "${unidad.placas}": ${Number(revision.operativo.kilometraje)},`
-    );
+    const lineas = conKm.map(({ unidad, km }) => `  "${unidad.placas}": ${km},`);
     const texto = `/* AUTOLLENADO DE KILOMETRAJES — generado por SMART-TRACK el ${hoy}
    Pégalo en la consola (F12) de KilometrajeVehiculo.php y da Enter.
    NO guarda nada: revisa los números y da clic en GUARDAR KM tú mismo. */
@@ -1460,14 +1514,15 @@ ${lineas.join("\n")}
             </thead>
             <tbody>
               {filas.map(({ unidad, revision }) => {
-                const tsSalida = salidasPorRuta[unidad.ruta];
+                const tsSalida = salidasPorRuta[unidad.ruta]?.ts;
+                const km = kmDeUnidad(unidad, revision);
                 return (
                   <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
                     <td style={{ padding: "8px 10px", fontWeight: 600 }}>{unidad.ruta}</td>
                     <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
                     <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
                     <td className="ru-mono" style={{ padding: "8px 10px" }}>
-                      {revision?.operativo?.kilometraje ? `${Number(revision.operativo.kilometraje).toLocaleString("es-MX")} km` : "—"}
+                      {km != null ? `${km.toLocaleString("es-MX")} km` : "—"}
                     </td>
                     <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : T.late }}>
                       {tsSalida
@@ -1532,7 +1587,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   );
 }
 
-function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto }) {
+function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, puedeReporteCombinado }) {
   const [gestion, setGestion] = useState("tablero"); // tablero | asignar | seguridad
   const mostrarGestion = esGerente; // solo Gerente puede asignar unidades y tocar seguridad; el resto solo ve el tablero
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
@@ -1639,12 +1694,23 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 0 10px" }}>
             <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Bitácora reciente</div>
-            <button
-              className="ru-btn"
-              onClick={() => exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, esGerente ? "gerente" : "supervisor", alcanceIrrestricto)}
-            >
-              <Download size={14} /> Descargar histórico completo (Excel)
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {puedeReporteCombinado && (
+                <button
+                  className="ru-btn"
+                  onClick={() => exportarBitacoraExcel(revisiones, unidades, unidades, "ambos_clos", true)}
+                  title="Incluye todas las unidades de PVR y TEPIC en un solo archivo"
+                >
+                  <Download size={14} /> Reporte de ambos CLOs (Excel)
+                </button>
+              )}
+              <button
+                className="ru-btn"
+                onClick={() => exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, esGerente ? "gerente" : "supervisor", alcanceIrrestricto)}
+              >
+                <Download size={14} /> Descargar histórico completo (Excel)
+              </button>
+            </div>
           </div>
           <div className="ru-card" style={{ overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
