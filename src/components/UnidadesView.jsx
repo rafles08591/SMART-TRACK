@@ -82,6 +82,21 @@ function diasDesde(fechaISO) {
   return Math.floor((hoy - f) / (1000 * 60 * 60 * 24));
 }
 
+// Devuelve las etiquetas de los puntos que el conductor marcó como
+// "Atención" en una revisión, para poder mostrar en la bitácora QUÉ es lo
+// que necesita atención, no solo que algo la necesita.
+function puntosConAtencion(revision) {
+  const todos = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
+  const grupos = [revision?.fisico, revision?.niveles, revision?.documentacion];
+  const ids = [];
+  grupos.forEach((g) => {
+    Object.entries(g || {}).forEach(([id, valor]) => {
+      if (valor === "atencion") ids.push(id);
+    });
+  });
+  return ids.map((id) => todos.find((it) => it.id === id)?.label || id);
+}
+
 function estadoPorDias(dias) {
   if (dias === null || dias === undefined) return "atrasada";
   if (dias <= 0) return "ok";
@@ -246,6 +261,7 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
         "Kilometraje": r.operativo?.kilometraje || "",
         "Combustible": r.operativo?.combustible || "",
         "Requiere atención": r.requiereAtencion ? "Sí" : "No",
+        "Puntos con atención": puntosConAtencion(r).join(" · ") || "",
         "Observaciones": r.observaciones || "",
       };
     });
@@ -253,7 +269,7 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
   hoja["!cols"] = [
     { wch: 11 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 18 },
     { wch: 13 }, { wch: 16 }, { wch: 16 }, { wch: 12 },
-    { wch: 13 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 12 }, { wch: 15 }, { wch: 30 },
+    { wch: 13 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 12 }, { wch: 15 }, { wch: 28 }, { wch: 30 },
   ];
   const libro = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(libro, hoja, "Bitácora");
@@ -1255,13 +1271,20 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   }, [hoy]);
 
   const filas = useMemo(() => {
+    // Orden por ruta siguiendo el catálogo (J201, J202, ... MERCH27-30, y al
+    // final las posiciones de staff). Las unidades con una ruta que ya no
+    // exista en el catálogo se van hasta el final, para que no se pierdan.
+    const ordenRuta = (ruta) => {
+      const idx = RUTAS_UNIDADES.findIndex((r) => r.id === ruta);
+      return idx === -1 ? RUTAS_UNIDADES.length : idx;
+    };
     return unidadesVisibles
       .map((u) => {
         const revisionesHoy = revisiones.filter((r) => r.unidadId === u.id && String(r.fecha || "").slice(0, 10) === hoy);
         const ultima = revisionesHoy.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0] || null;
         return { unidad: u, revision: ultima };
       })
-      .sort((a, b) => (a.revision ? -1 : 1) - (b.revision ? -1 : 1)); // los que sí registraron, primero
+      .sort((a, b) => ordenRuta(a.unidad.ruta) - ordenRuta(b.unidad.ruta));
   }, [unidadesVisibles, revisiones, hoy]);
 
   async function generarImagen() {
@@ -1326,10 +1349,10 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     XLSX.writeFile(libro, `salida_hoy_unidades_${etiqueta}_${hoy}.xlsx`);
   }
 
-  // Arma la lista en el formato exacto que espera el script de autollenado
-  // de la plataforma de Kilometraje, y la copia al portapapeles para
-  // pegarla directo en el snippet (evita capturar 15 unidades a mano).
-  // Solo incluye unidades que YA tienen kilometraje capturado hoy.
+  // Arma el SCRIPT COMPLETO de autollenado (con los kilometrajes de hoy ya
+  // embebidos) y lo copia al portapapeles, listo para pegar directo en la
+  // consola/snippet de la plataforma de Kilometraje — sin tener que armar
+  // ni editar nada a mano.
   async function copiarListaKilometrajes() {
     const conKm = filas.filter(({ revision }) => revision?.operativo?.kilometraje);
     if (conKm.length === 0) {
@@ -1339,14 +1362,53 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     const lineas = conKm.map(({ unidad, revision }) =>
       `  "${unidad.placas}": ${Number(revision.operativo.kilometraje)},`
     );
-    const texto = `const KILOMETRAJES = {\n${lineas.join("\n")}\n};`;
+    const texto = `/* AUTOLLENADO DE KILOMETRAJES — generado por SMART-TRACK el ${hoy}
+   Pégalo en la consola (F12) de KilometrajeVehiculo.php y da Enter.
+   NO guarda nada: revisa los números y da clic en GUARDAR KM tú mismo. */
+const KILOMETRAJES = {
+${lineas.join("\n")}
+};
+
+(function () {
+  "use strict";
+  const COL_PLACA = 0, COL_INPUT = 4;
+  function escribir(input, valor) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, String(valor));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+  }
+  const norm = (t) => String(t || "").trim().toUpperCase();
+  const filas = Array.from(document.querySelectorAll("tbody tr"));
+  if (filas.length === 0) { console.error("No se encontro ninguna fila. Ya cargo la tabla y elegiste el Clo?"); return; }
+  const pend = new Map(Object.entries(KILOMETRAJES).map(([p, k]) => [norm(p), k]));
+  const ok = [], sinInput = [];
+  filas.forEach((fila) => {
+    const celdas = fila.querySelectorAll("td");
+    if (celdas.length <= COL_INPUT) return;
+    const placa = norm(celdas[COL_PLACA].textContent);
+    if (!pend.has(placa)) return;
+    const input = celdas[COL_INPUT].querySelector("input");
+    if (!input) { sinInput.push(placa); return; }
+    escribir(input, pend.get(placa));
+    ok.push(placa + " -> " + pend.get(placa));
+    pend.delete(placa);
+  });
+  console.log("%c=== AUTOLLENADO DE KILOMETRAJES ===", "font-weight:bold;font-size:14px");
+  if (ok.length) { console.log("%cLlenadas (" + ok.length + "):", "color:green;font-weight:bold"); ok.forEach((l) => console.log("   " + l)); }
+  else console.warn("No se lleno ninguna fila. Revisa que las placas coincidan con las de la tabla.");
+  if (sinInput.length) console.warn("Sin campo editable: " + sinInput.join(", "));
+  if (pend.size) console.warn("No encontradas en esta pagina (" + pend.size + "): " + [...pend.keys()].join(", "));
+  console.log("%cREVISA los numeros y da clic en GUARDAR KM.", "color:#0F6E56;font-weight:bold;font-size:13px");
+})();`;
     try {
       await navigator.clipboard.writeText(texto);
-      setCopiado(`Copiado: ${conKm.length} unidad${conKm.length === 1 ? "" : "es"}. Pégalo en el snippet y da Ctrl+Enter.`);
-      setTimeout(() => setCopiado(null), 6000);
+      setCopiado(`Script copiado con ${conKm.length} unidad${conKm.length === 1 ? "" : "es"}. Pégalo en la consola de la plataforma de Kilometraje y da Enter.`);
+      setTimeout(() => setCopiado(null), 8000);
     } catch (e) {
       // Si el navegador bloquea el portapapeles, se muestra para copiar a mano.
-      window.prompt("Copia esta lista (Ctrl+C):", texto);
+      window.prompt("Copia el script (Ctrl+C):", texto);
     }
   }
 
@@ -1360,7 +1422,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
         <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Salida de hoy · Unidad, Chofer, Km y Hora</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button className="ru-btn" onClick={copiarListaKilometrajes}>
-            <Gauge size={14} /> Copiar kilometrajes
+            <Gauge size={14} /> Copiar script de KM
           </button>
           <button className="ru-btn" onClick={descargarExcelResumenHoy}><Download size={14} /> Excel</button>
           {generando && <span style={{ fontSize: 12, color: T.muted }}>Generando…</span>}
@@ -1384,7 +1446,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg, textAlign: "left" }}>
-                {["Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
+                {["Ruta", "Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
                   <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
                 ))}
               </tr>
@@ -1394,6 +1456,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
                 const tsSalida = salidasPorRuta[unidad.ruta];
                 return (
                   <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{unidad.ruta}</td>
                     <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
                     <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
                     <td className="ru-mono" style={{ padding: "8px 10px" }}>
@@ -1617,9 +1680,22 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                           </div>
                         </td>
                         <td style={{ padding: "8px 12px" }}>
-                          {r.requiereAtencion
-                            ? <span style={{ color: T.late, fontWeight: 500 }}>Requiere atención</span>
-                            : <span style={{ color: T.ok, fontWeight: 500 }}>Sin novedad</span>}
+                          {r.requiereAtencion ? (
+                            <div>
+                              <div style={{ color: T.late, fontWeight: 500 }}>Requiere atención</div>
+                              {(() => {
+                                const puntos = puntosConAtencion(r);
+                                return puntos.length > 0 ? (
+                                  <div style={{ fontSize: 11.5, color: T.late, marginTop: 2 }}>{puntos.join(" · ")}</div>
+                                ) : null;
+                              })()}
+                              {r.observaciones && (
+                                <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2, fontStyle: "italic" }}>"{r.observaciones}"</div>
+                              )}
+                            </div>
+                          ) : (
+                            <span style={{ color: T.ok, fontWeight: 500 }}>Sin novedad</span>
+                          )}
                         </td>
                         <td style={{ padding: "8px 12px" }}>
                           {tieneEvidencia ? (
