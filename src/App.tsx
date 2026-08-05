@@ -55,6 +55,7 @@ const OBJETIVO_TABS = [
   { key: "cotizador", label: "COTIZADOR", unit: "special" },
   { key: "rally_otc", label: "RALLY OTC", unit: "special" },
   { key: "avisos", label: "AVISOS", unit: "special" },
+  { key: "creditos", label: "CRÉDITOS", unit: "special" },
   { key: "cargas", label: "CARGAS", unit: "special" },
   { key: "pwst", label: "PWST", unit: "special" },
 ];
@@ -82,11 +83,23 @@ const MARCAS_DIA = [
 const UMBRAL_BAJO_DESEMPENO = 0.5;
 
 // Umbral mínimo de "visitas efectivas" en Mesa de Control por ruta: si no se
-// supera, la tarjeta de VISITAS EFECTIVAS parpadea en rojo intenso. J202 no
-// tiene umbral definido todavía (no se especificó), así que nunca parpadea.
+// supera, la tarjeta de VISITAS EFECTIVAS parpadea en rojo intenso.
 const UMBRAL_VISITAS_EFECTIVAS_MC = {
   J201: 39, J202: 41, J203: 41, J204: 41, J205: 41, J206: 41, J207: 39,
 };
+
+// Cada cuántos días debe subirse la validación de créditos con evidencia.
+const DIAS_CICLO_CREDITOS = 15;
+
+// true si ya pasó el ciclo de 15 días desde el último envío (o si nunca se
+// ha enviado nada) — se usa para el parpadeo naranja de Liquidación y para
+// saber si la pestaña de Gerente debe verse en verde.
+function creditosPendientes(data) {
+  const ultimo = data.creditos?.ultimoEnvio;
+  if (!ultimo) return true;
+  const dias = Math.floor((Date.now() - new Date(ultimo).getTime()) / (1000 * 60 * 60 * 24));
+  return dias >= DIAS_CICLO_CREDITOS;
+}
 
 // Mapeo de código de artículo -> etiqueta de marca, usado al importar el reporte
 // crudo del sistema (NUR, Vendedor, Fecha, Cliente, Potencial, Articulo, Paquetes, Contado $, Credito $, Total $)
@@ -269,6 +282,9 @@ function defaultData() {
     asignacionesUnidades: {},
     revisionesUnidades: [],
     seguridadUnidades: { qr: true, gps: true, kmCamara: true, auditoria: true, probabilidadAuditoria: 20 },
+    // Recordatorio de validación de créditos: Liquidación sube evidencia cada
+    // 15 días; el historial completo queda visible para Gerente.
+    creditos: { ultimoEnvio: null, historial: [] },
     mensajesDia: {},
     mensajesSupervisores: {},
     // Listado de promociones (antes era una sola imagen/descripción). Cada
@@ -1048,7 +1064,7 @@ export default function App() {
       setStatus("No se encontraron filas válidas. Revisa el formato.");
       return;
     }
-    persist({ ...data, otcSemanal: registros });
+    await persistParcialFresco(() => ({ otcSemanal: registros }));
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     setStatus(`OTC semanal cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
@@ -1082,7 +1098,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: "binary" });
         const sheet = wb.Sheets[wb.SheetNames[0]];
@@ -1108,18 +1124,19 @@ export default function App() {
           return;
         }
 
-        let vendedores = data.vendedores.map((v) => {
-          const match = byRuta[v.name.trim().toLowerCase()];
-          if (!match) return v;
-          delete byRuta[v.name.trim().toLowerCase()];
-          return { ...v, objetivos: { ...blankObjetivos(), ...match } };
+        await persistParcialFresco((fresca) => {
+          let vendedoresFrescos = (fresca.vendedores || []).map((v) => {
+            const match = byRuta[v.name.trim().toLowerCase()];
+            if (!match) return v;
+            delete byRuta[v.name.trim().toLowerCase()];
+            return { ...v, objetivos: { ...blankObjetivos(), ...match } };
+          });
+          // Rutas nuevas que no existían aún
+          Object.entries(byRuta).forEach(([key, match]) => {
+            vendedoresFrescos.push({ id: "v" + Date.now() + Math.random(), name: key.toUpperCase(), objetivos: { ...blankObjetivos(), ...match } });
+          });
+          return { vendedores: vendedoresFrescos };
         });
-        // Rutas nuevas que no existían aún
-        Object.entries(byRuta).forEach(([key, match]) => {
-          vendedores.push({ id: "v" + Date.now() + Math.random(), name: key.toUpperCase(), objetivos: { ...blankObjetivos(), ...match } });
-        });
-
-        persist({ ...data, vendedores });
         setObjStatus(`Objetivos actualizados para ${rows.length} rutas.`);
       } catch (err) {
         setObjStatus("No se pudo leer el archivo. ¿Es un .xlsx o .csv válido?");
@@ -1517,7 +1534,7 @@ export default function App() {
       setAvanceDiaStatus("No se encontraron filas válidas. Revisa el formato.");
       return;
     }
-    persist({ ...data, avanceDia: registros });
+    await persistParcialFresco(() => ({ avanceDia: registros }));
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
@@ -1553,7 +1570,7 @@ export default function App() {
       setOtcDiaStatus("No se encontraron filas válidas. Revisa el formato.");
       return;
     }
-    persist({ ...data, otcDia: registros });
+    await persistParcialFresco(() => ({ otcDia: registros }));
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
@@ -1899,6 +1916,7 @@ export default function App() {
         <StaffView
           data={data}
           persist={persist}
+          persistFresco={persistParcialFresco}
           persistCargas={persistCargas}
           persistRevisionUnidad={persistRevisionUnidad}
           persistConfigUnidades={persistConfigUnidades}
@@ -1943,13 +1961,13 @@ export default function App() {
 
       {role === "liquidacion" && (
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
-          <TabsLiquidacion data={data} persist={persist} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
+          <TabsLiquidacion data={data} persist={persist} persistFresco={persistParcialFresco} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
 
       {role === "merch" && (
         <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
-          <TabsMerch data={data} persist={persist} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
+          <TabsMerch data={data} persist={persist} persistFresco={persistParcialFresco} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
 
@@ -1962,6 +1980,7 @@ export default function App() {
           mensajeDia={mensajesDia[stats.porVendedor.find((v) => v.id === currentVendorId)?.name]}
           data={data}
           persist={persist}
+          persistFresco={persistParcialFresco}
           persistCargas={persistCargas}
           persistRevisionUnidad={persistRevisionUnidad}
           persistConfigUnidades={persistConfigUnidades}
@@ -2766,13 +2785,19 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
         </div>
       </div>
 
-      {vendedorStats && (
+      {vendedorStats && (() => {
+        // Marcas estratégicas = suma de lo vendido HOY en las 4 marcas de la
+        // pestaña DÍA (Ice Mix + Bloss Mix + Summ Mix + Faronet), no el
+        // campo "estrategica" de ventas del periodo (ese nunca se marca en
+        // ningún lado, por eso siempre salía en 0).
+        const marcasEstrategicasHoy = MARCAS_DIA.reduce((s, m) => s + (vendedorStats.hoy?.marcas?.[m.key]?.vendido || 0), 0);
+        return (
         <>
           <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 22 }}>VENTAS DEL PERIODO (ESTA RUTA)</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, textAlign: "left" }}>
             <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
-              <div style={{ fontSize: 11, color: "#9AA7BD" }}>MARCAS ESTRATÉGICAS</div>
-              <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(vendedorStats.volumenEstrategicas)}</div>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>MARCAS ESTRATÉGICAS (HOY)</div>
+              <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{unidades(marcasEstrategicasHoy)}</div>
             </div>
             <div className="card" style={{ padding: 14, flex: "1 1 45%", minWidth: 140 }}>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>OTC · DESEMPEÑO DEL DÍA</div>
@@ -2798,7 +2823,8 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
             )}
           </div>
         </>
-      )}
+        );
+      })()}
 
       <div style={{ marginTop: 22, textAlign: "left" }}>
         <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>TOP CLIENTES · MAYOR ESTANCIA</div>
@@ -3198,7 +3224,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
   );
 }
 
-function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
+function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
@@ -3221,7 +3247,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       <ObjetivoTabs
         tab={tab}
         setTab={setTab}
-        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst"].includes(t.key))}
+        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos"].includes(t.key))}
         estadoTabs={{
           rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
           avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
@@ -3242,9 +3268,9 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
-        <RallyOtcView data={data} persist={persist} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+        <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : tab === "avisos" ? (
-        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
+        <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
       ) : tab === "cargas" ? (
         <CargasView data={data} persist={persist} persistCargas={persistCargas} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : tab === "unidades" ? (
@@ -3507,7 +3533,7 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
  *   suma de los objetivos de todas las rutas participantes.
  * - Supervisor-2: ve el avance agregado, sin objetivo (solo informativo).
  */
-function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombre }) {
+function RallyOtcView({ data, persist, persistFresco, puesto, rol, vendedorActual, revisorNombre }) {
   const rally = data.rallyOtc || { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero" };
   const esGerente = rol === "staff" && puesto === "gerente";
   const captura = useCapturaImagen();
@@ -3585,8 +3611,7 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
   }
 
   function guardarRally(activo) {
-    persist({
-      ...data,
+    persistFresco(() => ({
       rallyOtc: {
         activo,
         nombre: form.nombre.trim(),
@@ -3598,12 +3623,12 @@ function RallyOtcView({ data, persist, puesto, rol, vendedorActual, revisorNombr
         codigosParticipantes: form.codigosParticipantes,
         unidad: form.unidad,
       },
-    });
+    }));
     setForm(null);
   }
 
   function desactivarRally() {
-    persist({ ...data, rallyOtc: { ...rally, activo: false } });
+    persistFresco((fresca) => ({ rallyOtc: { ...(fresca.rallyOtc || rally), activo: false } }));
   }
 
   return (
@@ -3822,14 +3847,21 @@ function hayAvisoNuevoPara(data, viewerKey, verComoRuta) {
 // Vista dedicada de Liquidación (Sulema): un mini switch entre TIEMPOS
 // (su pantalla de siempre) y AVISOS (nuevo), ya que ella no usa el sistema
 // de pestañas de VendorView/StaffView.
-function TabsLiquidacion({ data, persist, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
+function TabsLiquidacion({ data, persist, persistFresco, staffUsername, onLogout }) {
   const [tab, setTab] = useState("tiempos");
   const hayNuevo = hayAvisoNuevoPara(data, "liquidacion", null);
+  const creditosPendiente = creditosPendientes(data);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button className={tab === "tiempos" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("tiempos")}>TIEMPOS</button>
-        <button className={tab === "unidades" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("unidades")}>UNIDADES</button>
+        <button
+          className={`${tab === "creditos" ? "btn" : "btn-ghost"} ${creditosPendiente ? "tab-aviso-nuevo" : ""}`}
+          style={{ flex: 1 }}
+          onClick={() => setTab("creditos")}
+        >
+          CRÉDITOS
+        </button>
         <button
           className={`${tab === "avisos" ? "btn" : "btn-ghost"} ${hayNuevo ? "tab-aviso-nuevo" : ""}`}
           style={{ flex: 1 }}
@@ -3851,10 +3883,10 @@ function TabsLiquidacion({ data, persist, persistRevisionUnidad, persistConfigUn
           misAreas={["Liquidación"]}
           onLogout={onLogout}
         />
-      ) : tab === "unidades" ? (
-        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="liquidacion" puesto={null} identidad={NOMBRES[staffUsername] || "Sulema Ponce"} rutaPropia={null} />
+      ) : tab === "creditos" ? (
+        <CreditosView data={data} persistFresco={persistFresco} rol="liquidacion" revisorNombre={NOMBRES[staffUsername] || "Sulema Ponce"} />
       ) : (
-        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} viewerKey="liquidacion" />
+        <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} viewerKey="liquidacion" />
       )}
     </div>
   );
@@ -3863,7 +3895,7 @@ function TabsLiquidacion({ data, persist, persistRevisionUnidad, persistConfigUn
 // Vista mínima para los usuarios MERCH27-30: solo necesitan registrar su
 // revisión diaria de unidad (pestaña UNIDADES) y ver Avisos. La pestaña
 // UNIDADES parpadea en rojo intenso hasta que registran su revisión de hoy.
-function TabsMerch({ data, persist, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
+function TabsMerch({ data, persist, persistFresco, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
   const [tab, setTab] = useState("unidades");
   const hayNuevo = hayAvisoNuevoPara(data, staffUsername, staffUsername);
   const yaRegistroHoy = unidadYaRegistradaHoy(data, staffUsername);
@@ -3904,13 +3936,13 @@ function TabsMerch({ data, persist, persistRevisionUnidad, persistConfigUnidades
       {tab === "unidades" ? (
         <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="merch" puesto={null} identidad={staffUsername} rutaPropia={staffUsername} />
       ) : (
-        <AvisosView data={data} persist={persist} puedeCrear={false} revisorNombre={null} verComoRuta={staffUsername} viewerKey={staffUsername} />
+        <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} verComoRuta={staffUsername} viewerKey={staffUsername} />
       )}
     </div>
   );
 }
 
-function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, viewerKey }) {
+function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, verComoRuta, viewerKey }) {
   const todosLosAvisos = data.avisos || [];
   const avisos = avisosRelevantesPara(data, viewerKey, verComoRuta);
   const puedeElegirPreferencia = viewerKey === "supervisor2" || viewerKey === "liquidacion";
@@ -3922,13 +3954,13 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
     const ahora = new Date().toISOString();
     const yaVisto = data.avisosVistoPor?.[viewerKey];
     if (!yaVisto || Date.now() - new Date(yaVisto).getTime() > 3000) {
-      persist({ ...data, avisosVistoPor: { ...(data.avisosVistoPor || {}), [viewerKey]: ahora } });
+      persistFresco((fresca) => ({ avisosVistoPor: { ...(fresca.avisosVistoPor || {}), [viewerKey]: ahora } }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerKey]);
 
   function cambiarPreferenciaAvisos(valor) {
-    persist({ ...data, preferenciasAvisos: { ...(data.preferenciasAvisos || {}), [viewerKey]: valor } });
+    persistFresco((fresca) => ({ preferenciasAvisos: { ...(fresca.preferenciasAvisos || {}), [viewerKey]: valor } }));
   }
 
   const [texto, setTexto] = useState("");
@@ -3991,7 +4023,7 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
       destinatarios: paraTodos ? "todos" : rutasElegidas,
       excluidos,
     };
-    persist({ ...data, avisos: [nuevo, ...todosLosAvisos] });
+    persistFresco((fresca) => ({ avisos: [nuevo, ...(fresca.avisos || [])] }));
     setTexto("");
     setArchivo(null);
     setParaTodos(true);
@@ -4001,7 +4033,7 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
   }
 
   function eliminarAviso(id) {
-    persist({ ...data, avisos: todosLosAvisos.filter((a) => a.id !== id) });
+    persistFresco((fresca) => ({ avisos: (fresca.avisos || []).filter((a) => a.id !== id) }));
   }
 
 
@@ -4129,6 +4161,250 @@ function AvisosView({ data, persist, puedeCrear, revisorNombre, verComoRuta, vie
         </div>
       )}
       </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Pestaña CRÉDITOS — recordatorio de validación de créditos cada 15 días.
+ * - Liquidación: sube evidencia (foto, por archivo o cámara en vivo) y
+ *   responde "¿Créditos completos?"; su pestaña parpadea en naranja intenso
+ *   mientras esté pendiente el ciclo de 15 días.
+ * - Gerente: ve el historial completo, puede descargar cualquier imagen, y
+ *   su pestaña se pone en verde en cuanto Liquidación sube una validación
+ *   dentro del ciclo vigente.
+ */
+function CreditosView({ data, persistFresco, rol, revisorNombre }) {
+  const creditos = data.creditos || { ultimoEnvio: null, historial: [] };
+  const pendiente = creditosPendientes(data);
+  const esLiquidacion = rol === "liquidacion";
+
+  const [completos, setCompletos] = useState(null); // true | false | null (sin responder)
+  const [archivo, setArchivo] = useState(null); // { url, nombre }
+  const [subiendo, setSubiendo] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [camaraActiva, setCamaraActiva] = useState(false);
+  const [error, setError] = useState(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const fileRef = useRef(null);
+
+  async function subirImagen(file) {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      alert("La imagen pesa más de 8MB. Usa una más ligera.");
+      return;
+    }
+    setSubiendo(true);
+    setError(null);
+    try {
+      const extension = (file.name?.split(".").pop() || "jpg").toLowerCase();
+      const nombreArchivo = `creditos_${Date.now()}.${extension}`;
+      const { error: subErr } = await supabase.storage.from("promociones").upload(nombreArchivo, file, { cacheControl: "3600", upsert: false, contentType: file.type || "image/jpeg" });
+      if (subErr) {
+        setError(`No se pudo subir la imagen: ${subErr.message}`);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
+      setArchivo({ url: urlData.publicUrl, nombre: file.name || nombreArchivo });
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  async function activarCamara() {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      streamRef.current = stream;
+      setCamaraActiva(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play();
+        }
+      }, 0);
+    } catch (e) {
+      setError("No se pudo acceder a la cámara. Puedes elegir un archivo en su lugar.");
+    }
+  }
+
+  function detenerCamara() {
+    if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setCamaraActiva(false);
+  }
+
+  function tomarFoto() {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      detenerCamara();
+      subirImagen(new File([blob], `creditos_${Date.now()}.jpg`, { type: "image/jpeg" }));
+    }, "image/jpeg", 0.9);
+  }
+
+  useEffect(() => {
+    return () => { if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop()); };
+  }, []);
+
+  async function enviarValidacion() {
+    if (completos === null) {
+      alert('Responde la pregunta "¿Créditos completos?".');
+      return;
+    }
+    if (!archivo) {
+      alert("Sube o toma la foto de evidencia antes de enviar.");
+      return;
+    }
+    setEnviando(true);
+    try {
+      const ahora = new Date().toISOString();
+      const nuevo = {
+        id: "cred_" + Date.now(),
+        fecha: ahora,
+        autor: revisorNombre || "Liquidación",
+        completos,
+        imagenUrl: archivo.url,
+      };
+      await persistFresco((fresca) => ({
+        creditos: {
+          ultimoEnvio: ahora,
+          historial: [nuevo, ...((fresca.creditos || {}).historial || [])],
+        },
+      }));
+      setCompletos(null);
+      setArchivo(null);
+    } catch (err) {
+      setError(err?.message || "No se pudo guardar la validación. Intenta de nuevo.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  function descargarImagen(url, nombreSugerido) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = nombreSugerido || "creditos.jpg";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  const diasDesdeUltimo = creditos.ultimoEnvio
+    ? Math.floor((Date.now() - new Date(creditos.ultimoEnvio).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  return (
+    <div>
+      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>CRÉDITOS</div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 20, border: `1px solid ${pendiente ? "#FF8C00" : "#3DDC97"}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <Ticket size={16} color={pendiente ? "#FF8C00" : "#3DDC97"} />
+          <span className="display" style={{ fontSize: 13, color: pendiente ? "#FF8C00" : "#3DDC97" }}>
+            {pendiente ? "VALIDACIÓN PENDIENTE" : "AL DÍA"}
+          </span>
+        </div>
+        <div style={{ fontSize: 12.5, color: "#9AA7BD" }}>
+          {creditos.ultimoEnvio
+            ? `Última validación: hace ${diasDesdeUltimo} día${diasDesdeUltimo === 1 ? "" : "s"} (cada ${DIAS_CICLO_CREDITOS} días).`
+            : `Todavía no se ha enviado ninguna validación. Se debe subir cada ${DIAS_CICLO_CREDITOS} días.`}
+        </div>
+      </div>
+
+      {esLiquidacion && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>NUEVA VALIDACIÓN</div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>¿CRÉDITOS COMPLETOS?</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className={completos === true ? "btn" : "btn-ghost"} onClick={() => setCompletos(true)}>Sí</button>
+              <button className={completos === false ? "btn" : "btn-ghost"} onClick={() => setCompletos(false)}>No</button>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>EVIDENCIA (FOTO)</div>
+
+            {camaraActiva ? (
+              <div style={{ marginBottom: 10 }}>
+                <video ref={videoRef} muted playsInline style={{ width: "100%", maxWidth: 340, borderRadius: 10, background: "#000", display: "block" }} />
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button className="btn" onClick={tomarFoto}><Camera size={14} style={{ verticalAlign: "-2px" }} /> Tomar foto</button>
+                  <button className="btn-ghost" onClick={detenerCamara}>Cancelar</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <button className="btn-ghost" onClick={() => fileRef.current?.click()} disabled={subiendo}>
+                  <ImageIcon size={14} style={{ verticalAlign: "-2px" }} /> Elegir archivo
+                </button>
+                <button className="btn-ghost" onClick={activarCamara} disabled={subiendo}>
+                  <Camera size={14} style={{ verticalAlign: "-2px" }} /> Usar cámara
+                </button>
+              </div>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) subirImagen(f); }} />
+
+            {subiendo && <div style={{ fontSize: 12, color: "#9AA7BD" }}>Subiendo imagen...</div>}
+            {archivo && !subiendo && (
+              <div>
+                <img src={archivo.url} alt="Evidencia de créditos" style={{ maxWidth: 220, borderRadius: 8, display: "block", marginBottom: 6 }} />
+                <button className="btn-ghost" onClick={() => setArchivo(null)}><Ban size={13} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Quitar</button>
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#FF6B6B", fontSize: 12, marginBottom: 10 }}>
+              <AlertCircle size={14} /> {error}
+            </div>
+          )}
+
+          <button className="btn" onClick={enviarValidacion} disabled={enviando}>
+            <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {enviando ? "Enviando..." : "Enviar validación"}
+          </button>
+        </div>
+      )}
+
+      <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>HISTORIAL</div>
+      {(creditos.historial || []).length === 0 ? (
+        <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Todavía no hay ninguna validación registrada.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {creditos.historial.map((h) => (
+            <div key={h.id} className="card" style={{ padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>
+                  {h.autor} · {new Date(h.fecha).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: h.completos ? "#3DDC97" : "#FF6B6B" }}>
+                  {h.completos ? "Créditos completos" : "Créditos incompletos"}
+                </span>
+              </div>
+              {h.imagenUrl && (
+                <div>
+                  <img src={h.imagenUrl} alt="Evidencia" style={{ maxWidth: 240, borderRadius: 8, display: "block", marginBottom: 8 }} />
+                  {!esLiquidacion && (
+                    <button className="btn-ghost" onClick={() => descargarImagen(h.imagenUrl, `creditos_${h.fecha.slice(0, 10)}.jpg`)}>
+                      <Download size={13} style={{ verticalAlign: "-2px" }} /> Descargar imagen
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -4360,7 +4636,7 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCa
 // Checklist de actividades (día/semana/mes). "Fija" reaparece siempre al
 // reiniciar el ciclo; "temporal" solo existe por este ciclo y se borra sola
 // al pasar el siguiente, a menos que se haya quedado pendiente.
-function ActividadesView({ ciclo, titulo, data, persist, revisorNombre, puedeEliminar }) {
+function ActividadesView({ ciclo, titulo, data, persist, persistFresco, revisorNombre, puedeEliminar }) {
   const [nuevoTexto, setNuevoTexto] = useState("");
   const [nuevoTipo, setNuevoTipo] = useState("temporal");
 
@@ -4370,17 +4646,26 @@ function ActividadesView({ ciclo, titulo, data, persist, revisorNombre, puedeEli
   const hechas = items.filter((it) => it.hecha);
 
   function marcar(id, hecha) {
-    const nuevos = items.map((it) => (it.id === id ? { ...it, hecha } : it));
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: nuevos } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades?.[ciclo] || { items: [] };
+      const nuevos = (est.items || []).map((it) => (it.id === id ? { ...it, hecha } : it));
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: nuevos } } };
+    });
   }
   function agregar() {
     if (!nuevoTexto.trim()) return;
     const nueva = nuevaActividad(nuevoTexto, nuevoTipo, revisorNombre || "Staff", fechaHoyISO());
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: [...items, nueva] } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades?.[ciclo] || { items: [] };
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: [...(est.items || []), nueva] } } };
+    });
     setNuevoTexto("");
   }
   function eliminar(id) {
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...estado, items: items.filter((it) => it.id !== id) } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades?.[ciclo] || { items: [] };
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: (est.items || []).filter((it) => it.id !== id) } } };
+    });
   }
 
   return (
@@ -4461,7 +4746,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -4479,6 +4764,7 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
     rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
     avisos: hayAvisoNuevoPara(data, puesto, null) ? "aviso_nuevo" : undefined,
     unidades: rutaPropiaStaff && !unidadYaRegistradaHoy(data, rutaPropiaStaff) ? "pendiente_urgente" : undefined,
+    creditos: puesto === "gerente" && !creditosPendientes(data) ? "completo" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
@@ -4494,40 +4780,39 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
   function addVendedor() {
     if (!newName.trim()) return;
     const v = { id: "v" + Date.now(), name: newName.trim(), objetivos: { ...blankObjetivos(), open: Number(newOpen) || 0, champions: Number(newChampions) || 0 } };
-    persist({ ...data, vendedores: [...data.vendedores, v] });
+    persistFresco((fresca) => ({ vendedores: [...(fresca.vendedores || []), v] }));
     setNewName(""); setNewOpen(""); setNewChampions("");
   }
   function removeVendedor(id) {
-    persist({ ...data, vendedores: data.vendedores.filter((v) => v.id !== id) });
+    persistFresco((fresca) => ({ vendedores: (fresca.vendedores || []).filter((v) => v.id !== id) }));
   }
   function updateObjetivo(id, field, val) {
-    persist({
-      ...data,
-      vendedores: data.vendedores.map((v) =>
+    persistFresco((fresca) => ({
+      vendedores: (fresca.vendedores || []).map((v) =>
         v.id === id ? { ...v, objetivos: { ...v.objetivos, [field]: Number(val) || 0 } } : v
       ),
-    });
+    }));
   }
   function updatePeriodo(field, val) {
-    const nuevoPeriodo = { ...data.periodo, [field]: val };
     // Las ventas del periodo ya viven en su propia tabla (ventas_periodo) y
     // se recargan solas cuando cambia data.periodo (ver useEffect de
     // cargarVentasPeriodo). Aquí solo se reinicia el conteo de cupones
     // canjeados por ruta, para que no se mezcle con el periodo nuevo.
-    persist({
-      ...data,
-      periodo: nuevoPeriodo,
+    persistFresco((fresca) => ({
+      periodo: { ...fresca.periodo, [field]: val },
       cuponesRedimidos: [],
-    });
+    }));
   }
   function agregarDiaNoLaborable(fecha) {
     if (!fecha) return;
-    const actuales = data.diasNoLaborables || [];
-    if (actuales.includes(fecha)) return;
-    persist({ ...data, diasNoLaborables: [...actuales, fecha].sort() });
+    persistFresco((fresca) => {
+      const actuales = fresca.diasNoLaborables || [];
+      if (actuales.includes(fecha)) return { diasNoLaborables: actuales };
+      return { diasNoLaborables: [...actuales, fecha].sort() };
+    });
   }
   function quitarDiaNoLaborable(fecha) {
-    persist({ ...data, diasNoLaborables: (data.diasNoLaborables || []).filter((f) => f !== fecha) });
+    persistFresco((fresca) => ({ diasNoLaborables: (fresca.diasNoLaborables || []).filter((f) => f !== fecha) }));
   }
 
   // Reinicia solo los checklists de actividades que ya entraron a un nuevo
@@ -4537,57 +4822,65 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
     const actual = data.actividades;
     const normalizado = normalizarActividades(actual);
     const cambio = normalizado.dia !== actual?.dia || normalizado.semana !== actual?.semana || normalizado.mes !== actual?.mes;
-    if (cambio) persist({ ...data, actividades: normalizado });
+    if (cambio) persistFresco((fresca) => ({ actividades: normalizarActividades(fresca.actividades) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.actividades?.dia?.fecha, data?.actividades?.semana?.semanaId, data?.actividades?.mes?.mesId]);
 
   function marcarActividad(ciclo, id, hecha) {
-    const est = data.actividades[ciclo];
-    const items = est.items.map((it) => (it.id === id ? { ...it, hecha } : it));
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades[ciclo];
+      const items = est.items.map((it) => (it.id === id ? { ...it, hecha } : it));
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items } } };
+    });
   }
   function agregarActividad(ciclo, texto, tipo, autor) {
     if (!texto || !texto.trim()) return;
-    const est = data.actividades[ciclo];
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items: [...est.items, nuevaActividad(texto, tipo, autor, fechaHoyISO())] } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades[ciclo];
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: [...est.items, nuevaActividad(texto, tipo, autor, fechaHoyISO())] } } };
+    });
   }
   function eliminarActividad(ciclo, id) {
-    const est = data.actividades[ciclo];
-    persist({ ...data, actividades: { ...data.actividades, [ciclo]: { ...est, items: est.items.filter((it) => it.id !== id) } } });
+    persistFresco((fresca) => {
+      const est = fresca.actividades[ciclo];
+      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: est.items.filter((it) => it.id !== id) } } };
+    });
   }
 
   const revisorNombre = NOMBRES[staffUsername] || staffUsername || "Staff";
 
   function enviarMensajeDia(vendedorName, texto) {
     if (!texto.trim()) return;
-    persist({
-      ...data,
+    persistFresco((fresca) => ({
       mensajesDia: {
-        ...(data.mensajesDia || {}),
+        ...(fresca.mensajesDia || {}),
         [vendedorName]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
       },
-    });
+    }));
   }
   function quitarMensajeDia(vendedorName) {
-    const copia = { ...(data.mensajesDia || {}) };
-    delete copia[vendedorName];
-    persist({ ...data, mensajesDia: copia });
+    persistFresco((fresca) => {
+      const copia = { ...(fresca.mensajesDia || {}) };
+      delete copia[vendedorName];
+      return { mensajesDia: copia };
+    });
   }
 
   function enviarMensajeSupervisor(username, texto) {
     if (!texto.trim()) return;
-    persist({
-      ...data,
+    persistFresco((fresca) => ({
       mensajesSupervisores: {
-        ...(data.mensajesSupervisores || {}),
+        ...(fresca.mensajesSupervisores || {}),
         [username]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
       },
-    });
+    }));
   }
   function quitarMensajeSupervisor(username) {
-    const copia = { ...(data.mensajesSupervisores || {}) };
-    delete copia[username];
-    persist({ ...data, mensajesSupervisores: copia });
+    persistFresco((fresca) => {
+      const copia = { ...(fresca.mensajesSupervisores || {}) };
+      delete copia[username];
+      return { mensajesSupervisores: copia };
+    });
   }
 
   function descargarExcelMesaControl(analisis, rutaNombre, vendedorNombre, revisor) {
@@ -4633,7 +4926,7 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "rally_otc", "avisos"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos")
                 : undefined
             }
             estadoTabs={estadoTabsActividades}
@@ -4827,14 +5120,16 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
           ) : objTab === "unidades" ? (
             <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
+          ) : objTab === "creditos" ? (
+            <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
-            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
+            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "actividades_semana" ? (
-            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
+            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "actividades_mes" ? (
-            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
+            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
           ) : objTab === "cotizador" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>COTIZADOR MARLBORO</div>
@@ -4852,9 +5147,9 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
               </a>
             </div>
           ) : objTab === "rally_otc" ? (
-            <RallyOtcView data={data} persist={persist} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
+            <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
-            <AvisosView data={data} persist={persist} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} viewerKey={puesto} />
+            <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1} revisorNombre={revisorNombre} viewerKey={puesto} />
           ) : objTab === "cargas" ? (
             <CargasView
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
