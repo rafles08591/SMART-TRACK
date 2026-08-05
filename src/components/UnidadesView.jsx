@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
+import html2canvas from "html2canvas";
 import {
   Truck, ClipboardCheck, FileText, Gauge, ChevronRight, ChevronLeft,
   Check, AlertTriangle, Plus, Users, ShieldCheck, Fuel, Wrench, Droplet, Download, Trash2, Pencil,
@@ -177,10 +178,38 @@ function fotoADataUrl(file) {
   });
 }
 
+// Recorta la imagen a la franja central (misma proporción que el recuadro
+// guía que ve el conductor al encuadrar: 12%-88% de ancho, 38%-62% de alto)
+// antes de leerla. Sin este recorte, Tesseract intenta leer TODO el tablero
+// y puede confundirse con los números del velocímetro o el reloj.
+function recortarZonaOdometro(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(dataUrl); // si falla el recorte, se usa la imagen completa como respaldo
+    img.onload = () => {
+      try {
+        const x = img.width * 0.12;
+        const y = img.height * 0.38;
+        const w = img.width * 0.76;
+        const h = img.height * 0.24;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, x, y, w, h, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", 0.92));
+      } catch (e) {
+        resolve(dataUrl);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
+
 async function leerOdometro(dataUrl) {
   if (!window.Tesseract) return null;
   try {
-    const resultado = await window.Tesseract.recognize(dataUrl, "eng", {
+    const dataUrlRecortado = await recortarZonaOdometro(dataUrl);
+    const resultado = await window.Tesseract.recognize(dataUrlRecortado, "eng", {
       tessedit_char_whitelist: "0123456789",
     });
     const soloDigitos = (resultado?.data?.text || "").replace(/[^0-9]/g, "");
@@ -208,6 +237,10 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
         "Foto adjunta": r.foto ? "Sí" : "No",
         "Estado físico": Object.values(r.fisico || {}).includes("atencion") ? "Atención" : "Bien",
         "Niveles de líquidos": Object.values(r.niveles || {}).includes("atencion") ? "Atención" : "Bien",
+        "Líquidos rellenados": Object.entries(r.nivelesRellenos || {})
+          .filter(([, marcado]) => marcado)
+          .map(([id]) => CHECKS_NIVELES.find((c) => c.id === id)?.label || id)
+          .join(", ") || "Ninguno",
         "Documentación": Object.values(r.documentacion || {}).includes("atencion") ? "Atención" : "Bien",
         "Kilometraje": r.operativo?.kilometraje || "",
         "Combustible": r.operativo?.combustible || "",
@@ -219,7 +252,7 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
   hoja["!cols"] = [
     { wch: 11 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 18 },
     { wch: 13 }, { wch: 16 }, { wch: 16 }, { wch: 12 },
-    { wch: 13 }, { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 12 }, { wch: 15 }, { wch: 30 },
+    { wch: 13 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 12 }, { wch: 15 }, { wch: 30 },
   ];
   const libro = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(libro, hoja, "Bitácora");
@@ -346,6 +379,11 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const esConductor = rol === "vendedor" || rol === "merch";
   const esGerente = rol === "staff" && puesto === "gerente";
   const esLiquidacion = rol === "liquidacion";
+  const esStaff = rol === "staff";
+  // Posición del catálogo que le corresponde a cada puesto de staff, para
+  // que también puedan reportar las condiciones de su propia unidad asignada.
+  const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
+  const [modoStaff, setModoStaff] = useState("panel"); // "panel" | "conductor"
 
   // Alcance de rutas visibles en el panel: supervisor/supervisor2 ven solo
   // su grupo; gerente y liquidación ven todo (liquidación solo lectura).
@@ -390,9 +428,32 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     );
   }
 
+  if (esStaff && modoStaff === "conductor") {
+    return (
+      <div style={{ fontFamily: "'Inter', sans-serif", color: T.ink }}>
+        <EstilosUnidades />
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          <button className="ru-btn" onClick={() => setModoStaff("panel")}>Panel</button>
+          <button className="ru-btn active">Mi unidad</button>
+        </div>
+        <VistaConductor
+          unidades={unidades} onRegistrar={registrarRevision} lastByUnidad={lastByUnidad}
+          usuarioSesion={identidad} usuarioRuta={rutaPropiaStaff} asignaciones={asignaciones}
+          seguridad={seguridad}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: "'Inter', sans-serif", color: T.ink }}>
       <EstilosUnidades />
+      {esStaff && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          <button className="ru-btn active">Panel</button>
+          <button className="ru-btn" onClick={() => setModoStaff("conductor")}>Mi unidad</button>
+        </div>
+      )}
       {errorGuardado && (
         <div className="ru-card" style={{ padding: "12px 14px", marginBottom: 16, background: T.lateSoft, borderColor: T.late, color: T.late, fontSize: 12.5, fontWeight: 500 }}>
           No se pudo guardar el último cambio: {errorGuardado}
@@ -460,6 +521,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   const [paso, setPaso] = useState(0);
   const [fisico, setFisico] = useState({});
   const [niveles, setNiveles] = useState({});
+  const [rellenos, setRellenos] = useState({});
   const [doc, setDoc] = useState({});
   const [kilometraje, setKilometraje] = useState("");
   const [kmEstado, setKmEstado] = useState("idle");
@@ -495,7 +557,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setQrVerificado(false); setEsAuditoria(false); setUbicacion(null);
     setUbicacionEstado(seguridad.gps ? "pendiente" : "desactivado");
     setFoto(null); setPaso(0);
-    setFisico({}); setNiveles({}); setDoc({});
+    setFisico({}); setNiveles({}); setRellenos({}); setDoc({});
     setKilometraje(""); setKmEstado("idle"); setKmDetectado(""); setKmError("");
     setCombustible("3/4"); setObs(""); setEnviado(false);
   }
@@ -555,7 +617,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
       auditoriaAleatoria: esAuditoria,
       ubicacion,
       foto,
-      fisico, niveles, documentacion: doc,
+      fisico, niveles, nivelesRellenos: rellenos, documentacion: doc,
       operativo: { kilometraje, combustible },
       observaciones: obs,
     });
@@ -665,7 +727,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         )}
 
         {pasoActual === "niveles" && (
-          <Checklist icon={<Droplet size={16} />} titulo="Niveles de líquidos" items={CHECKS_NIVELES} valores={niveles} setValores={setNiveles} />
+          <Checklist icon={<Droplet size={16} />} titulo="Niveles de líquidos" items={CHECKS_NIVELES} valores={niveles} setValores={setNiveles} conRelleno rellenos={rellenos} setRellenos={setRellenos} />
         )}
 
         {pasoActual === "documentacion" && (
@@ -770,6 +832,7 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [camara, setCamara] = useState("iniciando"); // iniciando | activa | no_disponible
+  const [zoom, setZoom] = useState(2); // 1x a 3x, recorte digital del centro del cuadro
 
   useEffect(() => {
     let activo = true;
@@ -794,17 +857,26 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
     };
   }, []);
 
+  // Al tomar la foto se recorta solo el centro del cuadro (según el zoom
+  // elegido) y se estira para llenar el cuadro completo — así el odómetro
+  // se ve más grande y legible en la foto final, tanto para el ojo humano
+  // (auditoría) como para la lectura automática de dígitos.
   function tomarFoto() {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext("2d");
+    const srcW = video.videoWidth / zoom;
+    const srcH = video.videoHeight / zoom;
+    const srcX = (video.videoWidth - srcW) / 2;
+    const srcY = (video.videoHeight - srcH) / 2;
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (!blob) return;
       onCapturar(new File([blob], `odometro_${Date.now()}.jpg`, { type: "image/jpeg" }));
-    }, "image/jpeg", 0.85);
+    }, "image/jpeg", 0.9);
   }
 
   if (camara === "no_disponible") {
@@ -827,7 +899,26 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
   return (
     <div>
       <div style={{ position: "relative", background: T.ink, borderRadius: 10, overflow: "hidden", marginBottom: 10, aspectRatio: "4/3", maxWidth: 340 }}>
-        <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", display: camara === "activa" ? "block" : "none" }} />
+        <video
+          ref={videoRef} muted playsInline
+          style={{
+            width: "100%", height: "100%", objectFit: "cover", display: camara === "activa" ? "block" : "none",
+            transform: `scale(${zoom})`, transformOrigin: "center center",
+          }}
+        />
+        {camara === "activa" && (
+          <div
+            style={{
+              position: "absolute", left: "12%", right: "12%", top: "38%", bottom: "38%",
+              border: "2px dashed rgba(255,255,255,0.85)", borderRadius: 6, pointerEvents: "none",
+              display: "flex", alignItems: "flex-end", justifyContent: "center",
+            }}
+          >
+            <span style={{ fontSize: 10.5, color: "white", background: "rgba(0,0,0,0.55)", padding: "2px 6px", borderRadius: 4, marginBottom: -18 }}>
+              Coloca el número aquí
+            </span>
+          </div>
+        )}
         {camara !== "activa" && (
           <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "white" }}>
             <Camera size={22} />
@@ -835,10 +926,25 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
           </div>
         )}
       </div>
+
+      {camara === "activa" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, maxWidth: 340 }}>
+          <span style={{ fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>Zoom</span>
+          <input
+            type="range" min="1" max="3" step="0.25" value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            style={{ flex: 1 }}
+          />
+          <span className="ru-mono" style={{ fontSize: 11.5, color: T.muted, minWidth: 30 }}>{zoom.toFixed(2)}x</span>
+        </div>
+      )}
+
       <button className="ru-btn active" onClick={tomarFoto} disabled={camara !== "activa" || procesando}>
         <Camera size={15} /> {procesando ? "Leyendo odómetro…" : "Tomar foto del odómetro"}
       </button>
-      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>Apunta la cámara al odómetro digital del tablero y toma la foto.</div>
+      <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
+        Usa el zoom para que el número del odómetro llene el recuadro punteado — así se lee mejor y evita confundirse con el velocímetro o el reloj.
+      </div>
     </div>
   );
 }
@@ -938,7 +1044,7 @@ function Campo({ label, children }) {
   );
 }
 
-function Checklist({ icon, titulo, items, valores, setValores }) {
+function Checklist({ icon, titulo, items, valores, setValores, conRelleno, rellenos, setRellenos }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
@@ -946,28 +1052,40 @@ function Checklist({ icon, titulo, items, valores, setValores }) {
         <span className="ru-h" style={{ fontWeight: 600, fontSize: 15 }}>{titulo}</span>
       </div>
       {items.map((it) => (
-        <div key={it.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
-          <span style={{ fontSize: 13.5 }}>{it.label}</span>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => setValores((v) => ({ ...v, [it.id]: "bien" }))}
-              style={{
-                border: `1px solid ${valores[it.id] === "bien" ? T.ok : T.border}`,
-                background: valores[it.id] === "bien" ? T.okSoft : "white",
-                color: valores[it.id] === "bien" ? T.ok : T.muted,
-                borderRadius: 8, padding: "5px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 500,
-              }}
-            >Bien</button>
-            <button
-              onClick={() => setValores((v) => ({ ...v, [it.id]: "atencion" }))}
-              style={{
-                border: `1px solid ${valores[it.id] === "atencion" ? T.late : T.border}`,
-                background: valores[it.id] === "atencion" ? T.lateSoft : "white",
-                color: valores[it.id] === "atencion" ? T.late : T.muted,
-                borderRadius: 8, padding: "5px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 500,
-              }}
-            >Atención</button>
+        <div key={it.id} style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 13.5 }}>{it.label}</span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setValores((v) => ({ ...v, [it.id]: "bien" }))}
+                style={{
+                  border: `1px solid ${valores[it.id] === "bien" ? T.ok : T.border}`,
+                  background: valores[it.id] === "bien" ? T.okSoft : "white",
+                  color: valores[it.id] === "bien" ? T.ok : T.muted,
+                  borderRadius: 8, padding: "5px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 500,
+                }}
+              >Bien</button>
+              <button
+                onClick={() => setValores((v) => ({ ...v, [it.id]: "atencion" }))}
+                style={{
+                  border: `1px solid ${valores[it.id] === "atencion" ? T.late : T.border}`,
+                  background: valores[it.id] === "atencion" ? T.lateSoft : "white",
+                  color: valores[it.id] === "atencion" ? T.late : T.muted,
+                  borderRadius: 8, padding: "5px 10px", fontSize: 12.5, cursor: "pointer", fontWeight: 500,
+                }}
+              >Atención</button>
+            </div>
           </div>
+          {conRelleno && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={!!rellenos?.[it.id]}
+                onChange={(e) => setRellenos((r) => ({ ...r, [it.id]: e.target.checked }))}
+              />
+              <span style={{ fontSize: 12, color: T.muted }}>Se rellenó hoy</span>
+            </label>
+          )}
         </div>
       ))}
     </div>
@@ -977,9 +1095,127 @@ function Checklist({ icon, titulo, items, valores, setValores }) {
 /* ---------------------------------------------------------------
    VISTA PANEL — supervisión y gerencia
 ------------------------------------------------------------------ */
+// Genera (con html2canvas) una imagen descargable/compartible con el
+// resumen del día: Unidad, Chofer, Km y hora en que se registró el
+// checklist de cada ruta visible — pensado para mandarlo rápido por
+// WhatsApp sin tener que abrir el Excel.
+function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
+  const capturaRef = useRef(null);
+  const [generando, setGenerando] = useState(false);
+  const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
+  const [error, setError] = useState(null);
+  const hoy = todayISO();
+
+  const filas = useMemo(() => {
+    return unidadesVisibles
+      .map((u) => {
+        const revisionesHoy = revisiones.filter((r) => r.unidadId === u.id && String(r.fecha || "").slice(0, 10) === hoy);
+        const ultima = revisionesHoy.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0] || null;
+        return { unidad: u, revision: ultima };
+      })
+      .sort((a, b) => (a.revision ? -1 : 1) - (b.revision ? -1 : 1)); // los que sí registraron, primero
+  }, [unidadesVisibles, revisiones, hoy]);
+
+  async function generarImagen() {
+    setGenerando(true);
+    setError(null);
+    setImagenLista(null);
+    try {
+      if (!capturaRef.current) return;
+      const canvas = await Promise.race([
+        html2canvas(capturaRef.current, { backgroundColor: "#FFFFFF", scale: 1.5, useCORS: true }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse.")), 20000)),
+      ]);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const nombreArchivo = `salida_hoy_unidades_${etiqueta}_${hoy}.png`;
+        setImagenLista({ blob, nombreArchivo, url: URL.createObjectURL(blob) });
+      }, "image/png");
+    } catch (e) {
+      setError(e?.message || "No se pudo generar la imagen.");
+    } finally {
+      setGenerando(false);
+    }
+  }
+
+  async function guardarOCompartir() {
+    if (!imagenLista) return;
+    const { blob, nombreArchivo, url } = imagenLista;
+    const archivo = new File([blob], nombreArchivo, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      try {
+        await navigator.share({ files: [archivo], title: nombreArchivo });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
+      }
+    }
+    const link = document.createElement("a");
+    link.download = nombreArchivo;
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  useEffect(() => {
+    return () => { if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url); };
+  }, [imagenLista]);
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Salida de hoy · Unidad, Chofer, Km y Hora</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {generando && <span style={{ fontSize: 12, color: T.muted }}>Generando…</span>}
+          {!generando && !imagenLista && (
+            <button className="ru-btn" onClick={generarImagen}><Download size={14} /> Generar imagen</button>
+          )}
+          {imagenLista && (
+            <button className="ru-btn active" onClick={guardarOCompartir}><Download size={14} /> Guardar / compartir</button>
+          )}
+        </div>
+      </div>
+      {error && <div style={{ fontSize: 12, color: T.late, marginBottom: 10 }}>No se pudo generar: {error}</div>}
+
+      <div ref={capturaRef} className="ru-card" style={{ padding: 18, background: "#FFFFFF" }}>
+        <div className="ru-h" style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>Salida de hoy</div>
+        <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 14 }}>{hoy}</div>
+        {filas.length === 0 ? (
+          <div style={{ fontSize: 13, color: T.muted, padding: "10px 0" }}>No hay unidades en este alcance.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: T.bg, textAlign: "left" }}>
+                {["Unidad", "Chofer", "Km", "Hora"].map((h) => (
+                  <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map(({ unidad, revision }) => (
+                <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
+                  <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
+                  <td className="ru-mono" style={{ padding: "8px 10px" }}>
+                    {revision?.operativo?.kilometraje ? `${Number(revision.operativo.kilometraje).toLocaleString("es-MX")} km` : "—"}
+                  </td>
+                  <td className="ru-mono" style={{ padding: "8px 10px", color: revision ? T.ink : T.late }}>
+                    {revision ? new Date(revision.fecha).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : "Sin registro hoy"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones }) {
   const [gestion, setGestion] = useState("tablero"); // tablero | asignar | seguridad
-  const mostrarGestion = !esLiquidacion; // liquidación: solo lectura, solo tablero
+  const mostrarGestion = esGerente; // solo Gerente puede asignar unidades y tocar seguridad; el resto solo ve el tablero
 
   return (
     <div>
@@ -1071,6 +1307,8 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
               })}
             </div>
           )}
+
+          <ResumenSalidaHoyImagen unidadesVisibles={unidadesVisibles} revisiones={revisiones} etiqueta={esGerente ? "gerente" : "supervisor"} />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 0 10px" }}>
             <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Bitácora reciente</div>
