@@ -4430,12 +4430,14 @@ function StaffView({ data, persist, persistCargas, persistRevisionUnidad, persis
 
   // Estado de cada checklist de actividades, para pintar la pestaña
   // parpadeando en rojo (hay pendientes) o en verde (todo completo).
+  const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
   const estadoTabsActividades = {
     actividades_dia: (data.actividades?.dia?.items || []).length === 0 ? undefined : (data.actividades.dia.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
     avisos: hayAvisoNuevoPara(data, puesto, null) ? "aviso_nuevo" : undefined,
+    unidades: rutaPropiaStaff && !unidadYaRegistradaHoy(data, rutaPropiaStaff) ? "pendiente_urgente" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
