@@ -447,6 +447,17 @@ export default function App() {
     return () => clearTimeout(t);
   }, []);
 
+  // Si hay un guardado en curso (o esperando conexión), el navegador pide
+  // confirmación antes de cerrar la pestaña — así nadie pierde un registro
+  // por cerrar la app justo cuando la señal se cayó.
+  useEffect(() => {
+    const hayPendiente = estadoGuardado === "guardando" || estadoGuardado === "reintentando" || estadoGuardado === "sin_conexion";
+    if (!hayPendiente) return;
+    const avisar = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", avisar);
+    return () => window.removeEventListener("beforeunload", avisar);
+  }, [estadoGuardado]);
+
   const [refrescando, setRefrescando] = useState(false);
   // Cola de guardados "trae lo más reciente, modifícalo, guarda" (cargas,
   // revisiones de unidades, configuración de unidades). Sin esto, si alguien
@@ -455,6 +466,10 @@ export default function App() {
   // termine de guardar, y al escribir borra sin querer el primero. Con la
   // cola, cada uno espera a que el anterior termine antes de leer y guardar.
   const colaPersistenciaFrescaRef = useRef(Promise.resolve());
+  // Estado visible del guardado en curso: null | "guardando" | "reintentando"
+  // | "sin_conexion" | "error". Se muestra como una barra fija abajo para
+  // que nadie cierre la app creyendo que ya guardó cuando sigue pendiente.
+  const [estadoGuardado, setEstadoGuardado] = useState(null);
 
   async function loadData() {
     try {
@@ -559,19 +574,36 @@ export default function App() {
   // varias personas (staff subiendo un archivo nuevo, vendedores enviando su
   // propuesta) pueden guardar casi al mismo tiempo desde pestañas que llevan
   // rato abiertas con datos desactualizados.
+  // Trae el documento más reciente directo de Supabase. IMPORTANTE: si la
+  // lectura falla, LANZA el error en vez de devolver la copia local vieja.
+  // Devolver la copia vieja sería justo el bug que se quiere evitar: se
+  // guardaría una versión desactualizada encima de la buena.
   async function obtenerDataFresca() {
-    try {
-      const { data: row, error } = await supabase
-        .from("ventas_app_state")
-        .select("data")
-        .eq("id", STATE_ID)
-        .single();
-      if (error || !row?.data) return data;
-      return { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
-    } catch (err) {
-      console.error("Error trayendo dato fresco:", err);
-      return data;
-    }
+    const { data: row, error } = await supabase
+      .from("ventas_app_state")
+      .select("data")
+      .eq("id", STATE_ID)
+      .single();
+    if (error) throw new Error(error.message || "No se pudo leer el estado más reciente.");
+    if (!row?.data) throw new Error("El estado más reciente llegó vacío.");
+    return { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+  }
+
+  // Si el dispositivo está sin conexión, espera hasta que vuelva (o hasta
+  // que se agote el tiempo máximo). Así, en vez de fallar de inmediato en
+  // una zona con mala señal, el guardado simplemente queda en espera y se
+  // completa solo en cuanto hay red.
+  function esperarConexion(maxEsperaMs = 180000) {
+    if (navigator.onLine !== false) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const limpiar = () => {
+        clearTimeout(temporizador);
+        window.removeEventListener("online", alVolver);
+      };
+      const alVolver = () => { limpiar(); resolve(true); };
+      const temporizador = setTimeout(() => { limpiar(); resolve(false); }, maxEsperaMs);
+      window.addEventListener("online", alVolver);
+    });
   }
 
   // Guarda un cambio sobre "cargas" siempre partiendo del documento más
@@ -590,14 +622,41 @@ export default function App() {
   // unidades) — así nadie pisa por accidente el cambio más reciente de otra
   // persona con datos que tenía desactualizados en pantalla.
   function persistParcialFresco(calcularCambios) {
+    const MAX_INTENTOS = 6;
+
     const ejecutar = async () => {
-      const fresca = await obtenerDataFresca();
-      const cambios = calcularCambios(fresca);
-      const resultado = await persist({ ...fresca, ...cambios });
-      if (!resultado?.ok) {
-        throw new Error(resultado?.error?.message || "No se pudo guardar el cambio.");
+      let ultimoError = null;
+      for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+        // Si no hay red, no tiene caso intentar: se queda esperando a que
+        // vuelva la conexión (hasta 3 min) y entonces sigue solo.
+        if (navigator.onLine === false) {
+          setEstadoGuardado("sin_conexion");
+          await esperarConexion();
+        }
+        try {
+          setEstadoGuardado(intento === 1 ? "guardando" : "reintentando");
+          const fresca = await obtenerDataFresca();
+          const cambios = calcularCambios(fresca);
+          const resultado = await persist({ ...fresca, ...cambios });
+          if (resultado?.ok) {
+            setEstadoGuardado(null);
+            return;
+          }
+          ultimoError = resultado?.error;
+        } catch (err) {
+          ultimoError = err;
+        }
+        if (intento < MAX_INTENTOS) {
+          // Espera creciente entre intentos (1s, 2s, 4s… hasta 15s), para no
+          // saturar la red cuando la señal está intermitente.
+          const espera = Math.min(1000 * Math.pow(2, intento - 1), 15000);
+          await new Promise((r) => setTimeout(r, espera));
+        }
       }
+      setEstadoGuardado("error");
+      throw new Error(ultimoError?.message || "No se pudo guardar el cambio después de varios intentos.");
     };
+
     // Se encadena sobre la cola: este cambio no empieza a leer la base hasta
     // que el cambio anterior (si lo hay) ya terminó de guardar por completo.
     // Si el anterior falló, igual se sigue con este (no se atora la cola).
@@ -1886,6 +1945,33 @@ export default function App() {
         }
         .card-alerta-intensa { border: 2px solid #FF0000 !important; animation: parpadeoRojoIntensoCard 0.7s ease-in-out infinite; }
       `}</style>
+
+      {estadoGuardado && (
+        <div
+          style={{
+            position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 9998,
+            padding: "10px 16px", textAlign: "center", fontSize: 13, fontWeight: 600,
+            background:
+              estadoGuardado === "error" ? "#5a1414"
+              : estadoGuardado === "sin_conexion" ? "#4a3410"
+              : "#123028",
+            color:
+              estadoGuardado === "error" ? "#FF9B9B"
+              : estadoGuardado === "sin_conexion" ? "#F2B134"
+              : "#3DDC97",
+            borderTop: `1px solid ${
+              estadoGuardado === "error" ? "#FF6B6B"
+              : estadoGuardado === "sin_conexion" ? "#F2B134"
+              : "#3DDC97"
+            }`,
+          }}
+        >
+          {estadoGuardado === "guardando" && "Guardando..."}
+          {estadoGuardado === "reintentando" && "Conexión inestable — reintentando guardar, no cierres la app..."}
+          {estadoGuardado === "sin_conexion" && "Sin conexión — se guardará solo en cuanto vuelva la señal. No cierres la app."}
+          {estadoGuardado === "error" && "No se pudo guardar. Revisa tu conexión y vuelve a intentarlo."}
+        </div>
+      )}
 
       {showSplash && (
         <div
@@ -3266,7 +3352,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
       ) : tab === "mesa" ? (
         <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} />
       ) : tab === "cuponera" ? (
-        <CuponeraView data={data} persist={persist} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
+        <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
         <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : tab === "avisos" ? (
@@ -5115,7 +5201,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
               />
             </>
           ) : objTab === "cuponera" ? (
-            <CuponeraView data={data} persist={persist} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
+            <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
           ) : objTab === "tiempos" ? (
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
           ) : objTab === "unidades" ? (
