@@ -122,7 +122,7 @@ function capturarUbicacion() {
 // quemada en la imagen, y la sube al bucket "promociones" de Storage (el
 // mismo que ya usan Cuponera/Avisos/Rally) — así solo se guarda una URL corta
 // en el JSON de datos, no una imagen base64 completa por cada revisión.
-function procesarYSubirFotoOdometro(file, meta) {
+function procesarYSubirFotoOdometro(file, meta, prefijoArchivo = "unidad_odometro") {
   return new Promise((resolve, reject) => {
     const lector = new FileReader();
     lector.onerror = () => reject(new Error("No se pudo leer la imagen"));
@@ -150,11 +150,11 @@ function procesarYSubirFotoOdometro(file, meta) {
           canvas.toBlob(async (blob) => {
             if (!blob) { resolve(null); return; }
             try {
-              const nombreArchivo = `unidad_odometro_${Date.now()}.jpg`;
+              const nombreArchivo = `${prefijoArchivo}_${Date.now()}.jpg`;
               const { error } = await supabase.storage.from("promociones").upload(nombreArchivo, blob, { cacheControl: "3600", upsert: false, contentType: "image/jpeg" });
-              if (error) { console.error("No se pudo subir la foto del odómetro:", error); resolve(null); return; }
+              if (error) { console.error("No se pudo subir la foto:", error); resolve(null); return; }
               const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
-              resolve(urlData.publicUrl);
+              resolve({ url: urlData.publicUrl, nombreArchivo });
             } catch (err) {
               console.error(err);
               resolve(null);
@@ -481,6 +481,7 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
         seguridad={seguridad}
         setSeguridad={setSeguridad}
         revisiones={revisiones}
+        persistConfigUnidades={persistConfigUnidades}
       />
     </div>
   );
@@ -523,6 +524,9 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   const [ubicacion, setUbicacion] = useState(null);
   const [ubicacionEstado, setUbicacionEstado] = useState(seguridad.gps ? "pendiente" : "desactivado");
   const [foto, setFoto] = useState(null);
+  const [itemFotoRequerida, setItemFotoRequerida] = useState(null); // id del punto elegido al azar (o null)
+  const [evidenciaItem, setEvidenciaItem] = useState(null); // { url, nombreArchivo }
+  const [subiendoEvidenciaItem, setSubiendoEvidenciaItem] = useState(false);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
   const [paso, setPaso] = useState(0);
   const [fisico, setFisico] = useState({});
@@ -562,16 +566,49 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setRuta(usuarioRuta); setUnidadId(unidadDefault || ""); setCorrigiendo(false);
     setQrVerificado(false); setEsAuditoria(false); setUbicacion(null);
     setUbicacionEstado(seguridad.gps ? "pendiente" : "desactivado");
-    setFoto(null); setPaso(0);
+    setFoto(null); setItemFotoRequerida(null); setEvidenciaItem(null); setPaso(0);
     setFisico({}); setNiveles({}); setRellenos({}); setDoc({});
     setKilometraje(""); setKmEstado("idle"); setKmDetectado(""); setKmError("");
     setCombustible("3/4"); setObs(""); setEnviado(false);
   }
 
+  // Si toca auditoría, además de pedir la foto del odómetro, se elige al
+  // azar UN punto cualquiera del checklist (físico, niveles o
+  // documentación — licencia, llantas, limpieza, fluidos, póliza, etc.) y
+  // se le exige al conductor una foto de evidencia de ese punto en
+  // particular. No es siempre el mismo ni siempre se pide — depende de la
+  // misma probabilidad de auditoría configurada por Gerente.
   function avanzarDesdeConfirmacion() {
     const auditoria = seguridad.auditoria ? Math.random() * 100 < seguridad.probabilidadAuditoria : false;
     setEsAuditoria(auditoria);
+    if (auditoria) {
+      const todosLosItems = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
+      const elegido = todosLosItems[Math.floor(Math.random() * todosLosItems.length)];
+      setItemFotoRequerida(elegido.id);
+    } else {
+      setItemFotoRequerida(null);
+    }
     setPaso((p) => p + 1);
+  }
+
+  async function manejarFotoEvidenciaItem(file) {
+    if (!file || !itemFotoRequerida) return;
+    setSubiendoEvidenciaItem(true);
+    try {
+      const itemInfo = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC].find((it) => it.id === itemFotoRequerida);
+      const ahora = new Date();
+      const resultado = await procesarYSubirFotoOdometro(
+        file,
+        {
+          linea1: `${unidadActual?.placas} · ${itemInfo?.label || itemFotoRequerida}`,
+          linea2: `${ruta} · ${ahora.toLocaleString("es-MX")}`,
+        },
+        "unidad_evidencia"
+      );
+      setEvidenciaItem(resultado);
+    } finally {
+      setSubiendoEvidenciaItem(false);
+    }
   }
 
   async function manejarFotoOdometro(file) {
@@ -591,11 +628,11 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         setSubiendoFoto(true);
         const ahora = new Date();
         try {
-          const url = await procesarYSubirFotoOdometro(file, {
+          const resultado = await procesarYSubirFotoOdometro(file, {
             linea1: `${unidadActual?.placas} · ${ruta} · ${ahora.toLocaleString("es-MX")}`,
             linea2: ubicacion ? `GPS ${ubicacion.lat}, ${ubicacion.lng}` : "GPS no disponible",
           });
-          setFoto(url);
+          setFoto(resultado);
         } finally {
           setSubiendoFoto(false);
         }
@@ -622,7 +659,9 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
       qrVerificado: seguridad.qr ? qrVerificado : null,
       auditoriaAleatoria: esAuditoria,
       ubicacion,
-      foto,
+      foto: foto?.url || null,
+      fotoNombreArchivo: foto?.nombreArchivo || null,
+      evidenciaItem: evidenciaItem ? { itemId: itemFotoRequerida, url: evidenciaItem.url, nombreArchivo: evidenciaItem.nombreArchivo } : null,
       fisico, niveles, nivelesRellenos: rellenos, documentacion: doc,
       operativo: { kilometraje, combustible },
       observaciones: obs,
@@ -631,6 +670,26 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   }
 
   const puedeEnviar = (!esAuditoria || !!foto) && !!kilometraje && !subiendoFoto;
+
+  // Todas las respuestas son obligatorias: no se puede avanzar de un paso
+  // con checklist (físico, niveles, documentación) si falta contestar
+  // "Bien" o "Atención" en alguno de sus puntos. Si además ese paso tiene el
+  // punto elegido al azar para pedir evidencia, tampoco se puede avanzar
+  // sin haber tomado esa foto.
+  function todosContestados(items, valores) {
+    return items.every((it) => valores[it.id] === "bien" || valores[it.id] === "atencion");
+  }
+  const itemFotoEnEstePaso =
+    pasoActual === "fisico" ? CHECKS_FISICO.some((it) => it.id === itemFotoRequerida)
+    : pasoActual === "niveles" ? CHECKS_NIVELES.some((it) => it.id === itemFotoRequerida)
+    : pasoActual === "documentacion" ? CHECKS_DOC.some((it) => it.id === itemFotoRequerida)
+    : false;
+  const pasoCompleto = (
+    pasoActual === "fisico" ? todosContestados(CHECKS_FISICO, fisico)
+    : pasoActual === "niveles" ? todosContestados(CHECKS_NIVELES, niveles)
+    : pasoActual === "documentacion" ? todosContestados(CHECKS_DOC, doc)
+    : true
+  ) && (!itemFotoEnEstePaso || !!evidenciaItem);
 
   if (enviado) {
     const unidad = unidades.find((u) => u.id === unidadId);
@@ -729,15 +788,15 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         )}
 
         {pasoActual === "fisico" && (
-          <Checklist icon={<Truck size={16} />} titulo="Estado físico del vehículo" items={CHECKS_FISICO} valores={fisico} setValores={setFisico} />
+          <Checklist icon={<Truck size={16} />} titulo="Estado físico del vehículo" items={CHECKS_FISICO} valores={fisico} setValores={setFisico} itemFotoId={itemFotoRequerida} evidenciaItem={evidenciaItem} onCapturarEvidencia={manejarFotoEvidenciaItem} subiendoEvidencia={subiendoEvidenciaItem} />
         )}
 
         {pasoActual === "niveles" && (
-          <Checklist icon={<Droplet size={16} />} titulo="Niveles de líquidos" items={CHECKS_NIVELES} valores={niveles} setValores={setNiveles} conRelleno rellenos={rellenos} setRellenos={setRellenos} />
+          <Checklist icon={<Droplet size={16} />} titulo="Niveles de líquidos" items={CHECKS_NIVELES} valores={niveles} setValores={setNiveles} conRelleno rellenos={rellenos} setRellenos={setRellenos} itemFotoId={itemFotoRequerida} evidenciaItem={evidenciaItem} onCapturarEvidencia={manejarFotoEvidenciaItem} subiendoEvidencia={subiendoEvidenciaItem} />
         )}
 
         {pasoActual === "documentacion" && (
-          <Checklist icon={<FileText size={16} />} titulo="Documentación" items={CHECKS_DOC} valores={doc} setValores={setDoc} />
+          <Checklist icon={<FileText size={16} />} titulo="Documentación" items={CHECKS_DOC} valores={doc} setValores={setDoc} itemFotoId={itemFotoRequerida} evidenciaItem={evidenciaItem} onCapturarEvidencia={manejarFotoEvidenciaItem} subiendoEvidencia={subiendoEvidenciaItem} />
         )}
 
         {pasoActual === "operativo" && (
@@ -766,7 +825,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
                 </div>
               ) : (
                 <div>
-                  <CapturaCamaraOdometro onCapturar={manejarFotoOdometro} procesando={kmEstado === "procesando"} />
+                  <CapturaCamaraOdometro onCapturar={manejarFotoOdometro} procesando={kmEstado === "procesando"} tituloBoton="Tomar foto del odómetro" />
                   {kmError && (
                     <div style={{ fontSize: 12, color: T.late, marginTop: 6 }}>
                       {kmError} <button className="ru-btn" style={{ marginLeft: 6 }} onClick={reintentarLecturaKm}>Reintentar</button>
@@ -809,19 +868,28 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
         )}
 
         {paso > 0 && !(pasoActual === "qr" && !qrVerificado) && (
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
-            <button className="ru-btn" onClick={() => setPaso((p) => Math.max(0, p - 1))}>
-              <ChevronLeft size={15} /> Atrás
-            </button>
-            {paso < ultimoPaso ? (
-              <button className="ru-btn active" onClick={() => setPaso((p) => p + 1)}>
-                Siguiente <ChevronRight size={15} />
-              </button>
-            ) : (
-              <button className="ru-btn active" onClick={enviar} disabled={!puedeEnviar} style={{ opacity: puedeEnviar ? 1 : 0.5 }}>
-                <ShieldCheck size={15} /> Enviar revisión
-              </button>
+          <div style={{ marginTop: 20 }}>
+            {!pasoCompleto && (
+              <div style={{ fontSize: 12, color: T.late, marginBottom: 10 }}>
+                {itemFotoEnEstePaso && !evidenciaItem
+                  ? "Falta tomar la foto de evidencia del punto marcado más arriba para poder continuar."
+                  : "Responde \"Bien\" o \"Atención\" en todos los puntos para poder continuar."}
+              </div>
             )}
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <button className="ru-btn" onClick={() => setPaso((p) => Math.max(0, p - 1))}>
+                <ChevronLeft size={15} /> Atrás
+              </button>
+              {paso < ultimoPaso ? (
+                <button className="ru-btn active" onClick={() => setPaso((p) => p + 1)} disabled={!pasoCompleto} style={{ opacity: pasoCompleto ? 1 : 0.5 }}>
+                  Siguiente <ChevronRight size={15} />
+                </button>
+              ) : (
+                <button className="ru-btn active" onClick={enviar} disabled={!puedeEnviar} style={{ opacity: puedeEnviar ? 1 : 0.5 }}>
+                  <ShieldCheck size={15} /> Enviar revisión
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -834,7 +902,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
 // que en computadora solo abre el explorador de archivos). Si el navegador
 // no puede acceder a la cámara (sin permiso, sin cámara, etc.), cae a un
 // selector de archivo normal para no dejar al usuario sin poder continuar.
-function CapturaCamaraOdometro({ onCapturar, procesando }) {
+function CapturaCamaraOdometro({ onCapturar, procesando, tituloBoton, instrucciones, mostrarGuia = true }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [camara, setCamara] = useState("iniciando"); // iniciando | activa | no_disponible
@@ -881,7 +949,7 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
     ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (!blob) return;
-      onCapturar(new File([blob], `odometro_${Date.now()}.jpg`, { type: "image/jpeg" }));
+      onCapturar(new File([blob], `foto_${Date.now()}.jpg`, { type: "image/jpeg" }));
     }, "image/jpeg", 0.9);
   }
 
@@ -889,7 +957,7 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
     return (
       <div>
         <label className="ru-btn" style={{ cursor: "pointer" }}>
-          <Camera size={15} /> {procesando ? "Leyendo odómetro…" : "Elegir foto del odómetro"}
+          <Camera size={15} /> {procesando ? "Procesando…" : `Elegir foto${tituloBoton ? ` — ${tituloBoton}` : ""}`}
           <input
             type="file" accept="image/*" style={{ display: "none" }} disabled={procesando}
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onCapturar(f); }}
@@ -912,7 +980,7 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
             transform: `scale(${zoom})`, transformOrigin: "center center",
           }}
         />
-        {camara === "activa" && (
+        {camara === "activa" && mostrarGuia && (
           <div
             style={{
               position: "absolute", left: "12%", right: "12%", top: "38%", bottom: "38%",
@@ -946,10 +1014,10 @@ function CapturaCamaraOdometro({ onCapturar, procesando }) {
       )}
 
       <button className="ru-btn active" onClick={tomarFoto} disabled={camara !== "activa" || procesando}>
-        <Camera size={15} /> {procesando ? "Leyendo odómetro…" : "Tomar foto del odómetro"}
+        <Camera size={15} /> {procesando ? "Procesando…" : (tituloBoton || "Tomar foto")}
       </button>
       <div style={{ fontSize: 11.5, color: T.muted, marginTop: 6 }}>
-        Usa el zoom para que el número del odómetro llene el recuadro punteado — así se lee mejor y evita confundirse con el velocímetro o el reloj.
+        {instrucciones || "Usa el zoom para que el número del odómetro llene el recuadro punteado — así se lee mejor y evita confundirse con el velocímetro o el reloj."}
       </div>
     </div>
   );
@@ -1050,7 +1118,7 @@ function Campo({ label, children }) {
   );
 }
 
-function Checklist({ icon, titulo, items, valores, setValores, conRelleno, rellenos, setRellenos }) {
+function Checklist({ icon, titulo, items, valores, setValores, conRelleno, rellenos, setRellenos, itemFotoId, evidenciaItem, onCapturarEvidencia, subiendoEvidencia }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
@@ -1091,6 +1159,25 @@ function Checklist({ icon, titulo, items, valores, setValores, conRelleno, relle
               />
               <span style={{ fontSize: 12, color: T.muted }}>Se rellenó hoy</span>
             </label>
+          )}
+          {it.id === itemFotoId && (
+            <div style={{ marginTop: 10, padding: 10, background: T.warnSoft, borderRadius: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.warn, fontWeight: 600, marginBottom: 8 }}>
+                <AlertTriangle size={13} /> Punto seleccionado para auditoría: se requiere foto de evidencia
+              </div>
+              {evidenciaItem ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ok }}>
+                  <Check size={14} /> Foto de evidencia guardada.
+                </div>
+              ) : (
+                <CapturaCamaraOdometro
+                  onCapturar={onCapturarEvidencia}
+                  procesando={subiendoEvidencia}
+                  tituloBoton="Tomar foto de evidencia"
+                  instrucciones={`Toma una foto clara de "${it.label}".`}
+                />
+              )}
+            </div>
           )}
         </div>
       ))}
@@ -1299,9 +1386,10 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   );
 }
 
-function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones }) {
+function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades }) {
   const [gestion, setGestion] = useState("tablero"); // tablero | asignar | seguridad
   const mostrarGestion = esGerente; // solo Gerente puede asignar unidades y tocar seguridad; el resto solo ve el tablero
+  const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
 
   return (
     <div>
@@ -1324,6 +1412,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
             <button className={`ru-btn ${gestion === "tablero" ? "active" : ""}`} onClick={() => setGestion("tablero")}>Tablero</button>
             <button className={`ru-btn ${gestion === "asignar" ? "active" : ""}`} onClick={() => setGestion("asignar")}>Asignar unidades</button>
             <button className={`ru-btn ${gestion === "seguridad" ? "active" : ""}`} onClick={() => setGestion("seguridad")}>Seguridad</button>
+            <button className={`ru-btn ${gestion === "limpieza" ? "active" : ""}`} onClick={() => setGestion("limpieza")}>Limpieza</button>
           </div>
         )}
       </div>
@@ -1338,6 +1427,10 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
 
       {mostrarGestion && gestion === "seguridad" && (
         <PanelSeguridad esGerente={esGerente} seguridad={seguridad} setSeguridad={setSeguridad} />
+      )}
+
+      {mostrarGestion && gestion === "limpieza" && (
+        <PanelLimpieza revisiones={revisiones} persistConfigUnidades={persistConfigUnidades} />
       )}
 
       {(!mostrarGestion || gestion === "tablero") && (
@@ -1409,7 +1502,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: T.bg, textAlign: "left" }}>
-                  {["Fecha", "Placas", "Ruta", "Capturó", "Verificación", "Estado"].map((h) => (
+                  {["Fecha", "Placas", "Ruta", "Capturó", "Verificación", "Estado", "Evidencia"].map((h) => (
                     <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
                   ))}
                 </tr>
@@ -1421,8 +1514,14 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                   .slice(0, 12)
                   .map((r) => {
                     const u = unidades.find((x) => x.id === r.unidadId);
+                    const tieneEvidencia = !!r.foto || !!r.evidenciaItem?.url;
+                    const expandida = revisionEvidenciaId === r.id;
+                    const itemEvidenciaInfo = r.evidenciaItem
+                      ? [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC].find((it) => it.id === r.evidenciaItem.itemId)
+                      : null;
                     return (
-                      <tr key={r.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <React.Fragment key={r.id}>
+                      <tr style={{ borderTop: `1px solid ${T.border}` }}>
                         <td className="ru-mono" style={{ padding: "8px 12px", fontSize: 12 }}>
                           {new Date(r.fecha).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
                         </td>
@@ -1444,7 +1543,43 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                             ? <span style={{ color: T.late, fontWeight: 500 }}>Requiere atención</span>
                             : <span style={{ color: T.ok, fontWeight: 500 }}>Sin novedad</span>}
                         </td>
+                        <td style={{ padding: "8px 12px" }}>
+                          {tieneEvidencia ? (
+                            <button className="ru-btn" style={{ padding: "4px 8px", fontSize: 11.5 }} onClick={() => setRevisionEvidenciaId(expandida ? null : r.id)}>
+                              <Camera size={12} /> {expandida ? "Ocultar" : "Ver evidencia"}
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: 11.5, color: T.muted }}>—</span>
+                          )}
+                        </td>
                       </tr>
+                      {expandida && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: "10px 12px", background: T.bg }}>
+                            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                              {r.foto && (
+                                <div>
+                                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>Foto del odómetro</div>
+                                  <a href={r.foto} target="_blank" rel="noopener noreferrer">
+                                    <img src={r.foto} alt="Odómetro" style={{ width: 160, borderRadius: 8, display: "block" }} />
+                                  </a>
+                                </div>
+                              )}
+                              {r.evidenciaItem?.url && (
+                                <div>
+                                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>
+                                    Evidencia: {itemEvidenciaInfo?.label || r.evidenciaItem.itemId}
+                                  </div>
+                                  <a href={r.evidenciaItem.url} target="_blank" rel="noopener noreferrer">
+                                    <img src={r.evidenciaItem.url} alt="Evidencia" style={{ width: 160, borderRadius: 8, display: "block" }} />
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     );
                   })}
               </tbody>
@@ -1525,6 +1660,110 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Extrae el nombre de archivo guardado en Storage a partir de la URL pública
+// que se guardó en el registro (la URL siempre termina en el nombre del
+// archivo, sin importar el resto de la ruta).
+function extraerNombreArchivoStorage(url) {
+  if (!url) return null;
+  try {
+    const partes = url.split("/");
+    return partes[partes.length - 1] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Limpieza de registros antiguos — exclusivo de Gerente. Borra del
+ * historial las revisiones más viejas que el número de días elegido, y de
+ * paso borra del bucket de Storage las fotos (odómetro / evidencia) que
+ * esos registros tuvieran guardadas, para que no se acumulen imágenes
+ * huérfanas y la base de datos no se sature con el tiempo.
+ */
+function PanelLimpieza({ revisiones, persistConfigUnidades }) {
+  const [dias, setDias] = useState(90);
+  const [procesando, setProcesando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [errorLimpieza, setErrorLimpieza] = useState(null);
+
+  const corte = Date.now() - dias * 24 * 60 * 60 * 1000;
+  const aBorrar = (revisiones || []).filter((r) => new Date(r.fecha).getTime() < corte);
+
+  async function ejecutarLimpieza() {
+    if (aBorrar.length === 0) return;
+    const confirmado = window.confirm(
+      `¿Seguro que quieres borrar ${aBorrar.length} registro(s) de revisión (y sus fotos, si las tienen) de hace más de ${dias} días? Esta acción no se puede deshacer.`
+    );
+    if (!confirmado) return;
+
+    setProcesando(true);
+    setResultado(null);
+    setErrorLimpieza(null);
+    try {
+      // 1) Borrar del bucket de Storage las fotos de los registros que se
+      // van a eliminar (odómetro y, si la tuvieran, la de evidencia extra).
+      const archivos = [];
+      aBorrar.forEach((r) => {
+        const foto1 = extraerNombreArchivoStorage(r.foto);
+        const foto2 = extraerNombreArchivoStorage(r.evidenciaItem?.url);
+        if (foto1) archivos.push(foto1);
+        if (foto2) archivos.push(foto2);
+      });
+      if (archivos.length > 0) {
+        const { error } = await supabase.storage.from("promociones").remove(archivos);
+        if (error) console.error("No se pudieron borrar algunas imágenes del bucket:", error);
+      }
+
+      // 2) Quitar esos registros del historial, partiendo siempre del dato
+      // más reciente (por si alguien más registró una revisión justo antes).
+      const idsABorrar = new Set(aBorrar.map((r) => r.id));
+      await persistConfigUnidades((fresca) => ({
+        revisionesUnidades: (fresca.revisionesUnidades || []).filter((r) => !idsABorrar.has(r.id)),
+      }));
+
+      setResultado(`Se borraron ${aBorrar.length} registro(s) y ${archivos.length} imagen(es) del almacenamiento.`);
+    } catch (err) {
+      console.error("Error en limpieza de Unidades:", err);
+      setErrorLimpieza(err?.message || "No se pudo completar la limpieza. Intenta de nuevo.");
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>Limpieza de registros antiguos</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
+        Borra las revisiones (y las fotos que tengan guardadas) más antiguas que el número de días que elijas, para que la base de datos y el almacenamiento de imágenes no se saturen con el tiempo. Esta acción no se puede deshacer.
+      </div>
+
+      <div className="ru-card" style={{ padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13.5 }}>Borrar registros de más de</span>
+          <input
+            type="number" className="ru-input" style={{ width: 80 }} min={7} value={dias}
+            onChange={(e) => setDias(Math.max(7, Number(e.target.value) || 90))}
+          />
+          <span style={{ fontSize: 13.5 }}>días</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
+          Con {dias} días, esto borraría <strong style={{ color: T.ink }}>{aBorrar.length}</strong> registro{aBorrar.length === 1 ? "" : "s"} ahora mismo.
+        </div>
+        <button
+          className="ru-btn"
+          style={{ borderColor: T.late, color: T.late }}
+          onClick={ejecutarLimpieza}
+          disabled={procesando || aBorrar.length === 0}
+        >
+          <Trash2 size={14} /> {procesando ? "Borrando…" : `Borrar registros de más de ${dias} días`}
+        </button>
+        {resultado && <div style={{ fontSize: 12.5, color: T.ok, marginTop: 10 }}>{resultado}</div>}
+        {errorLimpieza && <div style={{ fontSize: 12.5, color: T.late, marginTop: 10 }}>{errorLimpieza}</div>}
+      </div>
     </div>
   );
 }
