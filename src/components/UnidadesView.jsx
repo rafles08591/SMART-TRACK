@@ -390,6 +390,7 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   // su grupo; gerente y liquidación ven todo (liquidación solo lectura).
   const [scopeGerente, setScopeGerente] = useState("todos"); // "todos" | "supervisor" | "supervisor2"
   const grupoFijo = rol === "staff" ? puesto : null;
+  const alcanceIrrestricto = esLiquidacion || (esGerente && scopeGerente === "todos");
   const rutasVisibles = useMemo(() => {
     if (esLiquidacion) return RUTAS_UNIDADES;
     if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") return RUTAS_UNIDADES.filter((r) => r.grupo === grupoFijo);
@@ -397,9 +398,13 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     return RUTAS_UNIDADES;
   }, [grupoFijo, esGerente, scopeGerente, esLiquidacion]);
 
+  // Con "Todos" (Gerente o Liquidación) se muestran TODAS las unidades sin
+  // filtrar por ruta — así, si alguna unidad quedó con una ruta que ya no
+  // existe en el catálogo (por ejemplo, si el catálogo de rutas cambió),
+  // sigue apareciendo aquí en vez de desaparecer en silencio.
   const unidadesVisibles = useMemo(
-    () => unidades.filter((u) => rutasVisibles.some((r) => r.id === u.ruta)),
-    [unidades, rutasVisibles]
+    () => (alcanceIrrestricto ? unidades : unidades.filter((u) => rutasVisibles.some((r) => r.id === u.ruta))),
+    [unidades, rutasVisibles, alcanceIrrestricto]
   );
 
   const resumen = useMemo(() => {
@@ -1213,6 +1218,26 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     document.body.removeChild(link);
   }
 
+  // Excel del resumen de hoy: SIEMPRE una fila por cada unidad visible
+  // (igual que la tabla/imagen de arriba), aunque todavía no tenga ningún
+  // registro — así nunca sale en blanco, a diferencia de la bitácora
+  // detallada de más abajo, que solo lista revisiones ya hechas.
+  function descargarExcelResumenHoy() {
+    const filasExcel = filas.map(({ unidad, revision }) => ({
+      Unidad: unidad.placas,
+      Ruta: unidad.ruta,
+      Chofer: unidad.conductor || revision?.capturadoPor || "",
+      "Km": revision?.operativo?.kilometraje || "",
+      "Hora de salida": salidasPorRuta[unidad.ruta] ? new Date(salidasPorRuta[unidad.ruta]).toLocaleTimeString("es-MX") : "Sin salida registrada",
+      "Checklist de hoy": revision ? "Registrado" : "Sin registro",
+    }));
+    const hoja = XLSX.utils.json_to_sheet(filasExcel);
+    hoja["!cols"] = [{ wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 18 }, { wch: 16 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Salida de hoy");
+    XLSX.writeFile(libro, `salida_hoy_unidades_${etiqueta}_${hoy}.xlsx`);
+  }
+
   useEffect(() => {
     return () => { if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url); };
   }, [imagenLista]);
@@ -1222,6 +1247,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Salida de hoy · Unidad, Chofer, Km y Hora</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button className="ru-btn" onClick={descargarExcelResumenHoy}><Download size={14} /> Excel</button>
           {generando && <span style={{ fontSize: 12, color: T.muted }}>Generando…</span>}
           {!generando && !imagenLista && (
             <button className="ru-btn" onClick={generarImagen}><Download size={14} /> Generar imagen</button>
@@ -1376,7 +1402,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
               className="ru-btn"
               onClick={() => exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, esGerente ? "gerente" : "supervisor")}
             >
-              <Download size={14} /> Descargar Excel
+              <Download size={14} /> Descargar histórico completo (Excel)
             </button>
           </div>
           <div className="ru-card" style={{ overflow: "hidden" }}>
