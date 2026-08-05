@@ -235,9 +235,15 @@ async function leerOdometro(dataUrl) {
   }
 }
 
-function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaRol) {
+function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaRol, alcanceIrrestricto) {
   const filas = revisiones
-    .filter((r) => unidadesVisibles.some((u) => u.id === r.unidadId))
+    .filter((r) => {
+      if (alcanceIrrestricto) return true;
+      if (unidadesVisibles.some((u) => u.id === r.unidadId)) return true;
+      // Revisiones de unidades que ya se dieron de baja: se conservan para
+      // no perder el histórico de lo que sí pasó ese día.
+      return !unidades.some((u) => u.id === r.unidadId);
+    })
     .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
     .map((r) => {
       const u = unidades.find((x) => x.id === r.unidadId);
@@ -498,6 +504,7 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
         setSeguridad={setSeguridad}
         revisiones={revisiones}
         persistConfigUnidades={persistConfigUnidades}
+        alcanceIrrestricto={alcanceIrrestricto}
       />
     </div>
   );
@@ -1525,7 +1532,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   );
 }
 
-function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades }) {
+function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto }) {
   const [gestion, setGestion] = useState("tablero"); // tablero | asignar | seguridad
   const mostrarGestion = esGerente; // solo Gerente puede asignar unidades y tocar seguridad; el resto solo ve el tablero
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
@@ -1634,7 +1641,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
             <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Bitácora reciente</div>
             <button
               className="ru-btn"
-              onClick={() => exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, esGerente ? "gerente" : "supervisor")}
+              onClick={() => exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, esGerente ? "gerente" : "supervisor", alcanceIrrestricto)}
             >
               <Download size={14} /> Descargar histórico completo (Excel)
             </button>
@@ -1650,7 +1657,18 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
               </thead>
               <tbody>
                 {revisiones
-                  .filter((r) => unidadesVisibles.some((u) => u.id === r.unidadId))
+                  .filter((r) => {
+                    // Con alcance completo (Gerente en "Todos" o Liquidación) se
+                    // muestran TODAS las revisiones — incluso si su unidad se
+                    // borró después o cambió de ruta; antes esas desaparecían
+                    // en silencio y se perdía el registro de lo que pasó.
+                    if (alcanceIrrestricto) return true;
+                    if (unidadesVisibles.some((u) => u.id === r.unidadId)) return true;
+                    // Si la unidad ya no existe, se cae a la ruta que quedó
+                    // guardada en el propio registro de la revisión.
+                    const existeUnidad = unidades.some((u) => u.id === r.unidadId);
+                    return !existeUnidad && rutasVisibles.some((rv) => rv.id === r.ruta);
+                  })
                   .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
                   .slice(0, 12)
                   .map((r) => {
@@ -1666,7 +1684,9 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                         <td className="ru-mono" style={{ padding: "8px 12px", fontSize: 12 }}>
                           {new Date(r.fecha).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
                         </td>
-                        <td style={{ padding: "8px 12px" }}>{u?.placas}</td>
+                        <td style={{ padding: "8px 12px" }}>
+                          {u?.placas || <span style={{ color: T.muted, fontStyle: "italic" }}>unidad dada de baja</span>}
+                        </td>
                         <td style={{ padding: "8px 12px" }}>{u?.ruta || r.ruta}</td>
                         <td style={{ padding: "8px 12px" }}>{r.capturadoPor}</td>
                         <td style={{ padding: "8px 12px" }}>
