@@ -110,8 +110,14 @@ function TarjetaPromocion({ promo, expandida, onToggle, puedeEliminar, onElimina
  * - Todos: ven el listado de promociones activas + LEER CUPÓN (QR).
  * - El QR se valida contra el código de cada promoción (coincidencia exacta).
  * - Staff: tabla de canjes por ruta + descarga de Excel (se reinicia por periodo).
+ *
+ * NOTA sobre guardado: todo se persiste con "persistFresco", que trae primero
+ * el documento más reciente de Supabase y le aplica el cambio encima. Esto es
+ * indispensable aquí porque varias rutas pueden canjear cupones casi al mismo
+ * tiempo desde pantallas que llevan rato abiertas; con el guardado simple, el
+ * último en guardar borraba los canjes de los demás.
  */
-export default function CuponeraView({ data, persist, puesto, rol, rutaActual, revisorNombre, nombres = {} }) {
+export default function CuponeraView({ data, persist, persistFresco, puesto, rol, rutaActual, revisorNombre, nombres = {} }) {
   const [escaneando, setEscaneando] = useState(false);
   const [cuponLeido, setCuponLeido] = useState(null); // { valido, texto, promo?, motivo? }
   const [promoExpandidaId, setPromoExpandidaId] = useState(null);
@@ -123,6 +129,7 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
   const [nuevaDescripcion, setNuevaDescripcion] = useState("");
   const [nuevoCodigo, setNuevoCodigo] = useState("");
   const [guardandoPromocion, setGuardandoPromocion] = useState(false);
+  const [errorGuardado, setErrorGuardado] = useState(null);
 
   const esGerente = rol === "staff" && puesto === "gerente";
   const promociones = data.promociones || [];
@@ -155,6 +162,7 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
       return;
     }
     setGuardandoPromocion(true);
+    setErrorGuardado(null);
     try {
       const extension = (nuevaImagenFile.name.split(".").pop() || "jpg").toLowerCase();
       const nombreArchivo = `promo_${Date.now()}.${extension}`;
@@ -179,11 +187,14 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
         creadaPor: revisorNombre || "Gerente",
         creadaFecha: todayISO(),
       };
-      persist({ ...data, promociones: [...promociones, nueva] });
+      await persistFresco((fresca) => ({ promociones: [...(fresca.promociones || []), nueva] }));
       setNuevaImagenFile(null);
       setNuevaImagenPreview(null);
       setNuevaDescripcion("");
       setNuevoCodigo("");
+    } catch (err) {
+      console.error("Error guardando la promoción:", err);
+      setErrorGuardado(err?.message || "No se pudo guardar la promoción. Intenta de nuevo.");
     } finally {
       setGuardandoPromocion(false);
     }
@@ -191,7 +202,13 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
 
   async function eliminarPromocion(id) {
     const promo = promociones.find((p) => p.id === id);
-    persist({ ...data, promociones: promociones.filter((p) => p.id !== id) });
+    try {
+      await persistFresco((fresca) => ({ promociones: (fresca.promociones || []).filter((p) => p.id !== id) }));
+    } catch (err) {
+      console.error("Error eliminando la promoción:", err);
+      setErrorGuardado(err?.message || "No se pudo eliminar la promoción. Intenta de nuevo.");
+      return;
+    }
     if (promo?.archivoStorage) {
       try {
         await supabase.storage.from("promociones").remove([promo.archivoStorage]);
@@ -204,7 +221,7 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
   // El QR se compara de forma ESTRICTA (exacta, sensible a mayúsculas) contra
   // el código guardado de cada promoción, solo quitando espacios sobrantes
   // al inicio/final que a veces agregan los lectores de cámara.
-  function onQrResult(texto) {
+  async function onQrResult(texto) {
     setEscaneando(false);
     const codigoEscaneado = (texto || "").trim();
     const promoValida = promociones.find((p) => p.codigo === codigoEscaneado);
@@ -218,14 +235,21 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
 
     if (rol === "vendedor" && rutaActual) {
       const registro = {
-        id: "canje_" + Date.now(),
+        id: "canje_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
         ruta: rutaActual,
         fecha: todayISO(),
         promocionId: promoValida.id,
         promocionDescripcion: promoValida.descripcion,
         codigo: promoValida.codigo,
       };
-      persist({ ...data, cuponesRedimidos: [...cuponesRedimidos, registro] });
+      try {
+        // Se agrega SOBRE el log más reciente: si otra ruta canjeó un cupón
+        // hace un momento, su registro no se pierde al guardar este.
+        await persistFresco((fresca) => ({ cuponesRedimidos: [...(fresca.cuponesRedimidos || []), registro] }));
+      } catch (err) {
+        console.error("Error registrando el canje:", err);
+        setErrorGuardado(err?.message || "El cupón es válido, pero no se pudo registrar el canje. Revisa tu conexión y vuelve a escanearlo.");
+      }
     }
   }
 
@@ -259,6 +283,12 @@ export default function CuponeraView({ data, persist, puesto, rol, rutaActual, r
 
   return (
     <div>
+      {errorGuardado && (
+        <div className="card" style={{ padding: "12px 14px", marginBottom: 16, border: "1px solid #FF6B6B", color: "#FF6B6B", fontSize: 12.5 }}>
+          {errorGuardado}
+        </div>
+      )}
+
       {esGerente && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 10 }}>AGREGAR PROMOCIÓN</div>
