@@ -5602,7 +5602,64 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
               </div>
             )}
           </div>
+          {/* ========== BOTÓN ACTUALIZAR DESDE POWERSTREET ========== */}
+{puesto === "gerente" && (
+  <div className="card" style={{ padding: 18, marginBottom: 20, border: "1px solid #1E6FEB" }}>
+    <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>
+      ACTUALIZAR DESDE POWERSTREET
+    </div>
+    <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0, marginBottom: 14 }}>
+      Descarga automáticamente el reporte “Detalle de Ventas por Clientes” de hoy,
+      lo procesa y actualiza el Avance del Día en SMART-TRACK.
+    </p>
 
+    <button
+      className="btn"
+      style={{ background: "#1E6FEB", borderColor: "#1E6FEB", color: "#fff" }}
+      onClick={async () => {
+        setAvanceDiaStatus("Actualizando desde PowerStreet... espera unos segundos");
+        try {
+          const res = await fetch(
+            "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ trigger: "avance-dia" }),
+            }
+          );
+
+          const result = await res.json();
+
+          if (result.success) {
+            setAvanceDiaStatus(`Avance cargado: ${result.totalRegistros} registros desde PowerStreet`);
+            await loadData();
+          } else {
+            setAvanceDiaStatus("Error: " + (result.message || "No se pudo actualizar"));
+          }
+        } catch (err) {
+          console.error(err);
+          setAvanceDiaStatus("Error de conexión con n8n. Revisa que el workflow esté activo.");
+        }
+      }}
+    >
+      Actualizar desde PowerStreet
+    </button>
+
+    {avanceDiaStatus && (
+      <div style={{
+        marginTop: 14,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontSize: 13,
+        color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B"
+      }}>
+        {avanceDiaStatus.startsWith("Avance cargado") ? "✅" : "⚠️"} {avanceDiaStatus}
+      </div>
+    )}
+  </div>
+)}
+{/* ========== FIN BOTÓN POWERSTREET ========== */}
           <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
             <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>AVANCE DEL DÍA (REPORTE DEL SISTEMA)</div>
             <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
