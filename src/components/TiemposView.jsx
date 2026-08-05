@@ -186,6 +186,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const [selectedRuta, setSelectedRuta] = useState(RUTAS_TIEMPOS[0]);
   const [selectedAccion, setSelectedAccion] = useState("");
   const [registrando, setRegistrando] = useState(false);
+  const [kmSalida, setKmSalida] = useState("");
 
   const activoRef = useRef(activo);
   const historialRef = useRef(historial);
@@ -268,8 +269,10 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   }, []);
 
   // Marca un checkpoint de una sola vez (ingreso_clo, salida_ruta,
-  // ingreso_clo_fin, salida_clo_final).
-  const marcarInstante = async (ruta, areaKey, areaNombre) => {
+  // ingreso_clo_fin, salida_clo_final). En "salida_ruta" se puede capturar
+  // además el kilometraje con el que la unidad sale del CLO — así las rutas
+  // de reparto ya no tienen que capturarlo aparte en el módulo de Unidades.
+  const marcarInstante = async (ruta, areaKey, areaNombre, extra = {}) => {
     if (!misAreas.includes(areaNombre)) return;
     const hoy = todayStr();
     let fresh = await fetchLatestActivo();
@@ -277,7 +280,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     const r = normalizarRuta(fresh.rutas[ruta], ruta);
     if (r.areas[areaKey].ts) return;
     const ts = Date.now();
-    let areasNuevas = { ...r.areas, [areaKey]: { ts, usuario: identidad } };
+    let areasNuevas = { ...r.areas, [areaKey]: { ts, usuario: identidad, ...extra } };
     let rutaActualizada = { ...r, areas: areasNuevas };
 
     // "Salida de CLO final" cierra Almacén automáticamente en ese instante.
@@ -375,14 +378,26 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRuta, JSON.stringify(opcionesAccion)]);
 
+  // true si la acción elegida ahora mismo es la salida a ruta (es el único
+  // momento en que se pide el kilometraje de salida del CLO).
+  const esSalidaARuta = selectedAccion === "salida_ruta|instante";
+
   const registrarAccionSeleccionada = async () => {
     if (!selectedAccion) return;
     const [areaKey, modo] = selectedAccion.split("|");
     const area = AREAS.find((a) => a.key === areaKey);
     if (!area) return;
+    if (esSalidaARuta && !String(kmSalida).trim()) {
+      alert("Captura el kilometraje con el que sale la unidad del CLO.");
+      return;
+    }
     setRegistrando(true);
     try {
-      if (modo === "instante") await marcarInstante(selectedRuta, area.key, area.nombre);
+      if (modo === "instante") {
+        const extra = esSalidaARuta ? { km: Number(kmSalida) } : {};
+        await marcarInstante(selectedRuta, area.key, area.nombre, extra);
+        setKmSalida("");
+      }
       else if (modo === "entrada") await marcarEntrada(selectedRuta, area.key, area.nombre);
       else if (modo === "salida") await marcarSalida(selectedRuta, area.key, area.nombre);
     } finally {
@@ -439,6 +454,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         if (r.areas.ingreso_clo.ts && r.areas.salida_ruta.ts) {
           fila["Minutos en CLO (antes de salir)"] = Math.round((r.areas.salida_ruta.ts - r.areas.ingreso_clo.ts) / 60000);
         }
+        fila["Km al salir del CLO"] = r.areas.salida_ruta?.km ?? "";
         if (r.areas.salida_ruta.ts && r.areas.ingreso_clo_fin.ts) {
           fila["Minutos en ruta"] = Math.round((r.areas.ingreso_clo_fin.ts - r.areas.salida_ruta.ts) / 60000);
         }
@@ -544,6 +560,22 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
               <Check size={13} style={{ verticalAlign: "-2px" }} /> {registrando ? "Registrando..." : "Registrar"}
             </button>
           </div>
+
+          {esSalidaARuta && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
+                Kilometraje con el que sale la unidad del CLO (obligatorio)
+              </div>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={kmSalida}
+                onChange={(e) => setKmSalida(e.target.value)}
+                placeholder="Ej. 21910"
+                style={{ width: "100%", maxWidth: 220, boxSizing: "border-box" }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -609,6 +641,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                               <div style={{ fontSize: 12, fontWeight: 700, color: "#E8EDF5" }}>{a.nombre}</div>
                               <div className="mono" style={{ fontSize: 10, color: "#9AA7BD", display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 {area.ts && <span>{formatHora(area.ts)}</span>}
+                                {area.km != null && <span style={{ color: "#F2B134" }}>· {Number(area.km).toLocaleString("es-MX")} km</span>}
                                 {area.usuario && <span style={{ color: "#6b7280" }}>· {area.usuario}</span>}
                               </div>
                             </div>
