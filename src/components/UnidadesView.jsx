@@ -8,6 +8,7 @@ import {
   QrCode, MapPin, Camera, ScanLine,
 } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { supabaseTiempos } from "./TiemposView";
 
 /* ---------------------------------------------------------------
    TOKENS visuales (paleta propia de este módulo, distinta del resto
@@ -1099,12 +1100,66 @@ function Checklist({ icon, titulo, items, valores, setValores, conRelleno, relle
 // resumen del día: Unidad, Chofer, Km y hora en que se registró el
 // checklist de cada ruta visible — pensado para mandarlo rápido por
 // WhatsApp sin tener que abrir el Excel.
+// Trae, para la fecha dada, la hora de "Salida a ruta" registrada en el
+// panel de Tiempos (otro proyecto de Supabase) por cada código de ruta.
+// Primero revisa el día activo del board; si una ruta no aparece ahí (por
+// ejemplo porque ya se cerró el día), la busca en el historial.
+async function obtenerSalidasRutaHoy(fecha) {
+  const mapa = {};
+  try {
+    const { data: activoRow } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "board-activo").maybeSingle();
+    if (activoRow?.value?.fecha === fecha && activoRow.value.rutas) {
+      Object.entries(activoRow.value.rutas).forEach(([ruta, info]) => {
+        const ts = info?.areas?.salida_ruta?.ts;
+        if (ts) mapa[ruta] = ts;
+      });
+    }
+  } catch (e) {
+    console.error("Error consultando board-activo de Tiempos:", e);
+  }
+  try {
+    const { data: histRow } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "historial-rutas").maybeSingle();
+    const historial = Array.isArray(histRow?.value) ? histRow.value : [];
+    historial
+      .filter((h) => h.fecha === fecha)
+      .forEach((h) => {
+        if (mapa[h.ruta] == null) {
+          const ts = h.areas?.salida_ruta?.ts;
+          if (ts) mapa[h.ruta] = ts;
+        }
+      });
+  } catch (e) {
+    console.error("Error consultando historial-rutas de Tiempos:", e);
+  }
+  return mapa;
+}
+
 function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   const capturaRef = useRef(null);
   const [generando, setGenerando] = useState(false);
   const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
   const [error, setError] = useState(null);
+  const [salidasPorRuta, setSalidasPorRuta] = useState({});
+  const [cargandoSalidas, setCargandoSalidas] = useState(true);
   const hoy = todayISO();
+
+  useEffect(() => {
+    let activo = true;
+    function cargar() {
+      obtenerSalidasRutaHoy(hoy).then((mapa) => {
+        if (activo) {
+          setSalidasPorRuta(mapa);
+          setCargandoSalidas(false);
+        }
+      });
+    }
+    cargar();
+    // Se refresca cada 20s, igual que el resto de las pantallas que
+    // consultan Tiempos, para que la hora de salida aparezca en cuanto se
+    // registre sin tener que recargar la página.
+    const intervalo = setInterval(cargar, 20000);
+    return () => { activo = false; clearInterval(intervalo); };
+  }, [hoy]);
 
   const filas = useMemo(() => {
     return unidadesVisibles
@@ -1187,24 +1242,29 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: T.bg, textAlign: "left" }}>
-                {["Unidad", "Chofer", "Km", "Hora"].map((h) => (
+                {["Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
                   <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filas.map(({ unidad, revision }) => (
-                <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
-                  <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
-                  <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
-                  <td className="ru-mono" style={{ padding: "8px 10px" }}>
-                    {revision?.operativo?.kilometraje ? `${Number(revision.operativo.kilometraje).toLocaleString("es-MX")} km` : "—"}
-                  </td>
-                  <td className="ru-mono" style={{ padding: "8px 10px", color: revision ? T.ink : T.late }}>
-                    {revision ? new Date(revision.fecha).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : "Sin registro hoy"}
-                  </td>
-                </tr>
-              ))}
+              {filas.map(({ unidad, revision }) => {
+                const tsSalida = salidasPorRuta[unidad.ruta];
+                return (
+                  <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
+                    <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
+                    <td className="ru-mono" style={{ padding: "8px 10px" }}>
+                      {revision?.operativo?.kilometraje ? `${Number(revision.operativo.kilometraje).toLocaleString("es-MX")} km` : "—"}
+                    </td>
+                    <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : T.late }}>
+                      {tsSalida
+                        ? new Date(tsSalida).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                        : cargandoSalidas ? "Consultando…" : "Sin salida registrada"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
