@@ -447,17 +447,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, []);
 
-  // Si hay un guardado en curso (o esperando conexión), el navegador pide
-  // confirmación antes de cerrar la pestaña — así nadie pierde un registro
-  // por cerrar la app justo cuando la señal se cayó.
-  useEffect(() => {
-    const hayPendiente = estadoGuardado === "guardando" || estadoGuardado === "reintentando" || estadoGuardado === "sin_conexion";
-    if (!hayPendiente) return;
-    const avisar = (e) => { e.preventDefault(); e.returnValue = ""; };
-    window.addEventListener("beforeunload", avisar);
-    return () => window.removeEventListener("beforeunload", avisar);
-  }, [estadoGuardado]);
-
   const [refrescando, setRefrescando] = useState(false);
   // Cola de guardados "trae lo más reciente, modifícalo, guarda" (cargas,
   // revisiones de unidades, configuración de unidades). Sin esto, si alguien
@@ -470,6 +459,17 @@ export default function App() {
   // | "sin_conexion" | "error". Se muestra como una barra fija abajo para
   // que nadie cierre la app creyendo que ya guardó cuando sigue pendiente.
   const [estadoGuardado, setEstadoGuardado] = useState(null);
+
+  // Si hay un guardado en curso (o esperando conexión), el navegador pide
+  // confirmación antes de cerrar la pestaña — así nadie pierde un registro
+  // por cerrar la app justo cuando la señal se cayó.
+  useEffect(() => {
+    const hayPendiente = estadoGuardado === "guardando" || estadoGuardado === "reintentando" || estadoGuardado === "sin_conexion";
+    if (!hayPendiente) return;
+    const avisar = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", avisar);
+    return () => window.removeEventListener("beforeunload", avisar);
+  }, [estadoGuardado]);
 
   async function loadData() {
     try {
