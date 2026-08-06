@@ -707,6 +707,30 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setKmEstado("idle"); setKmDetectado(""); setKmError(""); setFoto(null); setKilometraje("");
   }
 
+  // Foto de evidencia para auditoría cuando el escaneo de odómetro está
+  // DESACTIVADO (kilometraje manual). Antes, si "kmCamara" estaba apagado,
+  // no existía forma de tomar la foto que la auditoría exige — el botón de
+  // "Enviar revisión" se quedaba bloqueado sin ninguna opción en pantalla
+  // para resolverlo. Esta función sube la foto directo, sin depender de la
+  // lectura automática de dígitos.
+  async function capturarFotoEvidenciaAuditoria(file) {
+    if (!file) return;
+    setSubiendoFoto(true);
+    setKmError("");
+    try {
+      const ahora = new Date();
+      const resultado = await procesarYSubirFotoOdometro(file, {
+        linea1: `${unidadActual?.placas} · ${ruta} · ${ahora.toLocaleString("es-MX")}`,
+        linea2: ubicacion ? `GPS ${ubicacion.lat}, ${ubicacion.lng}` : "GPS no disponible",
+      });
+      setFoto(resultado);
+    } catch (err) {
+      setKmError("No se pudo subir la foto de evidencia. Intenta de nuevo.");
+    } finally {
+      setSubiendoFoto(false);
+    }
+  }
+
   function enviar() {
     const requiereAtencion = Object.values(fisico).includes("atencion") || Object.values(niveles).includes("atencion") || Object.values(doc).includes("atencion");
     onRegistrar({
@@ -921,10 +945,26 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
               <div style={{ fontSize: 12, color: T.muted }}>
                 {subiendoFoto ? "Subiendo foto de evidencia…" : foto ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Check size={13} color={T.ok} /> Foto de evidencia guardada junto con la lectura del odómetro.
+                    <Check size={13} color={T.ok} /> Foto de evidencia guardada.
                   </div>
-                ) : (
+                ) : seguridad.kmCamara ? (
                   "La foto de evidencia se genera automáticamente al escanear el odómetro."
+                ) : (
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 500, color: T.ink }}>
+                      Esta revisión requiere una foto de evidencia del odómetro (obligatoria):
+                    </div>
+                    <CapturaCamaraOdometro
+                      onCapturar={capturarFotoEvidenciaAuditoria}
+                      procesando={subiendoFoto}
+                      tituloBoton="Tomar foto de evidencia"
+                      instrucciones="Toma una foto del odómetro para dejar evidencia de esta auditoría."
+                      mostrarGuia={false}
+                    />
+                    {kmError && (
+                      <div style={{ fontSize: 12, color: T.late, marginTop: 6 }}>{kmError}</div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
