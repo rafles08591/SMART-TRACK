@@ -725,30 +725,6 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setKmEstado("idle"); setKmDetectado(""); setKmError(""); setFoto(null); setKilometraje("");
   }
 
-  // Foto de evidencia para auditoría cuando el escaneo de odómetro está
-  // DESACTIVADO (kilometraje manual). Antes, si "kmCamara" estaba apagado,
-  // no existía forma de tomar la foto que la auditoría exige — el botón de
-  // "Enviar revisión" se quedaba bloqueado sin ninguna opción en pantalla
-  // para resolverlo. Esta función sube la foto directo, sin depender de la
-  // lectura automática de dígitos.
-  async function capturarFotoEvidenciaAuditoria(file) {
-    if (!file) return;
-    setSubiendoFoto(true);
-    setKmError("");
-    try {
-      const ahora = new Date();
-      const resultado = await procesarYSubirFotoOdometro(file, {
-        linea1: `${unidadActual?.placas} · ${ruta} · ${ahora.toLocaleString("es-MX")}`,
-        linea2: ubicacion ? `GPS ${ubicacion.lat}, ${ubicacion.lng}` : "GPS no disponible",
-      });
-      setFoto(resultado);
-    } catch (err) {
-      setKmError("No se pudo subir la foto de evidencia. Intenta de nuevo.");
-    } finally {
-      setSubiendoFoto(false);
-    }
-  }
-
   function enviar() {
     const requiereAtencion = Object.values(fisico).includes("atencion") || Object.values(niveles).includes("atencion") || Object.values(doc).includes("atencion");
     onRegistrar({
@@ -771,7 +747,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setEnviado(true);
   }
 
-  const puedeEnviar = (!esAuditoria || !!foto) && (!itemFotoRequerida || !!evidenciaItem) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto && !subiendoEvidenciaItem;
+  const puedeEnviar = (!itemFotoRequerida || !!evidenciaItem) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto && !subiendoEvidenciaItem;
 
   // Todas las respuestas son obligatorias: no se puede avanzar de un paso
   // con checklist (físico, niveles, documentación) si falta contestar
@@ -822,7 +798,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
 
       {esAuditoria && paso > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: T.warnSoft, color: T.warn, borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 12, fontWeight: 500 }}>
-          <AlertTriangle size={14} /> Esta revisión fue seleccionada para auditoría aleatoria: se pedirá foto de un punto del checklist elegido al azar, y también la foto del odómetro al llegar al paso Operativo.
+          <AlertTriangle size={14} /> Esta revisión fue seleccionada para auditoría aleatoria: se pedirá foto de un punto del checklist elegido al azar.
         </div>
       )}
 
@@ -959,33 +935,6 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
               </div>
             )}
 
-            {esAuditoria && (
-              <div style={{ fontSize: 12, color: T.muted }}>
-                {subiendoFoto ? "Subiendo foto de evidencia…" : foto ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Check size={13} color={T.ok} /> Foto de evidencia guardada.
-                  </div>
-                ) : seguridad.kmCamara ? (
-                  "La foto de evidencia se genera automáticamente al escanear el odómetro."
-                ) : (
-                  <div>
-                    <div style={{ marginBottom: 8, fontWeight: 500, color: T.ink }}>
-                      Esta revisión requiere una foto de evidencia del odómetro (obligatoria):
-                    </div>
-                    <CapturaCamaraOdometro
-                      onCapturar={capturarFotoEvidenciaAuditoria}
-                      procesando={subiendoFoto}
-                      tituloBoton="Tomar foto de evidencia"
-                      instrucciones="Toma una foto del odómetro para dejar evidencia de esta auditoría."
-                      mostrarGuia={false}
-                    />
-                    {kmError && (
-                      <div style={{ fontSize: 12, color: T.late, marginTop: 6 }}>{kmError}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -1399,8 +1348,34 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     setImagenLista(null);
     try {
       if (!capturaRef.current) return;
+      // Se mide el ancho real que necesita la tabla (puede ser más ancha que
+      // la pantalla en celular, por el contenedor con scroll horizontal que
+      // se le agregó) y se fuerza a html2canvas a usar ese ancho completo,
+      // para que la imagen generada no salga recortada.
+      const anchoCompleto = Math.max(
+        capturaRef.current.scrollWidth,
+        capturaRef.current.clientWidth,
+        ...Array.from(capturaRef.current.querySelectorAll("table")).map((t) => t.scrollWidth),
+        0
+      );
       const canvas = await Promise.race([
-        html2canvas(capturaRef.current, { backgroundColor: "#FFFFFF", scale: 1.5, useCORS: true }),
+        html2canvas(capturaRef.current, {
+          backgroundColor: "#FFFFFF", scale: 1.5, useCORS: true,
+          width: anchoCompleto,
+          windowWidth: anchoCompleto,
+          onclone: (clonedDoc, clonedEl) => {
+            clonedEl.style.width = `${anchoCompleto}px`;
+            clonedEl.style.maxWidth = "none";
+            clonedDoc.querySelectorAll("*").forEach((el) => {
+              const estilo = el.style;
+              if (estilo && (estilo.overflowX === "auto" || estilo.overflowX === "scroll")) {
+                estilo.overflowX = "visible";
+                estilo.overflow = "visible";
+                estilo.maxWidth = "none";
+              }
+            });
+          },
+        }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse.")), 20000)),
       ]);
       canvas.toBlob((blob) => {
@@ -1562,36 +1537,38 @@ ${lineas.join("\n")}
         {filas.length === 0 ? (
           <div style={{ fontSize: 13, color: T.muted, padding: "10px 0" }}>No hay unidades en este alcance.</div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: T.bg, textAlign: "left" }}>
-                {["Ruta", "Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
-                  <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map(({ unidad, revision }) => {
-                const tsSalida = salidasPorRuta[unidad.ruta]?.ts;
-                const km = kmDeUnidad(unidad, revision);
-                return (
-                  <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
-                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{unidad.ruta}</td>
-                    <td style={{ padding: "8px 10px", fontWeight: 500 }}>{unidad.placas}</td>
-                    <td style={{ padding: "8px 10px" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
-                    <td className="ru-mono" style={{ padding: "8px 10px" }}>
-                      {km != null ? `${km.toLocaleString("es-MX")} km` : "—"}
-                    </td>
-                    <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : T.late }}>
-                      {tsSalida
-                        ? new Date(tsSalida).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                        : cargandoSalidas ? "Consultando…" : "Sin salida registrada"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 480 }}>
+              <thead>
+                <tr style={{ background: T.bg, textAlign: "left" }}>
+                  {["Ruta", "Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
+                    <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map(({ unidad, revision }) => {
+                  const tsSalida = salidasPorRuta[unidad.ruta]?.ts;
+                  const km = kmDeUnidad(unidad, revision);
+                  return (
+                    <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <td style={{ padding: "8px 10px", fontWeight: 600, whiteSpace: "nowrap" }}>{unidad.ruta}</td>
+                      <td style={{ padding: "8px 10px", fontWeight: 500, whiteSpace: "nowrap" }}>{unidad.placas}</td>
+                      <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
+                      <td className="ru-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
+                        {km != null ? `${km.toLocaleString("es-MX")} km` : "—"}
+                      </td>
+                      <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : T.late, whiteSpace: "nowrap" }}>
+                        {tsSalida
+                          ? new Date(tsSalida).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                          : cargandoSalidas ? "Consultando…" : "Sin salida registrada"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
