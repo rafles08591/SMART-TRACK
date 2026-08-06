@@ -875,15 +875,21 @@ export default function App() {
   const stats = useMemo(() => {
     const restantes = diasRestantes(periodo.fin, diasNoLaborables);
     const diasLaborablesTotal = diasHabilesEntre(periodo.inicio, periodo.fin, diasNoLaborables);
-    const hoyCapado = todayISO() > periodo.fin ? periodo.fin : todayISO();
+    // "Días transcurridos" para la proyección se cuenta hasta la fecha del
+    // ÚLTIMO dato que realmente se cargó (avanceDia/otcDia), no hasta "hoy"
+    // en el calendario. Si hoy es viernes pero la venta de hoy aún no se ha
+    // subido, contar "hoy" como día transcurrido inflaba de más el
+    // denominador y sacaba un proyectado más bajo del real.
+    const fechasRef = [...avanceDia.map((r) => r.fecha), ...otcDia.map((r) => r.fecha)];
+    const fechaUltimoDato = fechasRef.length
+      ? fechasRef.reduce((max, f) => (f > max ? f : max), fechasRef[0])
+      : todayISO();
+    const hoyCapado = fechaUltimoDato > periodo.fin ? periodo.fin : fechaUltimoDato;
     const diasTranscurridos = diasHabilesEntre(periodo.inicio, hoyCapado, diasNoLaborables);
     function proyectar(avance) {
       return diasTranscurridos > 0 ? (avance / diasTranscurridos) * diasLaborablesTotal : avance;
     }
-    const fechasRef = [...avanceDia.map((r) => r.fecha), ...otcDia.map((r) => r.fecha)];
-    const fechaHoyRef = fechasRef.length
-      ? fechasRef.reduce((max, f) => (f > max ? f : max), fechasRef[0])
-      : todayISO();
+    const fechaHoyRef = fechaUltimoDato;
 
     function tabMetrics(objetivo, avance) {
       const restaPorVender = Math.max(objetivo - avance, 0);
