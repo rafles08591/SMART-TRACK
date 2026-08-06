@@ -51,7 +51,7 @@ export const RUTAS_UNIDADES = [
   { id: "J203", grupo: "supervisor", clo: CLO_PVR }, { id: "J204", grupo: "supervisor", clo: CLO_PVR },
   { id: "J205", grupo: "supervisor", clo: CLO_PVR }, { id: "J206", grupo: "supervisor", clo: CLO_PVR },
   { id: "J207", grupo: "supervisor", clo: CLO_PVR },
-  { id: "MERCH27", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH28", grupo: "supervisor2", clo: CLO_PVR },
+  { id: "MERCH07", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH28", grupo: "supervisor2", clo: CLO_PVR },
   { id: "MERCH29", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH30", grupo: "supervisor2", clo: CLO_PVR },
   // --- CLO TEPIC ---
   { id: "MERCH04", grupo: "supervisor2", clo: CLO_TEPIC },
@@ -344,7 +344,7 @@ function DialDias({ dias }) {
  * - rol: "vendedor" | "merch" | "staff" | "liquidacion"
  * - puesto: null | "supervisor" | "supervisor2" | "gerente" (solo si rol === "staff")
  * - identidad: nombre a mostrar como "capturado por"
- * - rutaPropia: código de ruta del conductor (ej. "J201" o "MERCH27"); solo
+ * - rutaPropia: código de ruta del conductor (ej. "J201" o "MERCH07"); solo
  *   aplica para rol "vendedor" o "merch".
  */
 export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, rol, puesto, identidad, rutaPropia, cloFiltro = CLO_PVR }) {
@@ -1319,7 +1319,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   }, [hoy]);
 
   const filas = useMemo(() => {
-    // Orden por ruta siguiendo el catálogo (J201, J202, ... MERCH27-30, y al
+    // Orden por ruta siguiendo el catálogo (J201, J202, ... MERCH07-30, y al
     // final las posiciones de staff). Las unidades con una ruta que ya no
     // exista en el catálogo se van hasta el final, para que no se pierdan.
     const ordenRuta = (ruta) => {
