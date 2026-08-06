@@ -85,6 +85,10 @@ const UMBRAL_BAJO_DESEMPENO = 0.5;
 
 // Umbral mínimo de "visitas efectivas" en Mesa de Control por ruta: si no se
 // supera, la tarjeta de VISITAS EFECTIVAS parpadea en rojo intenso.
+// Umbral máximo de tiempo en ruta antes de marcarlo en rojo (en horas).
+const UMBRAL_HORAS_EN_RUTA = 7;
+const UMBRAL_MS_EN_RUTA = UMBRAL_HORAS_EN_RUTA * 60 * 60 * 1000;
+
 const UMBRAL_VISITAS_EFECTIVAS_MC = {
   J201: 39, J202: 41, J203: 41, J204: 41, J205: 41, J206: 41, J207: 39,
 };
@@ -216,6 +220,37 @@ const metaColor = (vendido, objetivo) => (objetivo > 0 && vendido >= objetivo ? 
 // Analiza las visitas de "mesa de control" de una ruta específica.
 // Una fila se marca como alerta ("roja") si el tiempo de estancia es menor a 3 min,
 // o si el inicio/fin de la visita fue MANUAL (no verificado por GPS/automático).
+// Resume el reporte de pedidos (PowerStreet) para una ruta específica, para
+// mostrar en Mesa de Control: cuántos pedidos hubo, cuántos se entregaron,
+// cuántos quedaron pendientes / rechazados en reparto / cambio a contado,
+// el detalle de los motivos de rechazo, y los paquetes pedidos vs entregados.
+function calcularResumenPedidos(pedidosDia, nombreRuta) {
+  const propios = (pedidosDia || []).filter(
+    (r) => r.vendedor.trim().toLowerCase() === (nombreRuta || "").trim().toLowerCase()
+  );
+  if (propios.length === 0) return null;
+  const esStatus = (r, texto) => r.status.toLowerCase().includes(texto.toLowerCase());
+  const pendientes = propios.filter((r) => esStatus(r, "pendiente"));
+  const rechazados = propios.filter((r) => esStatus(r, "rechazado"));
+  const cambioContado = propios.filter((r) => esStatus(r, "cambio contado"));
+  const entregados = propios.filter((r) => r.totalPaquetesEntregado > 0);
+  const totalPaquetesPedido = propios.reduce((s, r) => s + r.totalPaquetesPedido, 0);
+  const totalPaquetesEntregado = propios.reduce((s, r) => s + r.totalPaquetesEntregado, 0);
+  const motivos = propios
+    .filter((r) => r.motivoRechazo)
+    .map((r) => ({ cliente: r.cliente, motivo: r.motivoRechazo, status: r.status }));
+  return {
+    totalPedidos: propios.length,
+    entregados: entregados.length,
+    pendientes: pendientes.length,
+    rechazados: rechazados.length,
+    cambioContado: cambioContado.length,
+    totalPaquetesPedido,
+    totalPaquetesEntregado,
+    motivos,
+  };
+}
+
 function analizarMesaControl(mesaControl, vendedorName) {
   const propios = mesaControl.filter((r) => r.vendedor.trim().toLowerCase() === vendedorName.trim().toLowerCase());
   if (propios.length === 0) return null;
@@ -279,6 +314,10 @@ function defaultData() {
     ventas: [], // OBSOLETO: las ventas del periodo ahora viven en la tabla ventas_periodo, ya no aquí.
     avanceDia: [],
     otcDia: [],
+    // Reporte de pedidos del día (PowerStreet: Fecha, Vendedor, Cliente,
+    // Status, Motivo Rechazo, paquetes pedido/entregado, etc.). Cada carga
+    // nueva reemplaza por completo la anterior, igual que avanceDia/otcDia.
+    pedidosDia: [],
     diasNoLaborables: [],
     otcSemanal: [],
     mesaControl: [],
@@ -430,6 +469,7 @@ export default function App() {
   const [objStatus, setObjStatus] = useState("");
   const [avanceDiaStatus, setAvanceDiaStatus] = useState("");
   const [otcDiaStatus, setOtcDiaStatus] = useState("");
+  const [pedidosDiaStatus, setPedidosDiaStatus] = useState("");
   const [ventasPeriodoStatus, setVentasPeriodoStatus] = useState("");
   const [mesaControlStatus, setMesaControlStatus] = useState("");
   const [cargasStatus, setCargasStatus] = useState("");
@@ -437,6 +477,7 @@ export default function App() {
   const objFileInputRef = useRef(null);
   const avanceDiaFileInputRef = useRef(null);
   const otcDiaFileInputRef = useRef(null);
+  const pedidosDiaFileInputRef = useRef(null);
   const ventasPeriodoFileInputRef = useRef(null);
   const cargasFileInputRef = useRef(null);
   // Ventas del periodo: ahora viven en su propia tabla de Postgres
@@ -790,6 +831,7 @@ export default function App() {
   const ventas = ventasPeriodo;
   const avanceDia = data?.avanceDia || [];
   const otcDia = data?.otcDia || [];
+  const pedidosDia = data?.pedidosDia || [];
   const otcSemanal = data?.otcSemanal || [];
   const mesaControl = data?.mesaControl || [];
   const mensajesDia = data?.mensajesDia || {};
@@ -1438,7 +1480,103 @@ export default function App() {
   // Convierte filas del reporte de OTC (Vendedor, ..., Fecha Venta, TOTAL $) a registros
   // exclusivos para la pestaña DÍA. El avance de OTC es la suma de TOTAL $ por ruta,
   // sin importar cuántos artículos distintos aparezcan.
+  // Quita etiquetas HTML de un valor de celda (la columna "Status" del
+  // reporte de pedidos trae <span style="color:...">Emitido</span>, etc.).
+  function quitarHtml(texto) {
+    return String(texto || "").replace(/<[^>]*>/g, "").trim();
+  }
+
+  // Normaliza un nombre de encabezado para comparar: el reporte de pedidos
+  // trae encabezados de varias líneas con <br> literal en medio (ej.
+  // "Total<br>Pedido"), así que se quita el <br> y se colapsan espacios
+  // antes de comparar contra el nombre de columna esperado.
+  function normalizarEncabezado(s) {
+    return String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  // Convierte el reporte de pedidos del día (Fecha, Vendedor, Cliente,
+  // Status, Motivo Rechazo, Total Pedido/Entregado y sus paquetes) a
+  // registros listos para Mesa de Control.
+  function convertirFilasPedidosDia(rows) {
+    const getVal = (row, ...names) => {
+      const keys = Object.keys(row);
+      for (const name of names) {
+        const key = keys.find((k) => normalizarEncabezado(k) === normalizarEncabezado(name));
+        if (key !== undefined) return row[key];
+      }
+      return "";
+    };
+    const registros = [];
+    rows.forEach((row) => {
+      const vendedorRaw = String(getVal(row, "Vendedor") || "").trim();
+      const codigo = vendedorRaw.split(" - ")[0].trim();
+      if (!codigo) return;
+      const vendedor = `RUTA ${codigo}`;
+
+      const fechaRaw = String(getVal(row, "Fecha") || "").trim();
+      const [dd, mm, yyyy] = fechaRaw.split("/");
+      const fecha = dd && mm && yyyy ? `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}` : "";
+
+      const cliente = quitarHtml(getVal(row, "Nombre", "Cliente"));
+      const status = quitarHtml(getVal(row, "Status"));
+      const motivoRechazo = quitarHtml(getVal(row, "Motivo Rechazo"));
+      const totalPedido = Number(getVal(row, "Total Pedido") || 0) || 0;
+      const totalPaquetesPedido = Number(getVal(row, "Total Paquetes pedido") || 0) || 0;
+      const totalEntregado = Number(getVal(row, "Total Entregado") || 0) || 0;
+      const totalPaquetesEntregado = Number(getVal(row, "Total Paquetes entregado") || 0) || 0;
+
+      registros.push({ fecha, vendedor, cliente, status, motivoRechazo, totalPedido, totalPaquetesPedido, totalEntregado, totalPaquetesEntregado });
+    });
+    return registros;
+  }
+
+  async function procesarFilasPedidosDia(filas) {
+    const registros = convertirFilasPedidosDia(filas);
+    if (registros.length === 0) {
+      setPedidosDiaStatus("No se encontraron filas válidas. Revisa el formato.");
+      return;
+    }
+    // Reemplaza por completo el reporte anterior, partiendo siempre del
+    // dato más reciente de Supabase (no del que esta pestaña tenga en
+    // memoria), para que otra carga guardada casi al mismo tiempo no se
+    // pierda ni se sobreescriba con una versión vieja.
+    try {
+      await persistFresco(() => ({ pedidosDia: registros }));
+      const fechas = [...new Set(registros.map((r) => r.fecha).filter(Boolean))];
+      setPedidosDiaStatus(`Pedidos cargados: ${registros.length} registros para ${fechas.join(", ") || "la fecha del reporte"}.`);
+    } catch (err) {
+      console.error(err);
+      setPedidosDiaStatus(`Error al guardar: ${err?.message || "intenta de nuevo"}.`);
+    }
+  }
+
+  async function handlePedidosDiaFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const filas = await parsearArchivoComoFilas(file);
+      await procesarFilasPedidosDia(filas);
+    } catch (err) {
+      setPedidosDiaStatus("No se pudo leer el archivo. Verifica que tenga las columnas Fecha, Vendedor, Nombre, Status, Motivo Rechazo, Total Pedido y Total Entregado (con sus paquetes).");
+    }
+  }
+
+  function handlePedidosDiaTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setPedidosDiaStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      procesarFilasPedidosDia(filas);
+    } catch (err) {
+      setPedidosDiaStatus("No se pudo interpretar el texto pegado.");
+    }
+  }
+
   function convertirFilasOtcDia(rows) {
+
     const getVal = (row, ...names) => {
       const keys = Object.keys(row);
       for (const name of names) {
@@ -2032,6 +2170,10 @@ export default function App() {
           otcDiaFileInputRef={otcDiaFileInputRef}
           otcDiaStatus={otcDiaStatus}
           onOtcDiaTexto={handleOtcDiaTexto}
+          onPedidosDiaFile={handlePedidosDiaFile}
+          pedidosDiaFileInputRef={pedidosDiaFileInputRef}
+          pedidosDiaStatus={pedidosDiaStatus}
+          onPedidosDiaTexto={handlePedidosDiaTexto}
           onVentasPeriodoFile={handleVentasPeriodoFile}
           ventasPeriodoFileInputRef={ventasPeriodoFileInputRef}
           ventasPeriodoStatus={ventasPeriodoStatus}
@@ -2287,7 +2429,11 @@ function PegarTextoBox({ onProcesar, placeholder }) {
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <button className="btn-ghost" onClick={() => setAbierto((a) => !a)}>
+      <button
+        className="btn-ghost"
+        style={{ borderColor: "#F2B134", color: "#F2B134", fontWeight: 600 }}
+        onClick={() => setAbierto((a) => !a)}
+      >
         <ClipboardPaste size={14} style={{ verticalAlign: "-2px" }} /> {abierto ? "Ocultar pegar texto" : "Pegar texto (en vez de subir archivo)"}
       </button>
       {abierto && (
@@ -2651,7 +2797,7 @@ function DiaKpis({ hoy, mensajeDia, rutaCodigo, esPeor, esBottom3 }) {
               icon={<Clock size={14} />}
               label={yaRegreso ? "Tiempo total en ruta" : "Tiempo en ruta (en vivo)"}
               value={formatCrono(msEnRuta)}
-              accent={yaRegreso ? "#3DDC97" : "#F2B134"}
+              accent={msEnRuta > UMBRAL_MS_EN_RUTA ? "#FF6B6B" : yaRegreso ? "#3DDC97" : "#F2B134"}
             />
           )}
         </div>
@@ -2812,7 +2958,7 @@ function ModalTablaCompleta({ titulo, onClose, children }) {
 }
 
 
-function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats }) {
+function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats, resumenPedidos }) {
   const { fecha, horaInicio, horaUltimoCliente, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, visitasEfectivas, todos } = analisis;
   const gps = tipoInicioConteo["GPS"] || 0;
   const noGps = todos.length - gps;
@@ -2871,7 +3017,7 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
         </div>
         <div className="card" style={{ padding: 12, flex: "1 1 100%" }}>
           <div style={{ fontSize: 10, color: "#9AA7BD" }}>TIEMPO TOTAL EN RUTA</div>
-          <div className="mono" style={{ fontSize: 16, color: "#F2B134" }}>{msEnRuta != null ? formatCrono(msEnRuta) : "—"}</div>
+          <div className="mono" style={{ fontSize: 16, color: msEnRuta != null && msEnRuta > UMBRAL_MS_EN_RUTA ? "#FF6B6B" : "#3DDC97" }}>{msEnRuta != null ? formatCrono(msEnRuta) : "—"}</div>
         </div>
       </div>
 
@@ -2950,6 +3096,51 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
         </>
         );
       })()}
+
+      {resumenPedidos && (
+        <div style={{ marginTop: 22, textAlign: "left" }}>
+          <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>PEDIDOS DEL DÍA</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: resumenPedidos.motivos.length > 0 ? 14 : 0 }}>
+            <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>PEDIDOS TOTALES</div>
+              <div className="mono" style={{ fontSize: 22 }}>{resumenPedidos.totalPedidos}</div>
+            </div>
+            <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>ENTREGADOS</div>
+              <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{resumenPedidos.entregados}</div>
+            </div>
+            <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>PENDIENTES</div>
+              <div className="mono" style={{ fontSize: 22, color: resumenPedidos.pendientes > 0 ? "#F2B134" : "#3DDC97" }}>{resumenPedidos.pendientes}</div>
+            </div>
+            <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>RECHAZADOS EN REPARTO</div>
+              <div className="mono" style={{ fontSize: 22, color: resumenPedidos.rechazados > 0 ? "#FF6B6B" : "#3DDC97" }}>{resumenPedidos.rechazados}</div>
+            </div>
+            <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>CAMBIO CONTADO</div>
+              <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{resumenPedidos.cambioContado}</div>
+            </div>
+            <div className="card" style={{ padding: 14, flex: "1 1 100%" }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD" }}>PAQUETES · PEDIDO VS ENTREGADO</div>
+              <div className="mono" style={{ fontSize: 18, color: resumenPedidos.totalPaquetesEntregado >= resumenPedidos.totalPaquetesPedido ? "#3DDC97" : "#FF6B6B" }}>
+                {unidades(resumenPedidos.totalPaquetesPedido)} / {unidades(resumenPedidos.totalPaquetesEntregado)}
+              </div>
+            </div>
+          </div>
+          {resumenPedidos.motivos.length > 0 && (
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8, fontWeight: 700 }}>MOTIVOS DE RECHAZO / CAMBIO ({resumenPedidos.motivos.length})</div>
+              {resumenPedidos.motivos.map((m, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 0", borderTop: i > 0 ? "1px solid #1E2A42" : "none", gap: 8 }}>
+                  <span>{m.cliente}</span>
+                  <span className="mono" style={{ color: "#F2B134", textAlign: "right" }}>{m.motivo}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginTop: 22, textAlign: "left" }}>
         <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>TOP CLIENTES · MAYOR ESTANCIA</div>
@@ -3054,7 +3245,7 @@ function diferenciaMinutos(horaA, horaB) {
   return Math.round(bMin - aMin);
 }
 
-function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats }) {
+function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
@@ -3206,7 +3397,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
 
       {modoCaptura ? (
         <div ref={capturaRef}>
-          <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} tiempos={tiempos} vendedorStats={vendedorStats} />
+          <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} tiempos={tiempos} vendedorStats={vendedorStats} resumenPedidos={resumenPedidos} />
         </div>
       ) : (
         <>
@@ -3239,6 +3430,9 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
           const horaIngresoClo = formatHoraTiempos(tiempos.ingreso_clo?.ts);
           const horaSalidaRuta = formatHoraTiempos(tiempos.salida_ruta?.ts);
           const diffMin = diferenciaMinutos(horaInicio, horaSalidaRuta);
+          const msEnRutaDetalle = tiempos?.salida_ruta?.ts && tiempos?.ingreso_clo_fin?.ts
+            ? tiempos.ingreso_clo_fin.ts - tiempos.salida_ruta.ts
+            : null;
           return (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <KpiCard icon={<Truck size={14} />} label="Ingreso a CLO" value={horaIngresoClo || "—"} />
@@ -3248,6 +3442,12 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
                 label="Salida a ruta vs. inicio de ruta"
                 value={diffMin == null ? "—" : `${diffMin > 0 ? "+" : ""}${diffMin} min`}
                 accent={diffMin == null ? undefined : diffMin > 10 ? "#FF6B6B" : "#3DDC97"}
+              />
+              <KpiCard
+                icon={<Clock size={14} />}
+                label="Tiempo total en ruta"
+                value={msEnRutaDetalle != null ? formatCrono(msEnRutaDetalle) : "—"}
+                accent={msEnRutaDetalle == null ? undefined : msEnRutaDetalle > UMBRAL_MS_EN_RUTA ? "#FF6B6B" : "#3DDC97"}
               />
             </div>
           );
@@ -3278,6 +3478,50 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
           </div>
         </div>
       </div>
+
+      {resumenPedidos && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>PEDIDOS DEL DÍA</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: resumenPedidos.motivos.length > 0 ? 16 : 0 }}>
+            <KpiCard icon={<Target size={14} />} label="Pedidos totales" value={resumenPedidos.totalPedidos} />
+            <KpiCard icon={<CheckCircle2 size={14} />} label="Entregados" value={resumenPedidos.entregados} accent="#3DDC97" />
+            <KpiCard icon={<Clock size={14} />} label="Pendientes" value={resumenPedidos.pendientes} accent={resumenPedidos.pendientes > 0 ? "#F2B134" : "#3DDC97"} />
+            <KpiCard icon={<AlertCircle size={14} />} label="Rechazados en reparto" value={resumenPedidos.rechazados} accent={resumenPedidos.rechazados > 0 ? "#FF6B6B" : "#3DDC97"} />
+            <KpiCard icon={<Ticket size={14} />} label="Cambio contado" value={resumenPedidos.cambioContado} accent="#F2B134" />
+            <KpiCard
+              icon={<Target size={14} />}
+              label="Paquetes pedido / entregado"
+              value={`${unidades(resumenPedidos.totalPaquetesPedido)} / ${unidades(resumenPedidos.totalPaquetesEntregado)}`}
+              accent={resumenPedidos.totalPaquetesEntregado >= resumenPedidos.totalPaquetesPedido ? "#3DDC97" : "#FF6B6B"}
+            />
+          </div>
+          {resumenPedidos.motivos.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8, fontWeight: 700 }}>MOTIVOS DE RECHAZO / CAMBIO ({resumenPedidos.motivos.length})</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 420 }}>
+                  <thead>
+                    <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+                      <th style={{ padding: "6px 0" }}>Cliente</th>
+                      <th>Estatus</th>
+                      <th>Motivo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resumenPedidos.motivos.map((m, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
+                        <td style={{ padding: "6px 0" }}>{m.cliente}</td>
+                        <td>{m.status}</td>
+                        <td className="mono" style={{ color: "#F2B134" }}>{m.motivo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
         <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>TOP 5 · MAYOR TIEMPO DE ESTANCIA</div>
@@ -3389,7 +3633,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} />
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
@@ -4890,7 +5134,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -5258,6 +5502,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
                 nombreVendedor={NOMBRES[rutaMesaSeleccionada]}
                 revisor={revisorNombre}
                 vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
+                resumenPedidos={calcularResumenPedidos(data.pedidosDia, rutaMesaSeleccionada)}
               />
             </>
           ) : objTab === "cuponera" ? (
@@ -5764,6 +6009,27 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
             {otcDiaStatus && (
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: otcDiaStatus.startsWith("OTC cargado") ? "#3DDC97" : "#FF6B6B" }}>
                 {otcDiaStatus.startsWith("OTC cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {otcDiaStatus}
+              </div>
+            )}
+          </div>
+
+          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
+            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>PEDIDOS DEL DÍA (REPORTE EXCLUSIVO)</div>
+            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
+              Sube el reporte de pedidos tal cual lo exporta el sistema, con columnas <b>Fecha, Vendedor, Cliente/Nombre, Status, Motivo Rechazo, Total Pedido, Total Paquetes pedido, Total Entregado y Total Paquetes entregado</b> (acepta .xlsx, .csv o .txt).
+              Alimenta, en <b>Mesa de Control</b>, cuántos pedidos hubo por ruta, cuántos se entregaron, cuántos quedaron pendientes / rechazados en reparto / cambio a contado, el motivo de cada rechazo, y los paquetes pedidos contra los entregados.
+              Esta carga es exclusiva de ese resumen — no toca OPEN, CHAMPIONS, MAX ni el avance del día. Cada carga reemplaza por completo la anterior.
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => pedidosDiaFileInputRef.current?.click()}>
+                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir pedidos del día
+              </button>
+            </div>
+            <input ref={pedidosDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onPedidosDiaFile} />
+            <PegarTextoBox onProcesar={onPedidosDiaTexto} placeholder="Pega aquí las filas del reporte de pedidos (incluye el encabezado)." />
+            {pedidosDiaStatus && (
+              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: pedidosDiaStatus.startsWith("Pedidos cargados") ? "#3DDC97" : "#FF6B6B" }}>
+                {pedidosDiaStatus.startsWith("Pedidos cargados") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {pedidosDiaStatus}
               </div>
             )}
           </div>
