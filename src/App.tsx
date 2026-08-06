@@ -1541,7 +1541,7 @@ export default function App() {
     // memoria), para que otra carga guardada casi al mismo tiempo no se
     // pierda ni se sobreescriba con una versión vieja.
     try {
-      await persistFresco(() => ({ pedidosDia: registros }));
+      await persistParcialFresco(() => ({ pedidosDia: registros }));
       const fechas = [...new Set(registros.map((r) => r.fecha).filter(Boolean))];
       setPedidosDiaStatus(`Pedidos cargados: ${registros.length} registros para ${fechas.join(", ") || "la fecha del reporte"}.`);
     } catch (err) {
