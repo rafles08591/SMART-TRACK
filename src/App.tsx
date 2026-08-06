@@ -2168,21 +2168,36 @@ function useCapturaImagen() {
           await Promise.race([document.fonts.ready, new Promise((res) => setTimeout(res, 2000))]);
         } catch (e) { /* seguir de todos modos */ }
       }
+      // Se mide el ancho REAL que necesita el contenido: si adentro hay una
+      // tabla más ancha que la pantalla (con scroll horizontal, como
+      // "POR RUTA · HOY"), su scrollWidth es mayor al ancho visible en un
+      // celular. Sin esto, html2canvas renderiza con el ancho angosto de la
+      // pantalla y la tabla sale cortada — igual que si se le tomara una
+      // captura de pantalla normal en vez de a la tabla completa.
+      const anchosInternos = Array.from(capturaRef.current.querySelectorAll("table, [style*='overflow']"))
+        .map((el) => el.scrollWidth)
+        .filter((w) => w > 0);
+      const anchoCompleto = Math.max(capturaRef.current.scrollWidth, capturaRef.current.clientWidth, ...anchosInternos, 0);
+
       const canvas = await Promise.race([
         html2canvas(capturaRef.current, {
           backgroundColor: "#0B1220", scale: 1.3, useCORS: true,
-          onclone: (clonedDoc) => {
-            // Las tablas anchas con scroll horizontal (overflow-x: auto,
-            // como "POR RUTA · HOY") se capturaban recortadas al ancho
-            // visible en pantallas angostas (celular). Al clonar el DOM
-            // solo para esta captura, se les quita el límite de ancho para
-            // que la imagen incluya la tabla completa — esto no afecta la
-            // pantalla real, solo la copia usada para generar la imagen.
+          width: anchoCompleto,
+          windowWidth: anchoCompleto,
+          onclone: (clonedDoc, clonedEl) => {
+            // Se le da al elemento raíz clonado el ancho completo medido
+            // arriba, y se le quita cualquier límite de ancho/scroll a los
+            // contenedores internos (como el div de "overflow-x: auto" que
+            // envuelve la tabla) — solo en esta copia usada para generar la
+            // imagen, sin tocar la pantalla real.
+            clonedEl.style.width = `${anchoCompleto}px`;
+            clonedEl.style.maxWidth = "none";
             clonedDoc.querySelectorAll("*").forEach((el) => {
               const estilo = el.style;
               if (estilo && (estilo.overflowX === "auto" || estilo.overflowX === "scroll")) {
                 estilo.overflowX = "visible";
-                estilo.width = "max-content";
+                estilo.overflow = "visible";
+                estilo.maxWidth = "none";
               }
             });
           },
