@@ -289,30 +289,47 @@ function normalizarDia(s) {
   return String(s || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quita acentos
+    .replace(/[\u0300-\u036f]/g, "")
     .trim();
 }
 
-async function calcularClientesFaltantes(rutaNombre, avanceDia, fecha) {
+// Quita ceros a la izquierda y normaliza para comparar códigos
+function normalizarCodigo(s) {
+  const t = String(s || "").trim().toUpperCase();
+  // Si es solo dígitos, quita ceros a la izquierda; si tiene letras, déjalo igual
+  if (/^\d+$/.test(t)) return t.replace(/^0+/, "") || "0";
+  return t;
+}
+
+function normalizarNombre(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function calcularClientesFaltantes(rutaNombre, mesaControl, fecha) {
   const codigoRuta = (rutaNombre || "").replace("RUTA ", "").trim().toUpperCase();
   const dia = diaSemanaClientesRuta(fecha);
   if (!codigoRuta || !dia) return { faltantes: [], totalDebia: 0, totalVisitados: 0, dia, debug: "sin-ruta-o-dia" };
 
-  // Clientes visitados según Avance del Día (por código o por nombre)
-  const filasAvance = (avanceDia || []).filter(
-    (r) => r.fecha === fecha && r.vendedor.trim().toLowerCase() === (rutaNombre || "").trim().toLowerCase()
+  // Visitados según Mesa de Control (TODAS LAS VISITAS) — incluye los que no compraron
+  const filasMC = (mesaControl || []).filter(
+    (r) => r.vendedor.trim().toLowerCase() === (rutaNombre || "").trim().toLowerCase()
+      && (!fecha || r.fecha === fecha)
   );
   const visitadosCodigos = new Set();
   const visitadosNombres = new Set();
-  filasAvance.forEach((r) => {
+  filasMC.forEach((r) => {
     const c = (r.cliente || "").trim();
     if (!c) return;
-    visitadosCodigos.add(c);
-    visitadosCodigos.add(c.toUpperCase());
-    visitadosNombres.add(c.toLowerCase());
+    visitadosCodigos.add(normalizarCodigo(c));
+    visitadosNombres.add(normalizarNombre(c));
   });
 
-  // Traer TODOS los clientes de la ruta (sin filtrar día en SQL para evitar problemas de acentos)
   const { data, error } = await supabase
     .from("clientes_ruta")
     .select("codigo_cliente, nombre, dia")
@@ -320,21 +337,18 @@ async function calcularClientesFaltantes(rutaNombre, avanceDia, fecha) {
 
   if (error) {
     console.error("Error consultando clientes_ruta:", error);
-    return { faltantes: [], totalDebia: 0, totalVisitados: visitadosCodigos.size, dia, error: error.message };
+    return { faltantes: [], totalDebia: 0, totalVisitados: filasMC.length, dia, error: error.message };
   }
 
   const todosRuta = data || [];
   const diaNorm = normalizarDia(dia);
-
-  // Filtrar por día (tolerante a acentos y mayúsculas)
   const debia = todosRuta.filter((c) => normalizarDia(c.dia) === diaNorm);
 
-  // Faltantes: no está el código ni el nombre en los visitados
   const faltantes = debia
     .filter((c) => {
-      const cod = (c.codigo_cliente || "").trim();
-      const nom = (c.nombre || "").trim().toLowerCase();
-      if (visitadosCodigos.has(cod) || visitadosCodigos.has(cod.toUpperCase())) return false;
+      const cod = normalizarCodigo(c.codigo_cliente);
+      const nom = normalizarNombre(c.nombre);
+      if (cod && visitadosCodigos.has(cod)) return false;
       if (nom && visitadosNombres.has(nom)) return false;
       return true;
     })
@@ -343,7 +357,7 @@ async function calcularClientesFaltantes(rutaNombre, avanceDia, fecha) {
   return {
     faltantes,
     totalDebia: debia.length,
-    totalVisitados: visitadosCodigos.size,
+    totalVisitados: visitadosNombres.size || visitadosCodigos.size,
     totalEnRuta: todosRuta.length,
     dia,
     error: null,
@@ -3336,15 +3350,7 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
                 {unidades(resumenPedidos.totalPaquetesPedido)} / {unidades(resumenPedidos.totalPaquetesEntregado)}
               </div>
             </div>
-            {visitasVsObjetivo && (
-              <div className="card" style={{ padding: 14, flex: "1 1 100%", border: `1px solid ${visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B"}` }}>
-                <div style={{ fontSize: 11, color: "#9AA7BD" }}>CLIENTES VISITADOS HOY VS OBJETIVO ({visitasVsObjetivo.diaSemana.toUpperCase()})</div>
-                <div className="mono" style={{ fontSize: 18, color: visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B" }}>
-                  {visitasVsObjetivo.visitas} / {visitasVsObjetivo.objetivo}
-                  {!visitasVsObjetivo.cumple && " · visitó menos de lo que le tocaba"}
-                </div>
-              </div>
-            )}
+
           </div>
           {resumenPedidos.motivos.length > 0 && (
             <div className="card" style={{ padding: 12 }}>
@@ -3463,7 +3469,7 @@ function diferenciaMinutos(horaA, horaB) {
   return Math.round(bMin - aMin);
 }
 
-function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo, avanceDia }) {
+function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo, mesaControl }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
@@ -3481,14 +3487,14 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
       return;
     }
     setFaltantesCargando(true);
-    calcularClientesFaltantes(nombreRuta, avanceDia, fecha).then((res) => {
+    calcularClientesFaltantes(nombreRuta, mesaControl, fecha).then((res) => {
       if (activo) {
         setFaltantesInfo(res);
         setFaltantesCargando(false);
       }
     });
     return () => { activo = false; };
-  }, [nombreRuta, avanceDia, analisis?.fecha]);
+  }, [nombreRuta, mesaControl, analisis?.fecha]);
   const capturaRef = useRef(null);
 
   useEffect(() => {
@@ -3731,14 +3737,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
               value={`${unidades(resumenPedidos.totalPaquetesPedido)} / ${unidades(resumenPedidos.totalPaquetesEntregado)}`}
               accent={resumenPedidos.totalPaquetesEntregado >= resumenPedidos.totalPaquetesPedido ? "#3DDC97" : "#FF6B6B"}
             />
-            {visitasVsObjetivo && (
-              <KpiCard
-                icon={<Users size={14} />}
-                label={`Visitados hoy vs objetivo (${visitasVsObjetivo.diaSemana})`}
-                value={`${visitasVsObjetivo.visitas} / ${visitasVsObjetivo.objetivo}`}
-                accent={visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B"}
-              />
-            )}
+
           </div>
           {resumenPedidos.motivos.length > 0 && (
             <div>
@@ -3785,7 +3784,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
                 <div className="mono" style={{ fontSize: 22 }}>{faltantesInfo.totalDebia}</div>
               </div>
               <div>
-                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Visitados (Avance Día)</div>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Visitados (Mesa Control)</div>
                 <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{faltantesInfo.totalVisitados}</div>
               </div>
               <div>
@@ -3947,7 +3946,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} avanceDia={data.avanceDia || []} />
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} mesaControl={data.mesaControl || []} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
@@ -5818,7 +5817,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
                 vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
                 resumenPedidos={calcularResumenPedidos(data.pedidosDia, rutaMesaSeleccionada)}
                 visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, rutaMesaSeleccionada, data.objetivosVisitasDia, todayISO())}
-                avanceDia={data.avanceDia || []}
+                mesaControl={data.mesaControl || []}
               />
             </>
           ) : objTab === "cuponera" ? (
