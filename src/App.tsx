@@ -239,6 +239,7 @@ function calcularResumenPedidos(pedidosDia, nombreRuta) {
   const motivos = propios
     .filter((r) => r.motivoRechazo)
     .map((r) => ({ cliente: r.cliente, motivo: r.motivoRechazo, status: r.status }));
+  const clientesUnicos = new Set(propios.map((r) => (r.clienteCodigo || r.cliente || "").trim()).filter(Boolean)).size;
   return {
     totalPedidos: propios.length,
     entregados: entregados.length,
@@ -248,7 +249,33 @@ function calcularResumenPedidos(pedidosDia, nombreRuta) {
     totalPaquetesPedido,
     totalPaquetesEntregado,
     motivos,
+    clientesUnicos,
   };
+}
+
+// "lunes".."sabado" según la fecha (YYYY-MM-DD); null si cae domingo (no hay
+// objetivo de visitas para ese día).
+const DIAS_SEMANA_VISITAS_KEYS = [null, "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+function diaSemanaDeFecha(fechaISO) {
+  if (!fechaISO) return null;
+  const dia = new Date(fechaISO + "T12:00:00").getDay(); // mediodía para evitar líos de huso horario
+  return DIAS_SEMANA_VISITAS_KEYS[dia];
+}
+
+// Compara los clientes que una ruta SÍ visitó en una fecha dada (según el
+// reporte de pedidos) contra el objetivo configurado para ese día de la
+// semana. Regresa null si no hay objetivo configurado para esa ruta/día.
+function calcularVisitasVsObjetivo(pedidosDia, nombreRuta, objetivosVisitasDia, fecha) {
+  const diaSemana = diaSemanaDeFecha(fecha);
+  if (!diaSemana) return null;
+  const codigoRuta = (nombreRuta || "").replace("RUTA ", "").trim().toUpperCase();
+  const objetivo = objetivosVisitasDia?.[codigoRuta]?.[diaSemana];
+  if (!objetivo) return null;
+  const propiosHoy = (pedidosDia || []).filter(
+    (r) => r.vendedor.trim().toLowerCase() === (nombreRuta || "").trim().toLowerCase() && r.fecha === fecha
+  );
+  const visitas = new Set(propiosHoy.map((r) => (r.clienteCodigo || r.cliente || "").trim()).filter(Boolean)).size;
+  return { visitas, objetivo, diaSemana, cumple: visitas >= objetivo };
 }
 
 function analizarMesaControl(mesaControl, vendedorName) {
@@ -318,6 +345,11 @@ function defaultData() {
     // Status, Motivo Rechazo, paquetes pedido/entregado, etc.). Cada carga
     // nueva reemplaza por completo la anterior, igual que avanceDia/otcDia.
     pedidosDia: [],
+    // Objetivo de clientes a visitar por ruta según el día de la semana
+    // (Lun-Sáb), ej. { J201: { lunes: 41, martes: 19, ... }, ... }. Se usa
+    // en Mesa de Control para comparar contra los clientes realmente
+    // visitados ese día (según el reporte de pedidos).
+    objetivosVisitasDia: {},
     diasNoLaborables: [],
     otcSemanal: [],
     mesaControl: [],
@@ -467,6 +499,7 @@ export default function App() {
   const [currentVendorId, setCurrentVendorId] = useState(null);
   const [status, setStatus] = useState("");
   const [objStatus, setObjStatus] = useState("");
+  const [objetivoVisitasStatus, setObjetivoVisitasStatus] = useState("");
   const [avanceDiaStatus, setAvanceDiaStatus] = useState("");
   const [otcDiaStatus, setOtcDiaStatus] = useState("");
   const [pedidosDiaStatus, setPedidosDiaStatus] = useState("");
@@ -475,6 +508,7 @@ export default function App() {
   const [cargasStatus, setCargasStatus] = useState("");
   const fileInputRef = useRef(null);
   const objFileInputRef = useRef(null);
+  const objetivoVisitasFileInputRef = useRef(null);
   const avanceDiaFileInputRef = useRef(null);
   const otcDiaFileInputRef = useRef(null);
   const pedidosDiaFileInputRef = useRef(null);
@@ -1277,6 +1311,97 @@ export default function App() {
     XLSX.writeFile(wb, "plantilla_objetivos.xlsx");
   }
 
+  // Objetivo de clientes a visitar por ruta según el día de la semana. Se
+  // sube como tabla RUTA x LUNES..SABADO (una fila por ruta), y reemplaza
+  // por completo la anterior, igual que el resto de estas cargas exclusivas.
+  const DIAS_SEMANA_VISITAS = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+
+  function convertirFilasObjetivoVisitas(rows) {
+    const getVal = (row, ...names) => {
+      const keys = Object.keys(row);
+      for (const name of names) {
+        const key = keys.find((k) => normalizarEncabezado(k) === normalizarEncabezado(name));
+        if (key !== undefined) return row[key];
+      }
+      return "";
+    };
+    const objetivos = {};
+    rows.forEach((row) => {
+      const rutaRaw = String(getVal(row, "RUTA", "Ruta") || "").trim();
+      if (!rutaRaw) return;
+      const codigo = rutaRaw.split(" - ")[0].trim().toUpperCase();
+      objetivos[codigo] = {
+        lunes: Number(getVal(row, "LUNES") || 0) || 0,
+        martes: Number(getVal(row, "MARTES") || 0) || 0,
+        miercoles: Number(getVal(row, "MIERCOLES", "MIÉRCOLES") || 0) || 0,
+        jueves: Number(getVal(row, "JUEVES") || 0) || 0,
+        viernes: Number(getVal(row, "VIERNES") || 0) || 0,
+        sabado: Number(getVal(row, "SABADO", "SÁBADO") || 0) || 0,
+      };
+    });
+    return objetivos;
+  }
+
+  async function procesarFilasObjetivoVisitas(filas) {
+    const objetivos = convertirFilasObjetivoVisitas(filas);
+    if (Object.keys(objetivos).length === 0) {
+      setObjetivoVisitasStatus("No se encontraron filas válidas. Revisa la columna RUTA.");
+      return;
+    }
+    try {
+      await persistParcialFresco(() => ({ objetivosVisitasDia: objetivos }));
+      setObjetivoVisitasStatus(`Objetivo de visitas actualizado para ${Object.keys(objetivos).length} rutas.`);
+    } catch (err) {
+      console.error(err);
+      setObjetivoVisitasStatus(`Error al guardar: ${err?.message || "intenta de nuevo"}.`);
+    }
+  }
+
+  async function handleObjetivoVisitasFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const filas = await parsearArchivoComoFilas(file);
+      await procesarFilasObjetivoVisitas(filas);
+    } catch (err) {
+      setObjetivoVisitasStatus("No se pudo leer el archivo. Verifica que tenga las columnas RUTA, LUNES, MARTES, MIERCOLES, JUEVES, VIERNES y SABADO.");
+    }
+  }
+
+  function handleObjetivoVisitasTexto(texto) {
+    try {
+      const filas = parseTextoDelimitado(texto);
+      if (filas.length === 0) {
+        setObjetivoVisitasStatus("No se pudo interpretar el texto pegado. Verifica que incluya el encabezado y al menos una fila.");
+        return;
+      }
+      procesarFilasObjetivoVisitas(filas);
+    } catch (err) {
+      setObjetivoVisitasStatus("No se pudo interpretar el texto pegado.");
+    }
+  }
+
+  function downloadObjetivoVisitasTemplate() {
+    const filas = (data.vendedores || []).map((v) => {
+      const codigo = v.name.replace("RUTA ", "").trim().toUpperCase();
+      const actual = data.objetivosVisitasDia?.[codigo] || {};
+      return {
+        RUTA: codigo,
+        LUNES: actual.lunes || 0,
+        MARTES: actual.martes || 0,
+        MIERCOLES: actual.miercoles || 0,
+        JUEVES: actual.jueves || 0,
+        VIERNES: actual.viernes || 0,
+        SABADO: actual.sabado || 0,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Objetivo Visitas");
+    XLSX.writeFile(wb, "plantilla_objetivo_visitas.xlsx");
+  }
+
   // Convierte las filas crudas (leídas con header:1) de una hoja en formato
   // "largo": una fila por cada combinación ruta+artículo, con columnas
   // Codigo_Vendedor, Codigo_Articulo, Nombre corto (opcional) y Cantidad.
@@ -1517,7 +1642,8 @@ export default function App() {
       const [dd, mm, yyyy] = fechaRaw.split("/");
       const fecha = dd && mm && yyyy ? `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}` : "";
 
-      const cliente = quitarHtml(getVal(row, "Nombre", "Cliente"));
+      const clienteCodigo = quitarHtml(getVal(row, "Cliente"));
+      const cliente = quitarHtml(getVal(row, "Nombre")) || clienteCodigo;
       const status = quitarHtml(getVal(row, "Status"));
       const motivoRechazo = quitarHtml(getVal(row, "Motivo Rechazo"));
       const totalPedido = Number(getVal(row, "Total Pedido") || 0) || 0;
@@ -1525,7 +1651,7 @@ export default function App() {
       const totalEntregado = Number(getVal(row, "Total Entregado") || 0) || 0;
       const totalPaquetesEntregado = Number(getVal(row, "Total Paquetes entregado") || 0) || 0;
 
-      registros.push({ fecha, vendedor, cliente, status, motivoRechazo, totalPedido, totalPaquetesPedido, totalEntregado, totalPaquetesEntregado });
+      registros.push({ fecha, vendedor, cliente, clienteCodigo, status, motivoRechazo, totalPedido, totalPaquetesPedido, totalEntregado, totalPaquetesEntregado });
     });
     return registros;
   }
@@ -2162,6 +2288,11 @@ export default function App() {
           objFileInputRef={objFileInputRef}
           onDownloadObjetivosTemplate={downloadObjetivosTemplate}
           objStatus={objStatus}
+          onObjetivoVisitasFile={handleObjetivoVisitasFile}
+          objetivoVisitasFileInputRef={objetivoVisitasFileInputRef}
+          onDownloadObjetivoVisitasTemplate={downloadObjetivoVisitasTemplate}
+          objetivoVisitasStatus={objetivoVisitasStatus}
+          onObjetivoVisitasTexto={handleObjetivoVisitasTexto}
           onAvanceDiaFile={handleAvanceDiaFile}
           avanceDiaFileInputRef={avanceDiaFileInputRef}
           avanceDiaStatus={avanceDiaStatus}
@@ -2958,7 +3089,7 @@ function ModalTablaCompleta({ titulo, onClose, children }) {
 }
 
 
-function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats, resumenPedidos }) {
+function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revisor, tiempos, vendedorStats, resumenPedidos, visitasVsObjetivo }) {
   const { fecha, horaInicio, horaUltimoCliente, top5, menores3, tipoInicioConteo, volumenTotal, clientesVolumen03, clientesConDescuento, visitasEfectivas, todos } = analisis;
   const gps = tipoInicioConteo["GPS"] || 0;
   const noGps = todos.length - gps;
@@ -3107,7 +3238,7 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
             </div>
             <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>ENTREGADOS</div>
-              <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{resumenPedidos.entregados}</div>
+              <div className="mono" style={{ fontSize: 22, color: resumenPedidos.entregados < resumenPedidos.totalPedidos ? "#FF6B6B" : "#3DDC97" }}>{resumenPedidos.entregados}</div>
             </div>
             <div className="card" style={{ padding: 14, flex: "1 1 30%", minWidth: 120 }}>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>PENDIENTES</div>
@@ -3127,6 +3258,15 @@ function MesaControlResumenCaptura({ analisis, nombreRuta, nombreVendedor, revis
                 {unidades(resumenPedidos.totalPaquetesPedido)} / {unidades(resumenPedidos.totalPaquetesEntregado)}
               </div>
             </div>
+            {visitasVsObjetivo && (
+              <div className="card" style={{ padding: 14, flex: "1 1 100%", border: `1px solid ${visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B"}` }}>
+                <div style={{ fontSize: 11, color: "#9AA7BD" }}>CLIENTES VISITADOS HOY VS OBJETIVO ({visitasVsObjetivo.diaSemana.toUpperCase()})</div>
+                <div className="mono" style={{ fontSize: 18, color: visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B" }}>
+                  {visitasVsObjetivo.visitas} / {visitasVsObjetivo.objetivo}
+                  {!visitasVsObjetivo.cumple && " · visitó menos de lo que le tocaba"}
+                </div>
+              </div>
+            )}
           </div>
           {resumenPedidos.motivos.length > 0 && (
             <div className="card" style={{ padding: 12 }}>
@@ -3245,7 +3385,7 @@ function diferenciaMinutos(horaA, horaB) {
   return Math.round(bMin - aMin);
 }
 
-function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos }) {
+function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
@@ -3397,7 +3537,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
 
       {modoCaptura ? (
         <div ref={capturaRef}>
-          <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} tiempos={tiempos} vendedorStats={vendedorStats} resumenPedidos={resumenPedidos} />
+          <MesaControlResumenCaptura analisis={analisis} nombreRuta={nombreRuta} nombreVendedor={nombreVendedor} revisor={revisor} tiempos={tiempos} vendedorStats={vendedorStats} resumenPedidos={resumenPedidos} visitasVsObjetivo={visitasVsObjetivo} />
         </div>
       ) : (
         <>
@@ -3484,7 +3624,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
           <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>PEDIDOS DEL DÍA</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: resumenPedidos.motivos.length > 0 ? 16 : 0 }}>
             <KpiCard icon={<Target size={14} />} label="Pedidos totales" value={resumenPedidos.totalPedidos} />
-            <KpiCard icon={<CheckCircle2 size={14} />} label="Entregados" value={resumenPedidos.entregados} accent="#3DDC97" />
+            <KpiCard icon={<CheckCircle2 size={14} />} label="Entregados" value={resumenPedidos.entregados} accent={resumenPedidos.entregados < resumenPedidos.totalPedidos ? "#FF6B6B" : "#3DDC97"} />
             <KpiCard icon={<Clock size={14} />} label="Pendientes" value={resumenPedidos.pendientes} accent={resumenPedidos.pendientes > 0 ? "#F2B134" : "#3DDC97"} />
             <KpiCard icon={<AlertCircle size={14} />} label="Rechazados en reparto" value={resumenPedidos.rechazados} accent={resumenPedidos.rechazados > 0 ? "#FF6B6B" : "#3DDC97"} />
             <KpiCard icon={<Ticket size={14} />} label="Cambio contado" value={resumenPedidos.cambioContado} accent="#F2B134" />
@@ -3494,6 +3634,14 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
               value={`${unidades(resumenPedidos.totalPaquetesPedido)} / ${unidades(resumenPedidos.totalPaquetesEntregado)}`}
               accent={resumenPedidos.totalPaquetesEntregado >= resumenPedidos.totalPaquetesPedido ? "#3DDC97" : "#FF6B6B"}
             />
+            {visitasVsObjetivo && (
+              <KpiCard
+                icon={<Users size={14} />}
+                label={`Visitados hoy vs objetivo (${visitasVsObjetivo.diaSemana})`}
+                value={`${visitasVsObjetivo.visitas} / ${visitasVsObjetivo.objetivo}`}
+                accent={visitasVsObjetivo.cumple ? "#3DDC97" : "#FF6B6B"}
+              />
+            )}
           </div>
           {resumenPedidos.motivos.length > 0 && (
             <div>
@@ -3633,7 +3781,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} />
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
@@ -5134,7 +5282,7 @@ function TopBar({ title, subtitle, onLogout, onRefresh, refrescando }) {
   );
 }
 
-function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -5503,6 +5651,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
                 revisor={revisorNombre}
                 vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
                 resumenPedidos={calcularResumenPedidos(data.pedidosDia, rutaMesaSeleccionada)}
+                visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, rutaMesaSeleccionada, data.objetivosVisitasDia, todayISO())}
               />
             </>
           ) : objTab === "cuponera" ? (
@@ -5884,6 +6033,27 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
               {objStatus.startsWith("Objetivos") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {objStatus}
             </div>
           )}
+
+          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
+            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>OBJETIVO DE VISITAS POR DÍA DE LA SEMANA</div>
+            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
+              Cuántos clientes debe visitar cada ruta según el día (Lun-Sáb). Sube una tabla con columnas <b>RUTA, LUNES, MARTES, MIERCOLES, JUEVES, VIERNES, SABADO</b> — una fila por ruta.
+              Mesa de Control compara esto contra los clientes que sí visitó ese día (según el reporte de pedidos) y marca en rojo si visitó menos de lo que le tocaba. Cada carga reemplaza por completo la anterior.
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => objetivoVisitasFileInputRef.current?.click()}>
+                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir objetivo de visitas
+              </button>
+              <button className="btn-ghost" onClick={onDownloadObjetivoVisitasTemplate}>Descargar plantilla</button>
+            </div>
+            <input ref={objetivoVisitasFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onObjetivoVisitasFile} />
+            <PegarTextoBox onProcesar={onObjetivoVisitasTexto} placeholder="Pega aquí la tabla con columnas RUTA, LUNES, MARTES, MIERCOLES, JUEVES, VIERNES y SABADO (incluye el encabezado)." />
+            {objetivoVisitasStatus && (
+              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: objetivoVisitasStatus.startsWith("Objetivo de visitas actualizado") ? "#3DDC97" : "#FF6B6B" }}>
+                {objetivoVisitasStatus.startsWith("Objetivo de visitas actualizado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {objetivoVisitasStatus}
+              </div>
+            )}
+          </div>
 
           <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 10, marginTop: 8 }}>VENDEDORES Y OBJETIVOS</div>
           <div style={{ display: "flex", gap: 10, fontSize: 11, color: "#9AA7BD", padding: "0 0 6px", paddingLeft: 4 }}>
