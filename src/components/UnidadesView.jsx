@@ -95,6 +95,24 @@ function todayISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 }
 
+// Convierte un timestamp guardado (new Date().toISOString(), en UTC) a la
+// fecha del CALENDARIO en México (America/Mexico_City), en vez de solo
+// recortar los primeros 10 caracteres del ISO (que da la fecha en UTC).
+// Esto importa porque México va 6 horas atrás de UTC: cualquier revisión
+// enviada después de las 6pm hora local ya cae en el día SIGUIENTE en UTC.
+// Comparar el recorte crudo contra "hoy" (calculado en hora de México)
+// hacía que esas revisiones de la tarde/noche parecieran de "mañana" y
+// desaparecieran de "Auditorías de hoy", "Salida de hoy" y el parpadeo de
+// la pestaña Unidades, aunque sí se hubieran enviado correctamente.
+function fechaLocalMX(fechaIso) {
+  if (!fechaIso) return "";
+  try {
+    return new Date(fechaIso).toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+  } catch (e) {
+    return String(fechaIso).slice(0, 10);
+  }
+}
+
 function diasDesde(fechaISO) {
   const f = new Date(fechaISO);
   const hoy = new Date();
@@ -134,7 +152,7 @@ const ESTADO_UI = {
 export function unidadYaRegistradaHoy(data, rutaId) {
   if (!rutaId) return true; // nada que exigir si no aplica (ej. staff/gerente)
   const hoy = todayISO();
-  return (data.revisionesUnidades || []).some((r) => r.ruta === rutaId && String(r.fecha || "").slice(0, 10) === hoy);
+  return (data.revisionesUnidades || []).some((r) => r.ruta === rutaId && fechaLocalMX(r.fecha) === hoy);
 }
 
 function codigoQR(unidad) {
@@ -1368,7 +1386,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     };
     return unidadesVisibles
       .map((u) => {
-        const revisionesHoy = revisiones.filter((r) => r.unidadId === u.id && String(r.fecha || "").slice(0, 10) === hoy);
+        const revisionesHoy = revisiones.filter((r) => r.unidadId === u.id && fechaLocalMX(r.fecha) === hoy);
         const ultima = revisionesHoy.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0] || null;
         return { unidad: u, revision: ultima };
       })
@@ -1591,7 +1609,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   const todosLosItems = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
 
   const auditadasHoy = (revisiones || [])
-    .filter((r) => r.auditoriaAleatoria && String(r.fecha || "").slice(0, 10) === hoy)
+    .filter((r) => r.auditoriaAleatoria && fechaLocalMX(r.fecha) === hoy)
     .map((r) => {
       const unidad = unidadesVisibles.find((u) => u.id === r.unidadId);
       const itemInfo = r.evidenciaItem ? todosLosItems.find((it) => it.id === r.evidenciaItem.itemId) : null;
