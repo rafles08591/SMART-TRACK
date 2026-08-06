@@ -1748,11 +1748,12 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
             </div>
           </div>
           <div className="ru-card" style={{ overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 680 }}>
               <thead>
                 <tr style={{ background: T.bg, textAlign: "left" }}>
                   {["Fecha", "Placas", "Ruta", "Capturó", "Verificación", "Estado", "Evidencia"].map((h) => (
-                    <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
+                    <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1859,6 +1860,7 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
                   })}
               </tbody>
             </table>
+            </div>
           </div>
         </>
       )}
