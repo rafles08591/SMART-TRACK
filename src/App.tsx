@@ -278,6 +278,50 @@ function calcularVisitasVsObjetivo(pedidosDia, nombreRuta, objetivosVisitasDia, 
   return { visitas, objetivo, diaSemana, cumple: visitas >= objetivo };
 }
 
+function diaSemanaClientesRuta(fechaISO) {
+  if (!fechaISO) return null;
+  const dias = [null, "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+  const dia = new Date(fechaISO + "T12:00:00").getDay();
+  return dias[dia] || null;
+}
+
+async function calcularClientesFaltantes(rutaNombre, avanceDia, fecha) {
+  const codigoRuta = (rutaNombre || "").replace("RUTA ", "").trim().toUpperCase();
+  const dia = diaSemanaClientesRuta(fecha);
+  if (!codigoRuta || !dia) return { faltantes: [], totalDebia: 0, totalVisitados: 0, dia };
+
+  const visitados = new Set(
+    (avanceDia || [])
+      .filter((r) => r.fecha === fecha && r.vendedor.trim().toLowerCase() === (rutaNombre || "").trim().toLowerCase())
+      .map((r) => (r.cliente || "").trim())
+      .filter(Boolean)
+  );
+
+  const { data, error } = await supabase
+    .from("clientes_ruta")
+    .select("codigo_cliente, nombre")
+    .eq("ruta", codigoRuta)
+    .eq("dia", dia)
+    .eq("activo", true);
+
+  if (error) {
+    console.error("Error consultando clientes_ruta:", error);
+    return { faltantes: [], totalDebia: 0, totalVisitados: visitados.size, dia, error: error.message };
+  }
+
+  const debia = data || [];
+  const faltantes = debia
+    .filter((c) => !visitados.has(c.codigo_cliente))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+  return {
+    faltantes,
+    totalDebia: debia.length,
+    totalVisitados: visitados.size,
+    dia,
+  };
+}
+
 function analizarMesaControl(mesaControl, vendedorName) {
   const propios = mesaControl.filter((r) => r.vendedor.trim().toLowerCase() === vendedorName.trim().toLowerCase());
   if (propios.length === 0) return null;
@@ -3391,13 +3435,32 @@ function diferenciaMinutos(horaA, horaB) {
   return Math.round(bMin - aMin);
 }
 
-function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo }) {
+function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo, avanceDia }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
   const [generandoImagen, setGenerandoImagen] = useState(false);
   const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
   const [errorImagen, setErrorImagen] = useState(null);
+  const [faltantesInfo, setFaltantesInfo] = useState(null);
+  const [faltantesCargando, setFaltantesCargando] = useState(false);
+
+  useEffect(() => {
+    let activo = true;
+    const fecha = analisis?.fecha || todayISO();
+    if (!nombreRuta) {
+      setFaltantesInfo(null);
+      return;
+    }
+    setFaltantesCargando(true);
+    calcularClientesFaltantes(nombreRuta, avanceDia, fecha).then((res) => {
+      if (activo) {
+        setFaltantesInfo(res);
+        setFaltantesCargando(false);
+      }
+    });
+    return () => { activo = false; };
+  }, [nombreRuta, avanceDia, analisis?.fecha]);
   const capturaRef = useRef(null);
 
   useEffect(() => {
@@ -3678,6 +3741,59 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
       )}
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+        <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>
+          CLIENTES NO VISITADOS {faltantesInfo?.dia ? `(${faltantesInfo.dia})` : ""}
+        </div>
+
+        {faltantesCargando && (
+          <div style={{ fontSize: 13, color: "#9AA7BD" }}>Cargando lista de clientes…</div>
+        )}
+
+        {!faltantesCargando && faltantesInfo && (
+          <>
+            <div style={{ display: "flex", gap: 16, marginBottom: 14, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Debía visitar</div>
+                <div className="mono" style={{ fontSize: 22 }}>{faltantesInfo.totalDebia}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Visitados (Avance Día)</div>
+                <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{faltantesInfo.totalVisitados}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Faltantes</div>
+                <div className="mono" style={{ fontSize: 22, color: faltantesInfo.faltantes.length > 0 ? "#FF6B6B" : "#3DDC97" }}>
+                  {faltantesInfo.faltantes.length}
+                </div>
+              </div>
+            </div>
+
+            {faltantesInfo.faltantes.length === 0 ? (
+              <div style={{ fontSize: 14, color: "#3DDC97" }}>
+                <CheckCircle2 size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
+                Todos los clientes del día fueron visitados
+              </div>
+            ) : (
+              <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                {faltantesInfo.faltantes.map((c, i) => (
+                  <div key={c.codigo_cliente} style={{ 
+                    display: "flex", 
+                    justifyContent: "space-between", 
+                    padding: "6px 0", 
+                    borderBottom: "1px solid #1E2A42",
+                    fontSize: 13 
+                  }}>
+                    <span>{i + 1}. {c.nombre}</span>
+                    <span className="mono" style={{ color: "#9AA7BD", marginLeft: 12 }}>{c.codigo_cliente}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 20 }}>
         <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>TOP 5 · MAYOR TIEMPO DE ESTANCIA</div>
         {top5.map((r, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
@@ -3787,7 +3903,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} />
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} avanceDia={data.avanceDia || []} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
@@ -5658,6 +5774,7 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
                 vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
                 resumenPedidos={calcularResumenPedidos(data.pedidosDia, rutaMesaSeleccionada)}
                 visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, rutaMesaSeleccionada, data.objetivosVisitasDia, todayISO())}
+                avanceDia={data.avanceDia || []}
               />
             </>
           ) : objTab === "cuponera" ? (
