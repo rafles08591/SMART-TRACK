@@ -729,7 +729,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setEnviado(true);
   }
 
-  const puedeEnviar = (!esAuditoria || !!foto) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto;
+  const puedeEnviar = (!esAuditoria || !!foto) && (!itemFotoRequerida || !!evidenciaItem) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto && !subiendoEvidenciaItem;
 
   // Todas las respuestas son obligatorias: no se puede avanzar de un paso
   // con checklist (físico, niveles, documentación) si falta contestar
@@ -780,7 +780,7 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
 
       {esAuditoria && paso > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, background: T.warnSoft, color: T.warn, borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 12, fontWeight: 500 }}>
-          <AlertTriangle size={14} /> Esta revisión fue seleccionada para auditoría aleatoria: se pedirá foto del odómetro.
+          <AlertTriangle size={14} /> Esta revisión fue seleccionada para auditoría aleatoria: se pedirá foto de un punto del checklist elegido al azar, y también la foto del odómetro al llegar al paso Operativo.
         </div>
       )}
 
