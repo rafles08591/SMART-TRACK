@@ -285,40 +285,68 @@ function diaSemanaClientesRuta(fechaISO) {
   return dias[dia] || null;
 }
 
+function normalizarDia(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quita acentos
+    .trim();
+}
+
 async function calcularClientesFaltantes(rutaNombre, avanceDia, fecha) {
   const codigoRuta = (rutaNombre || "").replace("RUTA ", "").trim().toUpperCase();
   const dia = diaSemanaClientesRuta(fecha);
-  if (!codigoRuta || !dia) return { faltantes: [], totalDebia: 0, totalVisitados: 0, dia };
+  if (!codigoRuta || !dia) return { faltantes: [], totalDebia: 0, totalVisitados: 0, dia, debug: "sin-ruta-o-dia" };
 
-  const visitados = new Set(
-    (avanceDia || [])
-      .filter((r) => r.fecha === fecha && r.vendedor.trim().toLowerCase() === (rutaNombre || "").trim().toLowerCase())
-      .map((r) => (r.cliente || "").trim())
-      .filter(Boolean)
+  // Clientes visitados según Avance del Día (por código o por nombre)
+  const filasAvance = (avanceDia || []).filter(
+    (r) => r.fecha === fecha && r.vendedor.trim().toLowerCase() === (rutaNombre || "").trim().toLowerCase()
   );
+  const visitadosCodigos = new Set();
+  const visitadosNombres = new Set();
+  filasAvance.forEach((r) => {
+    const c = (r.cliente || "").trim();
+    if (!c) return;
+    visitadosCodigos.add(c);
+    visitadosCodigos.add(c.toUpperCase());
+    visitadosNombres.add(c.toLowerCase());
+  });
 
+  // Traer TODOS los clientes de la ruta (sin filtrar día en SQL para evitar problemas de acentos)
   const { data, error } = await supabase
     .from("clientes_ruta")
-    .select("codigo_cliente, nombre")
-    .eq("ruta", codigoRuta)
-    .eq("dia", dia)
-    .eq("activo", true);
+    .select("codigo_cliente, nombre, dia")
+    .eq("ruta", codigoRuta);
 
   if (error) {
     console.error("Error consultando clientes_ruta:", error);
-    return { faltantes: [], totalDebia: 0, totalVisitados: visitados.size, dia, error: error.message };
+    return { faltantes: [], totalDebia: 0, totalVisitados: visitadosCodigos.size, dia, error: error.message };
   }
 
-  const debia = data || [];
+  const todosRuta = data || [];
+  const diaNorm = normalizarDia(dia);
+
+  // Filtrar por día (tolerante a acentos y mayúsculas)
+  const debia = todosRuta.filter((c) => normalizarDia(c.dia) === diaNorm);
+
+  // Faltantes: no está el código ni el nombre en los visitados
   const faltantes = debia
-    .filter((c) => !visitados.has(c.codigo_cliente))
+    .filter((c) => {
+      const cod = (c.codigo_cliente || "").trim();
+      const nom = (c.nombre || "").trim().toLowerCase();
+      if (visitadosCodigos.has(cod) || visitadosCodigos.has(cod.toUpperCase())) return false;
+      if (nom && visitadosNombres.has(nom)) return false;
+      return true;
+    })
     .sort((a, b) => a.nombre.localeCompare(b.nombre));
 
   return {
     faltantes,
     totalDebia: debia.length,
-    totalVisitados: visitados.size,
+    totalVisitados: visitadosCodigos.size,
+    totalEnRuta: todosRuta.length,
     dia,
+    error: null,
   };
 }
 
@@ -3768,12 +3796,28 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
               </div>
             </div>
 
-            {faltantesInfo.faltantes.length === 0 ? (
+            {faltantesInfo.error && (
+              <div style={{ fontSize: 13, color: "#FF6B6B", marginBottom: 10 }}>
+                Error Supabase: {faltantesInfo.error}
+              </div>
+            )}
+
+            {!faltantesInfo.error && faltantesInfo.totalDebia === 0 && (
+              <div style={{ fontSize: 13, color: "#F2B134", marginBottom: 10 }}>
+                No hay clientes en clientes_ruta para esta ruta/día.
+                {faltantesInfo.totalEnRuta != null && (
+                  <span> (La ruta tiene {faltantesInfo.totalEnRuta} clientes en total en la tabla)</span>
+                )}
+                {" "}Revisa en Supabase que existan filas con esa ruta y día.
+              </div>
+            )}
+
+            {faltantesInfo.totalDebia > 0 && faltantesInfo.faltantes.length === 0 ? (
               <div style={{ fontSize: 14, color: "#3DDC97" }}>
                 <CheckCircle2 size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
                 Todos los clientes del día fueron visitados
               </div>
-            ) : (
+            ) : faltantesInfo.faltantes.length > 0 ? (
               <div style={{ maxHeight: 320, overflowY: "auto" }}>
                 {faltantesInfo.faltantes.map((c, i) => (
                   <div key={c.codigo_cliente} style={{ 
@@ -3788,7 +3832,7 @@ function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vended
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </>
         )}
       </div>
