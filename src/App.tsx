@@ -38,11 +38,6 @@ const NOMBRES = {
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
   "LIQUIDACION- SULEMA PONCE": "Sulema Ponce",
-  "MERCH04": "Edgar Antonio Caldera López",
-  "MERCH31": "Kenia Nayrit Castillo López",
-  "MERCH32": "César Adrián Espinosa Ramos",
-  "MERCH62": "Omar Sandoval Madrigal",
-  "MERCH63": "Ángel Gabriel Robles Sandoval",
 };
 const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
@@ -139,7 +134,7 @@ const USERS = [
   { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
   { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
   { username: "LIQUIDACION- SULEMA PONCE", password: "7625", role: "liquidacion" },
-  { username: "MERCH27", password: "2220", role: "merch" },
+  { username: "MERCH07", password: "2220", role: "merch" },
   { username: "MERCH28", password: "2220", role: "merch" },
   { username: "MERCH29", password: "2220", role: "merch" },
   { username: "MERCH30", password: "2220", role: "merch" },
@@ -685,7 +680,7 @@ export default function App() {
 
   // Agrega una revisión de unidad al historial, partiendo siempre del
   // historial más reciente — indispensable aquí porque varios conductores
-  // (rutas J201-J207 y MERCH27-30) pueden enviar su revisión casi al mismo
+  // (rutas J201-J207 y MERCH07/28-30) pueden enviar su revisión casi al mismo
   // tiempo, y cada uno solo debe AGREGAR su registro, nunca reemplazar el
   // historial completo con una copia vieja.
   async function persistRevisionUnidad(nuevaRevision) {
@@ -2174,7 +2169,24 @@ function useCapturaImagen() {
         } catch (e) { /* seguir de todos modos */ }
       }
       const canvas = await Promise.race([
-        html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 1.3, useCORS: true }),
+        html2canvas(capturaRef.current, {
+          backgroundColor: "#0B1220", scale: 1.3, useCORS: true,
+          onclone: (clonedDoc) => {
+            // Las tablas anchas con scroll horizontal (overflow-x: auto,
+            // como "POR RUTA · HOY") se capturaban recortadas al ancho
+            // visible en pantallas angostas (celular). Al clonar el DOM
+            // solo para esta captura, se les quita el límite de ancho para
+            // que la imagen incluya la tabla completa — esto no afecta la
+            // pantalla real, solo la copia usada para generar la imagen.
+            clonedDoc.querySelectorAll("*").forEach((el) => {
+              const estilo = el.style;
+              if (estilo && (estilo.overflowX === "auto" || estilo.overflowX === "scroll")) {
+                estilo.overflowX = "visible";
+                estilo.width = "max-content";
+              }
+            });
+          },
+        }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse (más de 20s).")), 20000)),
       ]);
       canvas.toBlob((blob) => {
@@ -4000,7 +4012,7 @@ function TabsLiquidacion({ data, persist, persistFresco, staffUsername, onLogout
   );
 }
 
-// Vista mínima para los usuarios MERCH27-30: solo necesitan registrar su
+// Vista mínima para los usuarios MERCH07/28-30: solo necesitan registrar su
 // revisión diaria de unidad (pestaña UNIDADES) y ver Avisos. La pestaña
 // UNIDADES parpadea en rojo intenso hasta que registran su revisión de hoy.
 function TabsMerch({ data, persist, persistFresco, persistRevisionUnidad, persistConfigUnidades, staffUsername, onLogout }) {
