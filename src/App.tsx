@@ -14,6 +14,8 @@ import CuponeraView from "./components/CuponeraView";
 import TiemposView, { supabaseTiempos } from "./components/TiemposView";
 import UnidadesView, { unidadYaRegistradaHoy, cloDeRuta, CLO_PVR, CLO_TEPIC } from "./components/UnidadesView";
 import { supabase } from "./supabaseClient";
+import FacturasView from "./components/FacturasView";
+import FacturasAdminView from "./components/FacturasAdminView";
 
 // ====== SUPABASE ======
 // El cliente de Supabase ahora vive en ./supabaseClient.js (compartido con
@@ -38,6 +40,7 @@ const NOMBRES = {
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
   "LIQUIDACION- SULEMA PONCE": "Sulema Ponce",
+  "ADMIN": "Facturación",
 };
 const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
@@ -56,6 +59,7 @@ const OBJETIVO_TABS = [
   { key: "cotizador", label: "COTIZADOR", unit: "special" },
   { key: "rally_otc", label: "RALLY OTC", unit: "special" },
   { key: "avisos", label: "AVISOS", unit: "special" },
+  { key: "facturas", label: "FACTURAS", unit: "special" },
   { key: "creditos", label: "CRÉDITOS", unit: "special" },
   { key: "cargas", label: "CARGAS", unit: "special" },
   { key: "pwst", label: "PWST", unit: "special" },
@@ -148,6 +152,8 @@ const USERS = [
   { username: "MERCH32", password: "3049", role: "merch" },
   { username: "MERCH62", password: "3049", role: "merch" },
   { username: "MERCH63", password: "3049", role: "merch" },
+  // --- FACTURACIÓN ---
+  { username: "ADMIN", password: "6748", role: "admin" },
 ];
 
 // Tablas de multiplicador de comisión OTC según el promedio de venta diario del equipo.
@@ -1950,6 +1956,116 @@ export default function App() {
     return { historial: [...historialSinEsasFechas, ...registrosNuevos], fechas: [...fechasNuevas].sort() };
   }
 
+  // Extrae de las filas CRUDAS del archivo (antes de convertirFilasAvanceDia)
+  // el código de cliente + nombre + línea de venta, para poder cruzar por
+  // código contra el catálogo de facturación. Intenta varias columnas típicas
+  // de nombre por si el reporte las trae ("Nombre", "Nombre Cliente", etc.).
+  function extraerLineasFacturables(filasCrudas) {
+    const getVal = (row, ...names) => {
+      const keys = Object.keys(row);
+      for (const name of names) {
+        const key = keys.find((k) => k.trim().toLowerCase() === name.toLowerCase());
+        if (key !== undefined) return row[key];
+      }
+      return "";
+    };
+    const lineas = [];
+    (filasCrudas || []).forEach((row) => {
+      const vendedorRaw = String(getVal(row, "Vendedor") || "").trim();
+      const codigoRuta = vendedorRaw.split(" - ")[0].trim();
+      if (!codigoRuta) return;
+      const vendedor = `RUTA ${codigoRuta}`;
+
+      const fechaRaw = String(getVal(row, "Fecha") || "").trim();
+      const datePart = fechaRaw.split(" ")[0];
+      const [dd, mm, yyyy] = datePart.split("/");
+      if (!dd || !mm || !yyyy) return;
+      const fecha = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+
+      const articulo = String(getVal(row, "Articulo") || getVal(row, "Artículo") || "").trim().toUpperCase();
+      const marca = ARTICULO_MARCA_LABEL[articulo] || "";
+      const paquetes = Number(getVal(row, "Paquetes") || 0) || 0;
+      // El reporte trae Contado $ y Credito $ por separado (no un solo "Total $").
+      const contado = Number(getVal(row, "Contado $", "Contado") || 0) || 0;
+      const credito = Number(getVal(row, "Credito $", "Crédito $", "Credito") || 0) || 0;
+      const monto = contado + credito;
+      // En este reporte "Cliente" YA es el código (confirmado) — no hay columna de nombre.
+      const codigoCliente = String(getVal(row, "Cliente", "Codigo Cliente", "Código Cliente", "Cliente Codigo") || "").trim();
+      const nombreCliente = String(getVal(row, "Nombre", "Nombre Cliente", "Cliente Nombre") || "").trim();
+
+      if (!codigoCliente) return;
+      lineas.push({ vendedor, fecha, marca, paquetes, contado, credito, monto, codigoCliente, nombreCliente });
+    });
+    return lineas;
+  }
+
+  // Cruza esas líneas contra clientes_facturables (por RUTA + código
+  // normalizado) y guarda —sin duplicar— las ventas que correspondan en
+  // ventas_facturas. De ahí las lee la pantalla de ADMIN.
+  async function sincronizarVentasFacturas(filasCrudas) {
+    try {
+      const lineas = extraerLineasFacturables(filasCrudas);
+      if (lineas.length === 0) return;
+
+      const rutas = [...new Set(lineas.map((l) => l.vendedor))];
+      const { data: clientesFacturables, error: errClientes } = await supabase
+        .from("clientes_facturables")
+        .select("id, ruta, codigo_norm, prioridad")
+        .in("ruta", rutas);
+      if (errClientes) { console.error("Error leyendo clientes_facturables:", errClientes); return; }
+      if (!clientesFacturables || clientesFacturables.length === 0) return;
+
+      const mapaClientes = new Map(clientesFacturables.map((c) => [`${c.ruta}|${c.codigo_norm}`, c]));
+
+      const fechas = [...new Set(lineas.map((l) => l.fecha))];
+      const idsClientes = clientesFacturables.map((c) => c.id);
+      const { data: exclusiones } = await supabase
+        .from("facturas_exclusiones_dia")
+        .select("cliente_id, fecha")
+        .in("cliente_id", idsClientes)
+        .in("fecha", fechas);
+      const setExcluidos = new Set((exclusiones || []).map((e) => `${e.cliente_id}|${e.fecha}`));
+
+      const filasParaFacturar = [];
+      lineas.forEach((l) => {
+        const codigoNorm = normalizarCodigo(l.codigoCliente); // ya existe en tu archivo
+        const cliente = mapaClientes.get(`${l.vendedor}|${codigoNorm}`);
+        if (!cliente) return;
+        if (setExcluidos.has(`${cliente.id}|${l.fecha}`)) return;
+        filasParaFacturar.push({
+          ruta: l.vendedor,
+          codigo_cliente: l.codigoCliente,
+          cliente: l.nombreCliente || null,
+          fecha: l.fecha,
+          marca: l.marca,
+          paquetes: l.paquetes,
+          contado_monto: l.contado,
+          credito_monto: l.credito,
+          monto: l.monto,
+          // OJO: "forma_pago" a propósito NO se manda aquí. Así, un re-upload
+          // del mismo día nunca pisa una forma de pago que ADMIN/Gerente ya
+          // haya corregido a mano (ver el trigger en el SQL). Solo se calcula
+          // sola (EFECTIVO/CREDITO) la primera vez que se crea el registro.
+          prioridad: cliente.prioridad,
+          cliente_id: cliente.id,
+          actualizado_en: new Date().toISOString(),
+        });
+      });
+      if (filasParaFacturar.length === 0) return;
+
+      // onConflict sin ignoreDuplicates => si ya existía (ruta+código+fecha+marca)
+      // se ACTUALIZA esa fila en vez de crear una nueva. Por eso puedes volver
+      // a subir el mismo archivo (o uno corregido) las veces que quieras sin
+      // que se dupliquen ventas.
+      const { error: errUpsert } = await supabase
+        .from("ventas_facturas")
+        .upsert(filasParaFacturar, { onConflict: "ruta,codigo_norm,fecha,marca" });
+      if (errUpsert) console.error("Error guardando ventas_facturas:", errUpsert);
+    } catch (err) {
+      console.error("Error sincronizando ventas_facturas:", err);
+    }
+  }
+
   async function procesarFilasAvanceDia(filas) {
     const registros = convertirFilasAvanceDia(filas);
     if (registros.length === 0) {
@@ -1957,6 +2073,7 @@ export default function App() {
       return;
     }
     await persistParcialFresco(() => ({ avanceDia: registros }));
+    await sincronizarVentasFacturas(filas);
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
@@ -2448,6 +2565,10 @@ export default function App() {
           peorVendedorNombre={stats.peorVendedorNombre}
           bottom3Nombres={stats.bottom3Nombres}
         />
+      )}
+
+      {role === "admin" && (
+        <FacturasAdminView onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
       )}
     </div>
   );
@@ -3911,7 +4032,7 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
   if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "facturas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -3957,6 +4078,8 @@ function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, dat
         <CargasView data={data} persist={persist} persistCargas={persistCargas} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
       ) : tab === "unidades" ? (
         <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
+      ) : tab === "facturas" ? (
+        <FacturasView rol="vendedor" puesto={null} rutaActual={vendedor.name} identidad={nombre || vendedor.name} nombres={NOMBRES} vendedores={data.vendedores} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
@@ -5864,6 +5987,8 @@ function StaffView({ data, persist, persistFresco, persistCargas, persistRevisio
             <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
             <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1 || esSupervisor2} revisorNombre={revisorNombre} viewerKey={puesto} />
+          ) : objTab === "facturas" ? (
+            <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
           ) : objTab === "cargas" ? (
             <CargasView
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
