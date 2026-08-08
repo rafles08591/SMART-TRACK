@@ -670,14 +670,14 @@ export default function FacturasAdminView({ onLogout }) {
       ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
       "",
       `Total cajetillas: ${num(ticket.totalCajetillas)}`,
-      `Total del ticket: ${money(ticket.totalMonto)}`,
+      `Total del ticket: ${money(ticket.totalMonto + distribucionBruta)}`,
       "",
       ...(venta.esOtc
         ? [`OTC · sin IVA (sin costo de distribución): ${money(precioProductoNeto)}`]
         : [
             `Distribución (${num(ticket.totalCajetillas)} caj. × $${COSTO_DISTRIBUCION_UNITARIO}), sin IVA: ${money(distribucionNeta)}`,
             "",
-            `Comprobación: ${money(precioProductoNeto)} + ${money(ivaProducto)} + ${money(distribucionNeta)} + ${money(ivaDistribucion)} = ${money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)}`,
+            `Comprobación: ${money(ticket.totalMonto)} (productos) + ${money(distribucionBruta)} (distribución) = ${money(ticket.totalMonto + distribucionBruta)}`,
           ]),
     ];
     return lineas.join("\n");
@@ -959,7 +959,12 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                 )}
 
-                {/* 3 y 4) Total de cajetillas y total del ticket */}
+                {/* 3 y 4) Total de cajetillas y total del ticket. El total real
+                    del ticket (el que corresponde al ticket físico/fiscal)
+                    le SUMA la distribución encima del monto de los productos
+                    — así lo confirmó el ticket real: $5,521.59 (productos) +
+                    $166.80 (distribución) = $5,688.40. Para OTC no cambia
+                    nada, porque ahí la distribución siempre es $0. */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -971,17 +976,17 @@ export default function FacturasAdminView({ onLogout }) {
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL DEL TICKET{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
-                      <BotonCopiar texto={money(ticket.totalMonto)} etiqueta="" />
+                      <BotonCopiar texto={money(ticket.totalMonto + distribucionBruta)} etiqueta="" />
                     </div>
-                    <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto)}</div>
+                    <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto + distribucionBruta)}</div>
                   </div>
                 </div>
 
-                {/* 5) Comprobación — igual que antes */}
+                {/* 5) Comprobación — productos + distribución = total del ticket */}
                 {!venta.esOtc && (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
                     <div style={{ fontSize: 10.5, color: "#5b6478" }}>
-                      Comprobación: {money(precioProductoNeto)} + {money(ivaProducto)} + {money(distribucionNeta)} + {money(ivaDistribucion)} = {money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)} (debe ser igual al total: {money(ticket.totalMonto)})
+                      Comprobación: {money(ticket.totalMonto)} (productos) + {money(distribucionBruta)} (distribución) = {money(ticket.totalMonto + distribucionBruta)}
                     </div>
                     <BotonCopiar texto={textoParaCopiar(ticket)} etiqueta="Copiar todo" />
                   </div>
