@@ -71,7 +71,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         setTab={setTab}
         tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos", "tepic"].includes(t.key))}
         estadoTabs={{
-          rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
+          rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
           avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
           unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
           facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
