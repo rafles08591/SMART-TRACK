@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import html2canvas from "html2canvas";
 
 export function useCapturaImagen() {
