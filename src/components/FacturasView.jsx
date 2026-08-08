@@ -320,6 +320,60 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
     setClientes((cs) => cs.filter((c) => c.id !== cliente.id));
   }
 
+  // ---- Editar cliente (código y/o nombre) ----
+  const [editandoClienteId, setEditandoClienteId] = useState(null);
+  const [formEdicion, setFormEdicion] = useState({ codigo: "", nombre: "" });
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+
+  function iniciarEdicionCliente(cliente) {
+    setEditandoClienteId(cliente.id);
+    setFormEdicion({ codigo: cliente.codigo_cliente, nombre: cliente.cliente || "" });
+  }
+
+  function cancelarEdicionCliente() {
+    setEditandoClienteId(null);
+  }
+
+  async function guardarEdicionCliente(cliente) {
+    const codigo = formEdicion.codigo.trim();
+    if (!codigo) {
+      alert("El código no puede quedar vacío.");
+      return;
+    }
+    setGuardandoEdicion(true);
+    try {
+      const { error: err } = await supabase
+        .from("clientes_facturables")
+        .update({
+          codigo_cliente: codigo,
+          cliente: formEdicion.nombre.trim() || null,
+          actualizado_en: new Date().toISOString(),
+        })
+        .eq("id", cliente.id);
+      if (err) {
+        if (err.code === "23505") {
+          alert("Ese código ya está registrado en otro cliente del catálogo.");
+        } else {
+          throw err;
+        }
+        return;
+      }
+      // Si cambió el código, también hay que refrescar el nombre/código en
+      // las ventas ya guardadas de este cliente para que ADMIN vea lo mismo.
+      await supabase
+        .from("ventas_facturas")
+        .update({ codigo_cliente: codigo, cliente: formEdicion.nombre.trim() || null })
+        .eq("cliente_id", cliente.id);
+      setEditandoClienteId(null);
+      await cargarClientes();
+    } catch (err) {
+      console.error("Error editando cliente:", err);
+      alert("No se pudo guardar: " + (err?.message || "intenta de nuevo"));
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  }
+
   async function toggleNoFacturaHoy(cliente) {
     const hoy = hoyISO();
     const yaExcluido = exclusionesHoy.has(cliente.id);
@@ -691,6 +745,33 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
           {clientes.map((c) => {
             const excluidoHoy = exclusionesHoy.has(c.id);
+            const editando = editandoClienteId === c.id;
+
+            if (editando) {
+              return (
+                <div key={c.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", border: "1px solid #F2B134" }}>
+                  <input
+                    type="text"
+                    value={formEdicion.codigo}
+                    onChange={(e) => setFormEdicion((f) => ({ ...f, codigo: e.target.value }))}
+                    placeholder="Código"
+                    style={{ flex: "1 1 140px", minWidth: 120, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }}
+                  />
+                  <input
+                    type="text"
+                    value={formEdicion.nombre}
+                    onChange={(e) => setFormEdicion((f) => ({ ...f, nombre: e.target.value }))}
+                    placeholder="Nombre (opcional)"
+                    style={{ flex: "1 1 180px", minWidth: 140, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }}
+                  />
+                  <button className="btn" disabled={guardandoEdicion} onClick={() => guardarEdicionCliente(c)}>
+                    {guardandoEdicion ? "Guardando..." : "Guardar"}
+                  </button>
+                  <button className="btn-ghost" onClick={cancelarEdicionCliente}>Cancelar</button>
+                </div>
+              );
+            }
+
             return (
               <div key={c.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 200px", minWidth: 0 }}>
@@ -711,6 +792,10 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
                     </select>
                   ) : null}
                 </div>
+
+                <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => iniciarEdicionCliente(c)}>
+                  Editar
+                </button>
 
                 <button
                   className={c.prioridad ? "btn" : "btn-ghost"}
