@@ -1475,10 +1475,39 @@ export default function App() {
   // renglón en ventas_facturas (no agrupado por marca). De ahí las lee la
   // pantalla de ADMIN, que las vuelve a juntar por cliente+día en una sola
   // tarjeta.
+  // Junta (suma monto/paquetes/cajetillas/contado/credito) las líneas que
+  // se refieran exactamente al mismo renglón de factura (misma ruta +
+  // código de cliente + fecha + artículo). Esto es INDISPENSABLE antes de
+  // mandarlas a la RPC: si el mismo reporte trae dos filas para el mismo
+  // cliente+producto+día (pasa seguido en los reportes exportados), y se
+  // manda a Postgres tal cual, la instrucción completa truena por completo
+  // ("ON CONFLICT DO UPDATE command cannot affect row a second time") y NO
+  // SE GUARDA NINGUNA fila de ese lote — ni siquiera las de otros clientes
+  // que sí venían bien. Por eso antes "no jalaban" ciertas facturas: bastaba
+  // con que UN cliente del archivo tuviera una línea repetida para que se
+  // cayera el lote entero.
+  function combinarLineasDuplicadas(filas) {
+    const mapa = new Map();
+    filas.forEach((fila) => {
+      const clave = `${fila.ruta}|${normalizarCodigo(fila.codigo_cliente)}|${fila.fecha}|${fila.articulo}`;
+      if (!mapa.has(clave)) {
+        mapa.set(clave, { ...fila });
+      } else {
+        const acumulada = mapa.get(clave);
+        acumulada.paquetes += fila.paquetes;
+        acumulada.cajetillas += fila.cajetillas;
+        acumulada.contado_monto += fila.contado_monto;
+        acumulada.credito_monto += fila.credito_monto;
+        acumulada.monto += fila.monto;
+      }
+    });
+    return [...mapa.values()];
+  }
+
   async function sincronizarVentasFacturas(filasCrudas) {
     try {
       const lineas = extraerLineasFacturables(filasCrudas);
-      if (lineas.length === 0) return;
+      if (lineas.length === 0) return { ok: true, guardadas: 0 };
 
       // Ya NO se filtra por ruta al leer el catálogo: el cruce se hace SOLO
       // por código de cliente. Un cliente puede aparecer reportado bajo una
@@ -1488,8 +1517,11 @@ export default function App() {
       // todas formas se detecta y se manda a facturar.
       const { data: clientesFacturables, error: errClientes } = await supabase
         .from("clientes_facturables")
-        .select("id, ruta, codigo_norm, prioridad, forma_pago_default");
-      if (errClientes) { console.error("Error leyendo clientes_facturables:", errClientes); return; }
+        .select("id, ruta, codigo_norm, cliente, prioridad, forma_pago_default");
+      if (errClientes) {
+        console.error("Error leyendo clientes_facturables:", errClientes);
+        return { ok: false, error: "No se pudo leer el catálogo de clientes: " + errClientes.message };
+      }
 
       const mapaClientes = new Map((clientesFacturables || []).map((c) => [c.codigo_norm, c]));
 
@@ -1506,14 +1538,17 @@ export default function App() {
 
       const filasParaFacturar = [];
       const lineasSinCatalogo = [];
+      let coincidenciasCatalogo = 0;
       lineas.forEach((l) => {
         const codigoNorm = normalizarCodigo(l.codigoCliente); // ya existe en tu archivo
         const cliente = mapaClientes.get(codigoNorm);
         if (!cliente) { lineasSinCatalogo.push(l); return; }
+        coincidenciasCatalogo++;
         if (setExcluidos.has(`${cliente.id}|${l.fecha}`)) return;
         filasParaFacturar.push({
           ruta: l.vendedor,
           codigo_cliente: l.codigoCliente,
+          cliente: cliente.cliente || null,
           articulo: l.articulo,
           producto_nombre: l.productoNombre,
           fecha: l.fecha,
@@ -1541,6 +1576,8 @@ export default function App() {
       // factura por única ocasión" pendiente (código + forma de pago,
       // capturada desde la pestaña FACTURAS sin dar de alta al cliente).
       const solicitudesUsadasIds = new Set();
+      let coincidenciasSolicitud = 0;
+      const codigosSinCoincidencia = new Set();
       if (lineasSinCatalogo.length > 0) {
         const { data: solicitudes } = await supabase
           .from("facturas_solicitudes_unicas")
@@ -1551,10 +1588,12 @@ export default function App() {
         lineasSinCatalogo.forEach((l) => {
           const codigoNorm = normalizarCodigo(l.codigoCliente);
           const solicitud = mapaSolicitudes.get(codigoNorm);
-          if (!solicitud) return;
+          if (!solicitud) { codigosSinCoincidencia.add(l.codigoCliente); return; }
+          coincidenciasSolicitud++;
           filasParaFacturar.push({
             ruta: l.vendedor,
             codigo_cliente: l.codigoCliente,
+            cliente: null,
             articulo: l.articulo,
             producto_nombre: l.productoNombre,
             fecha: l.fecha,
@@ -1571,14 +1610,28 @@ export default function App() {
           solicitudesUsadasIds.add(JSON.stringify({ id: solicitud.id, fecha: l.fecha }));
         });
       }
-      if (filasParaFacturar.length === 0) return;
-      // Se usa la función RPC upsert_ventas_facturas (ver SQL v5) en vez de
+      if (filasParaFacturar.length === 0) {
+        return {
+          ok: true,
+          guardadas: 0,
+          diagnostico: `${lineas.length} líneas leídas del archivo, 0 coincidieron con clientes registrados ni con solicitudes únicas pendientes. Revisa que el código de cliente registrado en FACTURAS sea IDÉNTICO al que trae el reporte (columna "Cliente")${codigosSinCoincidencia.size > 0 ? `. Ejemplos de códigos del reporte que no encontraron cliente: ${[...codigosSinCoincidencia].slice(0, 5).join(", ")}` : ""}.`,
+        };
+      }
+
+      // Combina líneas repetidas (mismo cliente+producto+día) ANTES de
+      // mandarlas — ver el porqué en el comentario de combinarLineasDuplicadas.
+      const filasCombinadas = combinarLineasDuplicadas(filasParaFacturar);
+
+      // Se usa la función RPC upsert_ventas_facturas (ver SQL) en vez de
       // un upsert directo: así, si la fila ya existía, la RPC NO toca
       // forma_pago ni estado (los deja con lo que ADMIN ya haya puesto),
       // solo refresca monto/cajetillas/etc. Si es una fila nueva, sí usa la
       // forma_pago que viene en el payload (catálogo o solicitud única).
-      const { error: errUpsert } = await supabase.rpc("upsert_ventas_facturas", { payload: filasParaFacturar });
-      if (errUpsert) console.error("Error guardando ventas_facturas:", errUpsert);
+      const { error: errUpsert } = await supabase.rpc("upsert_ventas_facturas", { payload: filasCombinadas });
+      if (errUpsert) {
+        console.error("Error guardando ventas_facturas:", errUpsert);
+        return { ok: false, error: `Se encontraron ${filasParaFacturar.length} líneas de clientes registrados, pero la base de datos las rechazó: ${errUpsert.message} (revisa que hayas corrido el SQL más reciente en Supabase).` };
+      }
 
       // Ya que la(s) venta(s) quedaron guardadas, marca cada solicitud de
       // única ocasión que se usó para que no se vuelva a aplicar en una
@@ -1589,10 +1642,17 @@ export default function App() {
           await supabase.from("facturas_solicitudes_unicas").update({ usada: true, fecha_uso: fecha }).eq("id", id);
         }
       }
+      return {
+        ok: true,
+        guardadas: filasCombinadas.length,
+        diagnostico: `${lineas.length} líneas leídas, ${coincidenciasCatalogo} coincidieron con el catálogo, ${coincidenciasSolicitud} con solicitudes de única ocasión, ${filasCombinadas.length} se mandaron a guardar.`,
+      };
     } catch (err) {
       console.error("Error sincronizando ventas_facturas:", err);
+      return { ok: false, error: err?.message || "Error desconocido sincronizando facturas." };
     }
   }
+
 
   async function procesarFilasAvanceDia(filas) {
     const registros = convertirFilasAvanceDia(filas);
@@ -1601,9 +1661,13 @@ export default function App() {
       return;
     }
     await persistParcialFresco(() => ({ avanceDia: registros }));
-    await sincronizarVentasFacturas(filas);
+    const resultadoFacturas = await sincronizarVentasFacturas(filas);
     const fechas = [...new Set(registros.map((r) => r.fecha))];
-    setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+    if (resultadoFacturas && resultadoFacturas.ok === false) {
+      setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}. ⚠️ FACTURAS: ${resultadoFacturas.error}`);
+    } else {
+      setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}. FACTURAS: ${resultadoFacturas?.diagnostico || "sin clientes registrados en este archivo."}`);
+    }
   }
 
   async function handleAvanceDiaFile(e) {
@@ -2101,3 +2165,4 @@ export default function App() {
     </div>
   );
 }
+
