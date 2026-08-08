@@ -47,14 +47,19 @@ export function ObjetivoTabs({ tab, setTab, tabs, estadoTabs }) {
           0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.9); background-color: rgba(255,0,0,0.18); }
           50% { box-shadow: 0 0 0 10px rgba(255,0,0,0); background-color: rgba(255,0,0,0.55); }
         }
+        @keyframes parpadeoVerdeTab {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(61,220,151,0.85); background-color: rgba(61,220,151,0.12); }
+          50% { box-shadow: 0 0 0 8px rgba(61,220,151,0); background-color: rgba(61,220,151,0.45); }
+        }
         .tab-pendiente { border: 1px solid #FF6B6B !important; color: #FF6B6B !important; animation: parpadeoRojoTab 1.4s ease-in-out infinite; }
         .tab-completo { border: 1px solid #3DDC97 !important; color: #3DDC97 !important; }
         .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
         .tab-pendiente-urgente { border: 2px solid #FF0000 !important; color: #FF0000 !important; font-weight: 800 !important; animation: parpadeoRojoIntensoTab 0.7s ease-in-out infinite; }
+        .tab-parpadeo-verde { border: 2px solid #3DDC97 !important; color: #3DDC97 !important; font-weight: 800 !important; animation: parpadeoVerdeTab 1s ease-in-out infinite; }
       `}</style>
       {lista.map((t) => {
         const estado = estadoTabs && estadoTabs[t.key];
-        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : estado === "pendiente_urgente" ? "tab-pendiente-urgente" : "";
+        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : estado === "pendiente_urgente" ? "tab-pendiente-urgente" : estado === "parpadeo_verde" ? "tab-parpadeo-verde" : "";
         return (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`${tab === t.key ? "btn" : "btn-ghost"} ${claseExtra}`} style={{ fontSize: 13, flex: 1 }}>
