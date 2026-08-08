@@ -170,8 +170,8 @@ function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
             return (
               <div
                 key={m.id}
-                className={`card ${esNuevo ? "venta-nueva-prioritaria" : ""}`}
-                style={{ padding: 16 }}
+                className="card"
+                style={{ padding: 16, border: esNuevo ? "2px solid #FF8C00" : undefined }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
                   <div>
@@ -228,7 +228,6 @@ export default function FacturasAdminView({ onLogout }) {
   const [filas, setFilas] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
-  const [nuevasClaves, setNuevasClaves] = useState(new Set());
   const ultimaVistaRef = useRef(null);
 
   useEffect(() => {
@@ -236,6 +235,34 @@ export default function FacturasAdminView({ onLogout }) {
       ultimaVistaRef.current = localStorage.getItem(LLAVE_ULTIMA_VISTA);
     } catch (e) { /* ignorar */ }
   }, []);
+
+  // ---- Nuevas ventas (prioritario / normal): se revisan SIEMPRE, sin
+  // importar en qué pestaña esté parado ADMIN — así PRIORITARIO y NORMAL
+  // pueden parpadear los dos aunque solo se esté viendo uno de ellos. ----
+  const [nuevosPrioritarioClaves, setNuevosPrioritarioClaves] = useState(new Set());
+  const [nuevosNormalClaves, setNuevosNormalClaves] = useState(new Set());
+
+  async function revisarNuevasVentasGlobal() {
+    const referencia = ultimaVistaRef.current;
+    if (!referencia) return; // primera vez que entra: no marca nada como "nuevo" todavía
+    try {
+      const { data, error: err } = await supabase
+        .from("ventas_facturas")
+        .select("ruta, codigo_cliente, fecha, articulo, prioridad, creado_en")
+        .gt("creado_en", referencia);
+      if (err) throw err;
+      const prioritarios = new Set();
+      const normales = new Set();
+      (data || []).forEach((f) => {
+        const clave = claveVenta(f);
+        if (f.prioridad) prioritarios.add(clave); else normales.add(clave);
+      });
+      setNuevosPrioritarioClaves(prioritarios);
+      setNuevosNormalClaves(normales);
+    } catch (err) {
+      console.error("Error revisando nuevas ventas:", err);
+    }
+  }
 
   // ---- Mensajes (observaciones ADMIN <-> ruta): se cargan siempre, sin
   // importar en qué pestaña esté ADMIN parado, para que el aviso de
@@ -322,15 +349,6 @@ export default function FacturasAdminView({ onLogout }) {
         .order("creado_en", { ascending: false });
       if (err) throw err;
       setFilas(data || []);
-
-      if (ultimaVistaRef.current) {
-        const nuevas = new Set(
-          (data || [])
-            .filter((f) => f.prioridad && new Date(f.creado_en) > new Date(ultimaVistaRef.current))
-            .map(claveVenta)
-        );
-        setNuevasClaves(nuevas);
-      }
     } catch (err) {
       console.error("Error cargando ventas_facturas:", err);
       setError(err?.message || "No se pudo cargar la información.");
@@ -344,6 +362,13 @@ export default function FacturasAdminView({ onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
 
+  // Revisión global de "nuevas ventas" — corre siempre, sin importar la
+  // pestaña, para que PRIORITARIO y NORMAL puedan parpadear los dos.
+  useEffect(() => {
+    revisarNuevasVentasGlobal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Tiempo real: en vez de tratar de "insertar" la fila nueva a mano dentro
   // del agrupado (complicado y propenso a error), simplemente se vuelve a
   // pedir todo con un pequeño debounce — más simple y siempre consistente.
@@ -351,11 +376,8 @@ export default function FacturasAdminView({ onLogout }) {
     let temporizador = null;
     const canal = supabase
       .channel("ventas_facturas_admin")
-      .on("postgres_changes", { event: "*", schema: "public", table: "ventas_facturas" }, (payload) => {
-        const fila = payload.new;
-        if (fila?.prioridad) {
-          setNuevasClaves((s) => new Set(s).add(claveVenta(fila)));
-        }
+      .on("postgres_changes", { event: "*", schema: "public", table: "ventas_facturas" }, () => {
+        revisarNuevasVentasGlobal();
         if (temporizador) clearTimeout(temporizador);
         temporizador = setTimeout(() => cargar(), 600);
       })
@@ -368,11 +390,8 @@ export default function FacturasAdminView({ onLogout }) {
     const ahora = new Date().toISOString();
     ultimaVistaRef.current = ahora;
     try { localStorage.setItem(LLAVE_ULTIMA_VISTA, ahora); } catch (e) { /* ignorar */ }
-    setNuevasClaves(new Set());
-  }
-
-  function quitarParpadeo(clave) {
-    setNuevasClaves((s) => { const n = new Set(s); n.delete(clave); return n; });
+    setNuevosPrioritarioClaves(new Set());
+    setNuevosNormalClaves(new Set());
   }
 
   async function cambiarFormaPago(venta, nuevaFormaPago) {
@@ -551,7 +570,8 @@ export default function FacturasAdminView({ onLogout }) {
     return resultado;
   }, [ventasAgrupadas, ventasEnModoTotal]);
 
-  const hayNuevasPrioritarias = tab === "prioritario" && nuevasClaves.size > 0;
+  const hayNuevasPrioritarias = nuevosPrioritarioClaves.size > 0;
+  const hayNuevasNormal = nuevosNormalClaves.size > 0;
 
   function textoParaCopiar(ticket) {
     const venta = ticket.ventaOriginal;
@@ -580,11 +600,23 @@ export default function FacturasAdminView({ onLogout }) {
   return (
     <div style={{ maxWidth: 920, margin: "0 auto", padding: "24px 16px 60px" }}>
       <style>{`
-        @keyframes parpadeoAmarilloVenta {
-          0%, 100% { background-color: rgba(255,215,0,0.12); box-shadow: 0 0 0 0 rgba(255,215,0,0.9); }
-          50% { background-color: rgba(255,215,0,0.55); box-shadow: 0 0 0 8px rgba(255,215,0,0); }
+        @keyframes parpadeoTabPrioritario {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,215,0,0.85); background-color: rgba(255,215,0,0.15); }
+          50% { box-shadow: 0 0 0 8px rgba(255,215,0,0); background-color: rgba(255,215,0,0.55); }
         }
-        .venta-nueva-prioritaria { animation: parpadeoAmarilloVenta 0.7s ease-in-out infinite; border: 2px solid #FFD700 !important; }
+        .tab-parpadeo-prioritario { animation: parpadeoTabPrioritario 0.9s ease-in-out infinite; border: 2px solid #FFD700 !important; }
+
+        @keyframes parpadeoTabNormal {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(90,169,230,0.85); background-color: rgba(90,169,230,0.15); }
+          50% { box-shadow: 0 0 0 8px rgba(90,169,230,0); background-color: rgba(90,169,230,0.5); }
+        }
+        .tab-parpadeo-normal { animation: parpadeoTabNormal 0.9s ease-in-out infinite; border: 2px solid #5AA9E6 !important; }
+
+        @keyframes parpadeoTabMensaje {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.15); }
+          50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.5); }
+        }
+        .tab-parpadeo-mensaje { animation: parpadeoTabMensaje 0.9s ease-in-out infinite; border: 2px solid #FF8C00 !important; }
       `}</style>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 8 }}>
@@ -602,27 +634,32 @@ export default function FacturasAdminView({ onLogout }) {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <button
-          className={vista === "clientes" && tab === "prioritario" ? "btn" : "btn-ghost"}
+          className={`${vista === "clientes" && tab === "prioritario" ? "btn" : "btn-ghost"} ${hayNuevasPrioritarias ? "tab-parpadeo-prioritario" : ""}`}
           style={{ flex: 1, position: "relative" }}
           onClick={() => { setVista("clientes"); setTab("prioritario"); }}
         >
           <Star size={13} style={{ verticalAlign: "-2px" }} /> PRIORITARIO
-          {nuevasClaves.size > 0 && (
+          {hayNuevasPrioritarias && (
             <span style={{ marginLeft: 6, background: "#FFD700", color: "#1A1300", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>
-              {nuevasClaves.size}
+              {nuevosPrioritarioClaves.size}
             </span>
           )}
         </button>
         <button
-          className={vista === "clientes" && tab === "normal" ? "btn" : "btn-ghost"}
-          style={{ flex: 1 }}
+          className={`${vista === "clientes" && tab === "normal" ? "btn" : "btn-ghost"} ${hayNuevasNormal ? "tab-parpadeo-normal" : ""}`}
+          style={{ flex: 1, position: "relative" }}
           onClick={() => { setVista("clientes"); setTab("normal"); }}
         >
           NORMAL
+          {hayNuevasNormal && (
+            <span style={{ marginLeft: 6, background: "#5AA9E6", color: "#0B1220", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>
+              {nuevosNormalClaves.size}
+            </span>
+          )}
         </button>
         <button
-          className={vista === "mensajes" ? "btn" : "btn-ghost"}
-          style={{ flex: 1, position: "relative", borderColor: nuevosMensajesIds.size > 0 ? "#FF8C00" : undefined }}
+          className={`${vista === "mensajes" ? "btn" : "btn-ghost"} ${nuevosMensajesIds.size > 0 ? "tab-parpadeo-mensaje" : ""}`}
+          style={{ flex: 1, position: "relative" }}
           onClick={() => setVista("mensajes")}
         >
           <MessageSquare size={13} style={{ verticalAlign: "-2px" }} /> MENSAJES
@@ -671,7 +708,7 @@ export default function FacturasAdminView({ onLogout }) {
             </button>
           ))}
         </div>
-        {hayNuevasPrioritarias && (
+        {(hayNuevasPrioritarias || hayNuevasNormal) && (
           <button className="btn" style={{ marginLeft: "auto", background: "#FFD700", borderColor: "#FFD700" }} onClick={marcarTodoVisto}>
             Marcar todo como visto
           </button>
@@ -695,14 +732,14 @@ export default function FacturasAdminView({ onLogout }) {
           <div style={{ fontSize: 12, color: "#9AA7BD" }}>{ventasAgrupadas.length} cliente{ventasAgrupadas.length === 1 ? "" : "s"} con venta en este rango</div>
           {ticketsParaMostrar.map((ticket) => {
             const venta = ticket.ventaOriginal;
-            const esNueva = nuevasClaves.has(venta.clave);
+            const esPrioritaria = tab === "prioritario";
+            const esNueva = esPrioritaria ? nuevosPrioritarioClaves.has(venta.clave) : nuevosNormalClaves.has(venta.clave);
             const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
             return (
               <div
                 key={ticket.claveTicket}
-                className={`card ${esNueva ? "venta-nueva-prioritaria" : ""}`}
-                style={{ padding: 16 }}
-                onClick={() => esNueva && quitarParpadeo(venta.clave)}
+                className="card"
+                style={{ padding: 16, border: esNueva ? `2px solid ${esPrioritaria ? "#FFD700" : "#5AA9E6"}` : undefined }}
               >
                 {/* Encabezado */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
