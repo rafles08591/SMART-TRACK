@@ -1,134 +1,285 @@
 // @ts-nocheck
-import React from "react";
-import { Target, Star, MapPin, MessageSquare, AlertCircle } from "lucide-react";
-import { MARCAS_DIA, NOMBRES } from "../constants";
-import { money, unidades, metaColor } from "../utils";
-import { KpiCard } from "./ui";
+import React, { useState, useEffect } from "react";
+import { Plus, Trash2, Ban, CheckCircle2, AlertCircle, MessageSquare, Download } from "lucide-react";
+import { NOMBRES, RUTAS, USERS } from "../constants";
+import { fechaHoyISO } from "../utils";
 
-export default function DiaKpis({ hoy, mensajeDia, rutaCodigo, esPeor, esBottom3 }) {
-  const [tiempos, setTiempos] = useState(null);
-  const [ahora, setAhora] = useState(Date.now());
+const USUARIOS_MERCH = USERS.filter((u) => u.role === "merch").map((u) => u.username);
+const DESTINO_EQUIPO_MERCH = "equipo_merch";
 
-  // Consulta el panel de Tiempos (otro proyecto de Supabase) para esta ruta,
-  // hoy. Se refresca cada 20s (no hace falta tiempo real estricto aquí).
+export function avisosRelevantesPara(data, viewerKey, verComoRuta) {
+  if ((viewerKey === "supervisor2" || viewerKey === "liquidacion") && data.preferenciasAvisos?.[viewerKey] === false) return [];
+  const todosLosAvisos = data.avisos || [];
+  const base = verComoRuta
+    ? todosLosAvisos.filter((a) => {
+        if (!a.destinatarios || a.destinatarios === "todos") return true;
+        // Aviso dirigido a todo el equipo de merchandising (PVR + TEPIC).
+        if (a.destinatarios === DESTINO_EQUIPO_MERCH) return USUARIOS_MERCH.includes(verComoRuta);
+        return Array.isArray(a.destinatarios) && a.destinatarios.includes(verComoRuta);
+      })
+    : todosLosAvisos;
+  // Si el que publicó excluyó explícitamente a Liquidación o Supervisor-2 de
+  // ESE aviso en particular, no se lo mostramos a esos roles.
+  if (viewerKey === "supervisor2" || viewerKey === "liquidacion") {
+    return base.filter((a) => !(a.excluidos || []).includes(viewerKey));
+  }
+  return base;
+}
+
+// true si a este viewerKey le llegó al menos un aviso nuevo desde la última
+// vez que entró a la pestaña — se usa para el parpadeo naranja de la pestaña.
+export function hayAvisoNuevoPara(data, viewerKey, verComoRuta) {
+  if (!viewerKey) return false;
+  const avisos = avisosRelevantesPara(data, viewerKey, verComoRuta);
+  if (avisos.length === 0) return false;
+  const ultimaVisita = data.avisosVistoPor?.[viewerKey];
+  if (!ultimaVisita) return true;
+  return avisos.some((a) => new Date(a.fecha) > new Date(ultimaVisita));
+}
+
+// Vista dedicada de Liquidación (Sulema): un mini switch entre TIEMPOS
+// (su pantalla de siempre) y AVISOS (nuevo), ya que ella no usa el sistema
+// de pestañas de VendorView/StaffView.
+
+export default function AvisosView({ data, persist, persistFresco, puedeCrear, revisorNombre, verComoRuta, viewerKey }) {
+  const todosLosAvisos = data.avisos || [];
+  const avisos = avisosRelevantesPara(data, viewerKey, verComoRuta);
+  const puedeElegirPreferencia = viewerKey === "supervisor2" || viewerKey === "liquidacion";
+  const recibeAvisos = puedeElegirPreferencia ? data.preferenciasAvisos?.[viewerKey] !== false : true;
+
+  // Marca esta pestaña como "vista ahorita" para apagar el parpadeo naranja.
   useEffect(() => {
-    if (!rutaCodigo) return;
-    let activo = true;
-    async function cargar() {
-      try {
-        const fechaHoy = new Date().toLocaleDateString("en-CA");
-        const { data: row } = await supabaseTiempos.from("panel_kv").select("value").eq("key", "board-activo").maybeSingle();
-        if (!activo) return;
-        setTiempos(row?.value?.fecha === fechaHoy ? row.value.rutas?.[rutaCodigo]?.areas || null : null);
-      } catch (e) {
-        console.error("Error consultando Tiempos:", e);
-      }
+    if (!viewerKey) return;
+    const ahora = new Date().toISOString();
+    const yaVisto = data.avisosVistoPor?.[viewerKey];
+    if (!yaVisto || Date.now() - new Date(yaVisto).getTime() > 3000) {
+      persistFresco((fresca) => ({ avisosVistoPor: { ...(fresca.avisosVistoPor || {}), [viewerKey]: ahora } }));
     }
-    cargar();
-    const intervalo = setInterval(cargar, 20000);
-    return () => { activo = false; clearInterval(intervalo); };
-  }, [rutaCodigo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerKey]);
 
-  // Reloj que avanza cada segundo, para el cronómetro de "tiempo en ruta".
-  useEffect(() => {
-    const t = setInterval(() => setAhora(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  function cambiarPreferenciaAvisos(valor) {
+    persistFresco((fresca) => ({ preferenciasAvisos: { ...(fresca.preferenciasAvisos || {}), [viewerKey]: valor } }));
+  }
 
-  const horaIngresoClo = tiempos?.ingreso_clo?.ts
-    ? new Date(tiempos.ingreso_clo.ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-    : null;
-  const salidaRutaTs = tiempos?.salida_ruta?.ts || null;
-  const yaRegreso = !!tiempos?.ingreso_clo_fin?.ts;
-  // El cronómetro solo corre mientras está en ruta: desde que salió hasta
-  // que regresa a CLO (ingreso_clo_fin). Si ya regresó, se congela ahí.
-  const msEnRuta = salidaRutaTs ? (yaRegreso ? tiempos.ingreso_clo_fin.ts - salidaRutaTs : ahora - salidaRutaTs) : null;
+  const [texto, setTexto] = useState("");
+  const [archivo, setArchivo] = useState(null); // { url, nombre, esImagen }
+  const [subiendo, setSubiendo] = useState(false);
+  const [modoDestino, setModoDestino] = useState("todos"); // "todos" | "equipo_merch" | "especificas"
+  const [rutasElegidas, setRutasElegidas] = useState([]);
+  const [excluirLiquidacion, setExcluirLiquidacion] = useState(false);
+  const [excluirSupervisor2, setExcluirSupervisor2] = useState(false);
+  const fileRef = useRef(null);
+
+  function toggleRutaDestino(nombreRuta) {
+    setRutasElegidas((rs) => (rs.includes(nombreRuta) ? rs.filter((r) => r !== nombreRuta) : [...rs, nombreRuta]));
+  }
+
+  async function subirArchivo(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      alert("El archivo pesa más de 8MB. Usa uno más ligero.");
+      return;
+    }
+    setSubiendo(true);
+    try {
+      const extension = (file.name.split(".").pop() || "bin").toLowerCase();
+      const nombreArchivo = `aviso_${Date.now()}.${extension}`;
+      const { error } = await supabase.storage.from("promociones").upload(nombreArchivo, file, { cacheControl: "3600", upsert: false });
+      if (error) {
+        alert(`No se pudo subir el archivo: ${error.message}`);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
+      setArchivo({ url: urlData.publicUrl, nombre: file.name, esImagen: file.type.startsWith("image/") });
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  function publicarAviso() {
+    if (!texto.trim() && !archivo) {
+      alert("Escribe un texto o adjunta una imagen/archivo.");
+      return;
+    }
+    if (modoDestino === "especificas" && rutasElegidas.length === 0) {
+      alert("Elige al menos un destinatario, o cambia el modo de envío.");
+      return;
+    }
+    const excluidos = [];
+    if (excluirLiquidacion) excluidos.push("liquidacion");
+    if (excluirSupervisor2) excluidos.push("supervisor2");
+    const nuevo = {
+      id: "aviso_" + Date.now(),
+      texto: texto.trim(),
+      archivoUrl: archivo?.url || null,
+      archivoNombre: archivo?.nombre || null,
+      esImagen: archivo?.esImagen || false,
+      autor: revisorNombre || "Staff",
+      fecha: new Date().toISOString(),
+      destinatarios:
+        modoDestino === "todos" ? "todos"
+        : modoDestino === "equipo_merch" ? DESTINO_EQUIPO_MERCH
+        : rutasElegidas,
+      excluidos,
+    };
+    persistFresco((fresca) => ({ avisos: [nuevo, ...(fresca.avisos || [])] }));
+    setTexto("");
+    setArchivo(null);
+    setModoDestino("todos");
+    setRutasElegidas([]);
+    setExcluirLiquidacion(false);
+    setExcluirSupervisor2(false);
+  }
+
+  function eliminarAviso(id) {
+    persistFresco((fresca) => ({ avisos: (fresca.avisos || []).filter((a) => a.id !== id) }));
+  }
+
+
+
+  function formatFechaHora(iso) {
+    const d = new Date(iso);
+    return d.toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
 
   return (
-    <>
-      <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {hoy.fecha}</div>
+    <div>
+      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>AVISOS</div>
 
-      {esBottom3 && (
-        <div className="card" style={{ padding: 16, marginBottom: 16, border: "1px solid #FF6B6B", background: "#2a1414" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <AlertCircle size={18} color="#FF6B6B" />
-            <span className="display" style={{ fontSize: 14, color: "#FF6B6B" }}>TU ERES SELECCIONADO PARA LA TERCERA MANO DEL PACHUCO</span>
+      {puedeElegirPreferencia && (
+        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+          <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>¿QUIERES RECIBIR AVISOS?</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className={recibeAvisos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => cambiarPreferenciaAvisos(true)}>Sí, quiero recibir avisos</button>
+            <button className={!recibeAvisos ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => cambiarPreferenciaAvisos(false)}>No, no quiero recibir avisos</button>
           </div>
-          <div style={{ fontSize: 12, color: "#E8EDF5", marginBottom: 10 }}>
-            Estás entre los 3 con menor efectividad hoy. Para salir del listado, esto es lo que más te está pesando:
+        </div>
+      )}
+
+      {puedeElegirPreferencia && !recibeAvisos ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+          Desactivaste la recepción de avisos. Si cambias de opinión, actívala arriba.
+        </div>
+      ) : (
+        <>
+      {puedeCrear && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 8 }}>NUEVO AVISO</div>
+          <textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder="Escribe el aviso (opcional si adjuntas una imagen o archivo)..."
+            rows={3}
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
+          />
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <button className="btn-ghost" onClick={() => fileRef.current?.click()} disabled={subiendo}>
+              {subiendo ? "Subiendo..." : archivo ? "Cambiar archivo" : "Adjuntar imagen/archivo"}
+            </button>
+            <input ref={fileRef} type="file" style={{ display: "none" }} onChange={subirArchivo} />
+            {archivo && (
+              <>
+                <span style={{ fontSize: 12, color: "#9AA7BD" }}>{archivo.nombre}</span>
+                <button className="btn-ghost" onClick={() => setArchivo(null)}><Ban size={13} color="#FF6B6B" /></button>
+              </>
+            )}
           </div>
-          {hoy.indicadoresDebiles && hoy.indicadoresDebiles.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {hoy.indicadoresDebiles.slice(0, 4).map((ind, i) => (
-                <div key={i} style={{ fontSize: 13, color: "#E8EDF5" }}>
-                  • Vende <b style={{ color: "#F2B134" }}>{ind.unidad === "$" ? money(ind.faltante) : `${unidades(ind.faltante)}`}</b> más de <b>{ind.label}</b> para cerrar ese objetivo.
-                </div>
-              ))}
+          {archivo?.esImagen && <img src={archivo.url} alt="" style={{ maxWidth: 200, borderRadius: 8, marginBottom: 10, display: "block" }} />}
+
+          <div style={{ marginBottom: 10 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>DESTINATARIOS</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <button className={modoDestino === "todos" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("todos")}>Para todos</button>
+              <button className={modoDestino === "equipo_merch" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("equipo_merch")}>Solo mi equipo (merch PVR + Tepic)</button>
+              <button className={modoDestino === "especificas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setModoDestino("especificas")}>Elegir específicos</button>
             </div>
-          ) : (
-            <div style={{ fontSize: 13, color: "#E8EDF5" }}>Sigue empujando tus indicadores del día para subir tu efectividad.</div>
-          )}
-        </div>
-      )}
-
-      {esPeor && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, border: "1px solid #FF6B6B" }}>
-          <div style={{ fontSize: 12, color: "#FF6B6B", fontWeight: 700 }}>PROPUESTO PARA: "LA TERCERA MANO DEL PACHUCO" (menor efectividad de todas las rutas hoy)</div>
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-        <KpiCard
-          icon={<Star size={14} />}
-          label="Efectividad del día"
-          value={`${hoy.efectividadPct.toFixed(0)}%`}
-          accent={hoy.efectividadPct >= 80 ? "#3DDC97" : hoy.efectividadPct >= 50 ? "#F2B134" : "#FF6B6B"}
-        />
-      </div>
-
-      {(horaIngresoClo || msEnRuta != null) && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-          {horaIngresoClo && (
-            <KpiCard icon={<Truck size={14} />} label="Llegada a CLO" value={horaIngresoClo} />
-          )}
-          {msEnRuta != null && (
-            <KpiCard
-              icon={<Clock size={14} />}
-              label={yaRegreso ? "Tiempo total en ruta" : "Tiempo en ruta (en vivo)"}
-              value={formatCrono(msEnRuta)}
-              accent={msEnRuta > UMBRAL_MS_EN_RUTA ? "#FF6B6B" : yaRegreso ? "#3DDC97" : "#F2B134"}
-            />
-          )}
-        </div>
-      )}
-      {mensajeDia && mensajeDia.texto && (
-        <div className="card" style={{ padding: 14, marginBottom: 16, border: "1px solid #F2B134" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <MessageSquare size={16} color="#F2B134" />
-            <span className="display" style={{ fontSize: 13, color: "#F2B134" }}>MENSAJE DEL SUPERVISOR</span>
+            {modoDestino === "equipo_merch" && (
+              <div style={{ fontSize: 11.5, color: "#9AA7BD" }}>
+                Llega a: {USUARIOS_MERCH.join(", ")}
+              </div>
+            )}
+            {modoDestino === "especificas" && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {[...RUTAS, ...USUARIOS_MERCH].map((nombreRuta) => (
+                  <button key={nombreRuta} className={rutasElegidas.includes(nombreRuta) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRutaDestino(nombreRuta)}>
+                    {nombreRuta}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: 14, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{mensajeDia.texto}</div>
-          <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
-            {mensajeDia.autor ? `${mensajeDia.autor} · ` : ""}{mensajeDia.fecha}
+
+          <div style={{ marginBottom: 10 }}>
+            <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>EXCLUIR DE ESTE AVISO (OPCIONAL)</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className={excluirLiquidacion ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setExcluirLiquidacion((v) => !v)}>
+                {excluirLiquidacion ? "✓ " : ""}No enviar a Liquidación
+              </button>
+              <button className={excluirSupervisor2 ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setExcluirSupervisor2((v) => !v)}>
+                {excluirSupervisor2 ? "✓ " : ""}No enviar a Supervisor-2
+              </button>
+            </div>
           </div>
+
+          <button className="btn" onClick={publicarAviso}>
+            <Plus size={14} style={{ verticalAlign: "-2px" }} /> Publicar aviso
+          </button>
         </div>
       )}
-      {hoy.bajoDesempeno && (
-        <div className="card" style={{ padding: 14, marginBottom: 16, border: "1px solid #FF6B6B", display: "flex", alignItems: "center", gap: 8 }}>
-          <AlertCircle size={16} color="#FF6B6B" />
-          <span style={{ fontSize: 13, color: "#FF6B6B" }}>Tu ritmo de hoy está por debajo de lo necesario. ¡Vamos con todo!</span>
+
+      {avisos.length === 0 ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>No hay avisos por el momento.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {avisos.map((a) => (
+            <div key={a.id} className="card" style={{ padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>{a.autor} · {formatFechaHora(a.fecha)}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {!verComoRuta && (
+                    <span style={{ fontSize: 10, color: "#9AA7BD", border: "1px solid #1E2A42", borderRadius: 6, padding: "2px 8px" }}>
+                      Para: {!a.destinatarios || a.destinatarios === "todos" ? "Todos" : a.destinatarios === DESTINO_EQUIPO_MERCH ? "Equipo merch (PVR + Tepic)" : a.destinatarios.join(", ")}
+                    </span>
+                  )}
+                  {!verComoRuta && a.excluidos && a.excluidos.length > 0 && (
+                    <span style={{ fontSize: 10, color: "#FF6B6B", border: "1px solid #FF6B6B", borderRadius: 6, padding: "2px 8px" }}>
+                      Sin: {a.excluidos.map((e) => e === "liquidacion" ? "Liquidación" : "Supervisor-2").join(", ")}
+                    </span>
+                  )}
+                  {puedeCrear && (
+                    <button className="btn-ghost" onClick={() => eliminarAviso(a.id)}><Trash2 size={13} color="#FF6B6B" /></button>
+                  )}
+                </div>
+              </div>
+              {a.texto && <p style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap", marginBottom: a.archivoUrl ? 10 : 0 }}>{a.texto}</p>}
+              {a.archivoUrl && (
+                a.esImagen ? (
+                  <img src={a.archivoUrl} alt="" style={{ maxWidth: "100%", borderRadius: 8, display: "block" }} />
+                ) : (
+                  <a href={a.archivoUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+                    <Download size={13} /> {a.archivoNombre || "Descargar archivo"}
+                  </a>
+                )
+              )}
+            </div>
+          ))}
         </div>
       )}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-        <KpiCard icon={<Target size={14} />} label="VOLUMEN" value={`${unidades(hoy.volumen.vendido)} / ${unidades(hoy.volumen.objetivo)}`} accent={metaColor(hoy.volumen.vendido, hoy.volumen.objetivo)} />
-        {MARCAS_DIA.map((m) => (
-          <KpiCard key={m.key} icon={<Star size={14} />} label={m.label} value={`${unidades(hoy.marcas[m.key].vendido)} / ${unidades(hoy.marcas[m.key].objetivo)}`} accent={metaColor(hoy.marcas[m.key].vendido, hoy.marcas[m.key].objetivo)} />
-        ))}
-        <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(hoy.otc.vendido)} / ${money(hoy.otc.objetivo)}`} accent={metaColor(hoy.otc.vendido, hoy.otc.objetivo)} />
-        <KpiCard icon={<Star size={14} />} label="OTC sin Vuala" value={`${hoy.otcSinVuala.piezas} pza.`} accent={hoy.otcSinVuala.cumple ? "#3DDC97" : "#FF6B6B"} />
-        <KpiCard icon={<MapPin size={14} />} label="VISITAS EFECTIVAS" value={hoy.visitasEfectivas} />
-      </div>
-    </>
+      </>
+      )}
+    </div>
   );
 }
 
+/**
+ * Pestaña CRÉDITOS — recordatorio de validación de créditos cada 15 días.
+ * - Liquidación: sube evidencia (foto, por archivo o cámara en vivo) y
+ *   responde "¿Créditos completos?"; su pestaña parpadea en naranja intenso
+ *   mientras esté pendiente el ciclo de 15 días.
+ * - Gerente: ve el historial completo, puede descargar cualquier imagen, y
+ *   su pestaña se pone en verde en cuanto Liquidación sube una validación
+ *   dentro del ciclo vigente.
+ */
