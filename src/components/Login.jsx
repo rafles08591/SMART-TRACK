@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React, { useState } from "react";
+import { Truck, AlertCircle, ChevronRight } from "lucide-react";
 import { USERS, NOMBRES } from "../constants";
 
 export default function Login({ onLogin }) {
