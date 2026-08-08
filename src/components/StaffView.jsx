@@ -236,7 +236,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             setTab={setObjTab}
             tabs={
               esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "rally_otc", "avisos"].includes(t.key))
+                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos"].includes(t.key))
                 : esSupervisor1
                 ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic")
                 : undefined
