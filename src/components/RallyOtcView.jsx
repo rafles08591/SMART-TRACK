@@ -204,14 +204,15 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
   // data.rallyOtc): si todavía no existe la lista nueva pero sí había un
   // rally viejo configurado, se usa como punto de partida.
   const rallies = data.rallyOtcs || (data.rallyOtc?.nombre ? [{ ...data.rallyOtc, id: "legacy" }] : []);
+  // Solo Gerente crea y administra rallies. Puede marcar uno como
+  // "exclusivo de Supervisor-1" — en ese caso, ese rally específico no
+  // aparece en la vista agregada de Gerente ni de Supervisor-2 (Supervisor-2
+  // de plano no participa en estos concursos, ni siquiera ve la pestaña).
+  // Las rutas participantes sí ven su propio avance individual normal, sea
+  // exclusivo o no.
   const esGerente = rol === "staff" && puesto === "gerente";
-  const esSupervisor1 = rol === "staff" && puesto === "supervisor";
-  const puedeAdministrarRallies = esGerente || esSupervisor1;
-  // Gerente y Supervisor-2 NO ven en su lista/administración los rallies
-  // que Supervisor-1 haya marcado como "exclusivo" — esos solo los ve y
-  // administra Supervisor-1 (los vendedores participantes sí ven su propio
-  // avance individual normalmente, eso no se oculta).
-  const ralliesVisiblesParaAdministrar = esGerente ? rallies.filter((r) => !r.exclusivoSupervisor1) : rallies;
+  const puedeAdministrarRallies = esGerente;
+  const ralliesVisiblesParaAdministrar = rallies;
   const [form, setForm] = useState(null); // null = sin editar; objeto con id (o id:null si es nuevo) = editando
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const [nuevoCodigoTexto, setNuevoCodigoTexto] = useState("");
@@ -401,13 +402,13 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                 placeholder="Nombre del rally"
                 style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
               />
-              {esSupervisor1 && (
+              {esGerente && (
                 <button
                   className={form.exclusivoSupervisor1 ? "btn" : "btn-ghost"}
                   style={{ fontSize: 12, marginBottom: 10, background: form.exclusivoSupervisor1 ? "#5AA9E6" : undefined, borderColor: "#5AA9E6", color: form.exclusivoSupervisor1 ? "#0B1220" : "#5AA9E6" }}
                   onClick={() => setForm((f) => ({ ...f, exclusivoSupervisor1: !f.exclusivoSupervisor1 }))}
                 >
-                  {form.exclusivoSupervisor1 ? "✓ Exclusivo de Supervisor-1 (Gerente y Supervisor-2 no lo ven)" : "Marcar como exclusivo de Supervisor-1"}
+                  {form.exclusivoSupervisor1 ? "✓ Rally exclusivo de Supervisor-1 (no aparece en tu vista agregada, ni en la de Supervisor-2)" : "Marcar como rally exclusivo de Supervisor-1"}
                 </button>
               )}
               <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
