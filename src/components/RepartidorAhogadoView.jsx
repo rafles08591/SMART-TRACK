@@ -1,7 +1,9 @@
 // @ts-nocheck
 import React from "react";
 import { NOMBRES } from "../constants";
-import { money, unidades } from "../utils";
+import { money, unidades, fechaHoyISO } from "../utils";
+import { BotonGuardarImagen } from "./ui";
+import { useCapturaImagen } from "./hooks";
 
 export default function RepartidorAhogadoView({ stats }) {
   const captura = useCapturaImagen();
