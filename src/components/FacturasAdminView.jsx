@@ -703,4 +703,4 @@ export default function FacturasAdminView({ onLogout }) {
       )}
     </div>
   );
-}
+  }
