@@ -48,7 +48,15 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
     return () => { activo = false; clearInterval(intervalo); };
   }, [vendedor?.name]);
 
-  if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
+  if (!vendedor) return (
+    <div style={{ padding: 24 }}>
+      <div style={{ marginBottom: 10 }}>No se encontró tu ruta en la lista de vendedores activos.</div>
+      <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 14 }}>
+        Rutas disponibles ahora mismo: {(data?.vendedores || []).map((v) => v.name).join(", ") || "(ninguna cargada)"}
+      </div>
+      <button className="btn-ghost" onClick={onLogout}>Volver</button>
+    </div>
+  );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
   const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "facturas";
