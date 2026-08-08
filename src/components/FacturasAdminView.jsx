@@ -64,13 +64,6 @@ function calcularDesgloseLinea(montoLinea, cajetillasLinea) {
   return precioProductoNeto;
 }
 
-// Monto de esa línea YA SIN el costo de distribución (pero todavía CON
-// IVA) — es lo que se muestra en el módulo TICKET.
-function montoTicketLinea(montoLinea, cajetillasLinea) {
-  const distribucionBruta = cajetillasLinea * COSTO_DISTRIBUCION_UNITARIO;
-  return Math.max(montoLinea - distribucionBruta, 0);
-}
-
 // Costo unitario POR CAJETILLA, sin distribución y sin IVA — para el
 // módulo "PARA CAPTURAR SIN IVA Y SIN COSTO".
 function costoUnitarioNeto(montoLinea, cajetillasLinea) {
@@ -375,7 +368,6 @@ export default function FacturasAdminView({ onLogout }) {
 
       const verComoTotal = ventasEnModoTotal.has(venta.clave);
       if (verComoTotal) {
-        const distribucionBrutaTotal = venta.totalCajetillas * COSTO_DISTRIBUCION_UNITARIO;
         resultado.push({
           ventaOriginal: venta,
           claveTicket: `${venta.clave}__total`,
@@ -383,10 +375,6 @@ export default function FacturasAdminView({ onLogout }) {
           necesitaDividir: true,
           esVistaTotal: true,
           productos: venta.productos,
-          productosTicket: [
-            ...venta.productos,
-            { articulo: "—", nombre: "Distribución (costo logístico)", cajetillas: null, monto: distribucionBrutaTotal, esDistribucion: true },
-          ],
           totalMonto: venta.totalMonto,
           totalCajetillas: venta.totalCajetillas,
         });
@@ -402,7 +390,6 @@ export default function FacturasAdminView({ onLogout }) {
           necesitaDividir: true,
           esVistaTotal: false,
           productos,
-          productosTicket: productos,
           totalMonto: productos.reduce((s, p) => s + p.monto, 0),
           totalCajetillas: productos.reduce((s, p) => s + p.cajetillas, 0),
         });
@@ -424,25 +411,14 @@ export default function FacturasAdminView({ onLogout }) {
       ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
       "",
       `Total cajetillas: ${num(ticket.totalCajetillas)}`,
-      `Total de la venta: ${money(ticket.totalMonto)}`,
+      `Total del ticket: ${money(ticket.totalMonto)}`,
       "",
       ...(venta.esOtc
-        ? [
-            "Desglose (solo IVA, sin distribución):",
-            `  Subtotal: ${money(subtotalProducto)}`,
-            `  IVA (16%): ${money(ivaProducto)}`,
-            `  Precio sin IVA: ${money(precioProductoNeto)}`,
-          ]
+        ? [`OTC · sin IVA (sin costo de distribución): ${money(precioProductoNeto)}`]
         : [
-            "Distribución:",
-            `  Bruta (cajetillas × $${COSTO_DISTRIBUCION_UNITARIO}): ${money(distribucionBruta)}`,
-            `  IVA (16%): ${money(ivaDistribucion)}`,
-            `  Neta: ${money(distribucionNeta)}`,
+            `Distribución (${num(ticket.totalCajetillas)} caj. × $${COSTO_DISTRIBUCION_UNITARIO}), sin IVA: ${money(distribucionNeta)}`,
             "",
-            "Producto (total − distribución):",
-            `  Subtotal: ${money(subtotalProducto)}`,
-            `  IVA (16%): ${money(ivaProducto)}`,
-            `  Precio sin IVA: ${money(precioProductoNeto)}`,
+            `Comprobación: ${money(precioProductoNeto)} + ${money(ivaProducto)} + ${money(distribucionNeta)} + ${money(ivaDistribucion)} = ${money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)}`,
           ]),
     ];
     return lineas.join("\n");
@@ -536,7 +512,6 @@ export default function FacturasAdminView({ onLogout }) {
           {ticketsParaMostrar.map((ticket) => {
             const venta = ticket.ventaOriginal;
             const esNueva = nuevasClaves.has(venta.clave);
-            const productosTicket = ticket.productosTicket || ticket.productos;
             const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
             return (
               <div
@@ -648,49 +623,29 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                 </div>
 
-                {/* Módulo TICKET — monto ya sin costo de distribución (pero con IVA).
-                    En vista "ticket total", la distribución aparece como una línea más
-                    al final (para que se vea como parte del ticket completo). */}
-                <div style={{ overflowX: "auto", marginBottom: 12 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
-                    {ticket.esVistaTotal ? "TICKET TOTAL" : "TICKET"}
+                {/* 2) Distribución — solo el neto (sin IVA), un renglón. */}
+                {!venta.esOtc && (
+                  <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700 }}>
+                        DISTRIBUCIÓN ({num(ticket.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO}) · SIN IVA
+                      </div>
+                      <BotonCopiar texto={money(distribucionNeta)} etiqueta="" />
+                    </div>
+                    <div className="mono" style={{ fontSize: 18, color: "#5AA9E6" }}>{money(distribucionNeta)}</div>
                   </div>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
-                    <thead>
-                      <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                        <th style={{ padding: "4px 8px 4px 0" }}>Código FA</th>
-                        <th>Producto</th>
-                        <th>Cajetillas</th>
-                        <th>Monto</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {productosTicket.map((p, i) => {
-                        const montoLinea = p.esDistribucion ? p.monto : montoTicketLinea(p.monto, p.cajetillas);
-                        return (
-                          <tr key={i} style={{ borderTop: "1px solid #1E2A42", fontStyle: p.esDistribucion ? "italic" : "normal" }}>
-                            <td style={{ padding: "6px 8px 6px 0" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span className="mono" style={{ color: p.esDistribucion ? "#5AA9E6" : "#F2B134" }}>{p.articulo}</span>
-                                {!p.esDistribucion && <BotonCopiar texto={p.articulo} etiqueta="" />}
-                              </div>
-                            </td>
-                            <td style={{ color: p.esDistribucion ? "#5AA9E6" : "#E8EDF5" }}>{p.nombre}</td>
-                            <td className="mono">{p.cajetillas == null ? "—" : num(p.cajetillas)}</td>
-                            <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span className="mono" style={{ color: p.esDistribucion ? "#5AA9E6" : undefined }}>{money(montoLinea)}</span>
-                                <BotonCopiar texto={money(montoLinea)} etiqueta="" />
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                )}
+                {venta.esOtc && (
+                  <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 11, color: "#9AA7BD", fontWeight: 700 }}>OTC · SIN IVA (sin costo de distribución)</div>
+                      <BotonCopiar texto={money(precioProductoNeto)} etiqueta="" />
+                    </div>
+                    <div className="mono" style={{ fontSize: 18, color: "#3DDC97" }}>{money(precioProductoNeto)}</div>
+                  </div>
+                )}
 
-                {/* Total de la venta (de este ticket) */}
+                {/* 3 y 4) Total de cajetillas y total del ticket */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -701,71 +656,22 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL{ticket.parteLabel ? ` (${ticket.parteLabel})` : " DE LA VENTA"}</div>
+                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL DEL TICKET{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
                       <BotonCopiar texto={money(ticket.totalMonto)} etiqueta="" />
                     </div>
                     <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto)}</div>
                   </div>
                 </div>
 
-                {/* Desglose: para OTC solo se descuenta IVA (sin distribución); para
-                    productos normales se muestran los dos bloques (distribución + producto). */}
-                <div style={{ border: "1px solid #2A3852", borderRadius: 10, padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <div className="display" style={{ fontSize: 12, color: "#9AA7BD" }}>
-                      {venta.esOtc ? "DESGLOSE (SOLO IVA, SIN DISTRIBUCIÓN)" : "DESGLOSE DE DISTRIBUCIÓN Y PRODUCTO"}
+                {/* 5) Comprobación — igual que antes */}
+                {!venta.esOtc && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <div style={{ fontSize: 10.5, color: "#5b6478" }}>
+                      Comprobación: {money(precioProductoNeto)} + {money(ivaProducto)} + {money(distribucionNeta)} + {money(ivaDistribucion)} = {money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)} (debe ser igual al total: {money(ticket.totalMonto)})
                     </div>
                     <BotonCopiar texto={textoParaCopiar(ticket)} etiqueta="Copiar todo" />
                   </div>
-
-                  {venta.esOtc ? (
-                    <div style={{ maxWidth: 260 }}>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>Subtotal</span> <span className="mono">{money(subtotalProducto)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>IVA (16%)</span> <span className="mono">{money(ivaProducto)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-                        <span>Precio sin IVA</span> <span className="mono" style={{ color: "#3DDC97" }}>{money(precioProductoNeto)}</span>
-                      </div>
-                    </div>
-                  ) : (
-                  <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-                    <div style={{ flex: "1 1 220px" }}>
-                      <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700, marginBottom: 4 }}>DISTRIBUCIÓN ({num(ticket.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO})</div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>Bruta</span> <span className="mono">{money(distribucionBruta)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>IVA (16%)</span> <span className="mono">{money(ivaDistribucion)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-                        <span>Neta</span> <span className="mono" style={{ color: "#5AA9E6" }}>{money(distribucionNeta)}</span>
-                      </div>
-                    </div>
-
-                    <div style={{ flex: "1 1 220px" }}>
-                      <div style={{ fontSize: 11, color: "#3DDC97", fontWeight: 700, marginBottom: 4 }}>PRODUCTO (total − distribución)</div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>Subtotal</span> <span className="mono">{money(subtotalProducto)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "#9AA7BD" }}>IVA (16%)</span> <span className="mono">{money(ivaProducto)}</span>
-                      </div>
-                      <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-                        <span>Precio sin IVA</span> <span className="mono" style={{ color: "#3DDC97" }}>{money(precioProductoNeto)}</span>
-                      </div>
-                    </div>
-                  </div>
-                  )}
-
-                  {!venta.esOtc && (
-                  <div style={{ fontSize: 10.5, color: "#5b6478", marginTop: 10, borderTop: "1px solid #1E2A42", paddingTop: 8 }}>
-                    Comprobación: {money(precioProductoNeto)} + {money(ivaProducto)} + {money(distribucionNeta)} + {money(ivaDistribucion)} = {money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)} (debe ser igual al total: {money(ticket.totalMonto)})
-                  </div>
-                  )}
-                </div>
+                )}
               </div>
             );
           })}
