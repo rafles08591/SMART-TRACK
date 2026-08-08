@@ -107,6 +107,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
       setGuardandoOtc(false);
     }
   }
+  const [codigoUnico, setCodigoUnico] = useState("");
   const [formaPagoUnica, setFormaPagoUnica] = useState("EFECTIVO");
   const [prioridadUnica, setPrioridadUnica] = useState(false);
   const [guardandoUnica, setGuardandoUnica] = useState(false);
