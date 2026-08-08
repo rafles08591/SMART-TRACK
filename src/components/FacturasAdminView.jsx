@@ -80,24 +80,25 @@ function costoUnitarioNeto(montoLinea, cajetillasLinea) {
 
 // Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
 // hay que partir la venta en varios "tickets" — cada uno sin pasarse del
-// límite. Reparte los productos en orden, uno tras otro, sin partir un
-// mismo producto entre dos tickets.
+// límite. Usa "first-fit decreasing": ordena los productos de mayor a
+// menor monto y va metiendo cada uno en el primer ticket donde SÍ quepa
+// (en vez de ir llenando uno por uno en el orden en que vinieron) — así
+// arma la menor cantidad de tickets posible, mezclando productos chicos
+// entre sí para no desperdiciar espacio.
 const LIMITE_TICKET_EFECTIVO = 2000;
 function dividirEnTickets(productos, limite) {
-  const tickets = [];
-  let actual = [];
-  let sumaActual = 0;
-  productos.forEach((p) => {
-    if (actual.length > 0 && sumaActual + p.monto > limite) {
-      tickets.push(actual);
-      actual = [];
-      sumaActual = 0;
+  const ordenados = [...productos].sort((a, b) => b.monto - a.monto);
+  const bins = [];
+  ordenados.forEach((p) => {
+    let destino = bins.find((b) => b.suma + p.monto <= limite);
+    if (!destino) {
+      destino = { productos: [], suma: 0 };
+      bins.push(destino);
     }
-    actual.push(p);
-    sumaActual += p.monto;
+    destino.productos.push(p);
+    destino.suma += p.monto;
   });
-  if (actual.length > 0) tickets.push(actual);
-  return tickets.length > 0 ? tickets : [[]];
+  return bins.length > 0 ? bins.map((b) => b.productos) : [[]];
 }
 
 // Botón pequeño de copiar-al-portapapeles con feedback visual de 1.5s.
@@ -341,25 +342,74 @@ export default function FacturasAdminView({ onLogout }) {
   // pago en EFECTIVO y el total pasa de $2,000, se reparte en varias
   // tarjetas (cada una es su propio ticket), marcadas 1/2, 2/2, etc. Las
   // acciones (cambiar estado/forma de pago) siguen aplicando a TODA la
-  // venta (por eso guardan la referencia a la venta original).
+  // venta (por eso guardan la referencia a la venta original). Se puede
+  // alternar a "ver ticket total" (un solo bloque con todo, IVA incluido,
+  // y la distribución como una línea más al final).
+  const [ventasEnModoTotal, setVentasEnModoTotal] = useState(new Set());
+  function toggleModoTotal(clave) {
+    setVentasEnModoTotal((s) => {
+      const n = new Set(s);
+      if (n.has(clave)) n.delete(clave); else n.add(clave);
+      return n;
+    });
+  }
+
   const ticketsParaMostrar = useMemo(() => {
     const resultado = [];
     ventasAgrupadas.forEach((venta) => {
       const necesitaDividir = !venta.esOtc && (venta.formaPago || "EFECTIVO") === "EFECTIVO" && venta.totalMonto > LIMITE_TICKET_EFECTIVO;
-      const grupos = necesitaDividir ? dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO) : [venta.productos];
+
+      if (!necesitaDividir) {
+        resultado.push({
+          ventaOriginal: venta,
+          claveTicket: `${venta.clave}__0`,
+          parteLabel: null,
+          necesitaDividir: false,
+          esVistaTotal: false,
+          productos: venta.productos,
+          totalMonto: venta.totalMonto,
+          totalCajetillas: venta.totalCajetillas,
+        });
+        return;
+      }
+
+      const verComoTotal = ventasEnModoTotal.has(venta.clave);
+      if (verComoTotal) {
+        const distribucionBrutaTotal = venta.totalCajetillas * COSTO_DISTRIBUCION_UNITARIO;
+        resultado.push({
+          ventaOriginal: venta,
+          claveTicket: `${venta.clave}__total`,
+          parteLabel: null,
+          necesitaDividir: true,
+          esVistaTotal: true,
+          productos: venta.productos,
+          productosTicket: [
+            ...venta.productos,
+            { articulo: "—", nombre: "Distribución (costo logístico)", cajetillas: null, monto: distribucionBrutaTotal, esDistribucion: true },
+          ],
+          totalMonto: venta.totalMonto,
+          totalCajetillas: venta.totalCajetillas,
+        });
+        return;
+      }
+
+      const grupos = dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO);
       grupos.forEach((productos, i) => {
         resultado.push({
           ventaOriginal: venta,
           claveTicket: `${venta.clave}__${i}`,
-          parteLabel: grupos.length > 1 ? `${i + 1}/${grupos.length}` : null,
+          parteLabel: `${i + 1}/${grupos.length}`,
+          necesitaDividir: true,
+          esVistaTotal: false,
           productos,
+          productosTicket: productos,
           totalMonto: productos.reduce((s, p) => s + p.monto, 0),
           totalCajetillas: productos.reduce((s, p) => s + p.cajetillas, 0),
         });
       });
     });
     return resultado;
-  }, [ventasAgrupadas]);
+  }, [ventasAgrupadas, ventasEnModoTotal]);
 
   const hayNuevasPrioritarias = tab === "prioritario" && nuevasClaves.size > 0;
 
@@ -486,6 +536,7 @@ export default function FacturasAdminView({ onLogout }) {
           {ticketsParaMostrar.map((ticket) => {
             const venta = ticket.ventaOriginal;
             const esNueva = nuevasClaves.has(venta.clave);
+            const productosTicket = ticket.productosTicket || ticket.productos;
             const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
             return (
               <div
@@ -508,12 +559,24 @@ export default function FacturasAdminView({ onLogout }) {
                           TICKET {ticket.parteLabel}
                         </span>
                       )}
+                      {ticket.esVistaTotal && (
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "#0B1220", background: "#5AA9E6", borderRadius: 6, padding: "2px 10px" }}>
+                          TICKET TOTAL
+                        </span>
+                      )}
                       <BotonCopiar texto={venta.codigoCliente} etiqueta="Copiar código" />
                     </div>
                     <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 2 }}>{venta.ruta} · {venta.fecha}</div>
-                    {ticket.parteLabel && (
-                      <div style={{ fontSize: 10.5, color: "#FF8C00", marginTop: 2 }}>
-                        Pago en efectivo mayor a {money(LIMITE_TICKET_EFECTIVO)} — dividido en {ticket.parteLabel.split("/")[1]} tickets.
+                    {ticket.necesitaDividir && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ fontSize: 10.5, color: "#FF8C00" }}>
+                          Pago en efectivo mayor a {money(LIMITE_TICKET_EFECTIVO)}.
+                        </div>
+                        {(ticket.esVistaTotal || ticket.parteLabel === "1/" + dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO).length) && (
+                          <button className="btn-ghost" style={{ fontSize: 10.5, padding: "3px 8px" }} onClick={() => toggleModoTotal(venta.clave)}>
+                            {ticket.esVistaTotal ? "Ver tickets divididos" : `Ver ticket total (junta los ${dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO).length})`}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -585,9 +648,13 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                 </div>
 
-                {/* Módulo TICKET — monto ya sin costo de distribución (pero con IVA) */}
+                {/* Módulo TICKET — monto ya sin costo de distribución (pero con IVA).
+                    En vista "ticket total", la distribución aparece como una línea más
+                    al final (para que se vea como parte del ticket completo). */}
                 <div style={{ overflowX: "auto", marginBottom: 12 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>TICKET</div>
+                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
+                    {ticket.esVistaTotal ? "TICKET TOTAL" : "TICKET"}
+                  </div>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
                     <thead>
                       <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
@@ -598,24 +665,27 @@ export default function FacturasAdminView({ onLogout }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {ticket.productos.map((p, i) => (
-                        <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
-                          <td style={{ padding: "6px 8px 6px 0" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span className="mono" style={{ color: "#F2B134" }}>{p.articulo}</span>
-                              <BotonCopiar texto={p.articulo} etiqueta="" />
-                            </div>
-                          </td>
-                          <td style={{ color: "#E8EDF5" }}>{p.nombre}</td>
-                          <td className="mono">{num(p.cajetillas)}</td>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <span className="mono">{money(montoTicketLinea(p.monto, p.cajetillas))}</span>
-                              <BotonCopiar texto={money(montoTicketLinea(p.monto, p.cajetillas))} etiqueta="" />
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {productosTicket.map((p, i) => {
+                        const montoLinea = p.esDistribucion ? p.monto : montoTicketLinea(p.monto, p.cajetillas);
+                        return (
+                          <tr key={i} style={{ borderTop: "1px solid #1E2A42", fontStyle: p.esDistribucion ? "italic" : "normal" }}>
+                            <td style={{ padding: "6px 8px 6px 0" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span className="mono" style={{ color: p.esDistribucion ? "#5AA9E6" : "#F2B134" }}>{p.articulo}</span>
+                                {!p.esDistribucion && <BotonCopiar texto={p.articulo} etiqueta="" />}
+                              </div>
+                            </td>
+                            <td style={{ color: p.esDistribucion ? "#5AA9E6" : "#E8EDF5" }}>{p.nombre}</td>
+                            <td className="mono">{p.cajetillas == null ? "—" : num(p.cajetillas)}</td>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span className="mono" style={{ color: p.esDistribucion ? "#5AA9E6" : undefined }}>{money(montoLinea)}</span>
+                                <BotonCopiar texto={money(montoLinea)} etiqueta="" />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
