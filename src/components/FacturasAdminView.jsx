@@ -64,6 +64,42 @@ function calcularDesgloseLinea(montoLinea, cajetillasLinea) {
   return precioProductoNeto;
 }
 
+// Monto de esa línea YA SIN el costo de distribución (pero todavía CON
+// IVA) — es lo que se muestra en el módulo TICKET.
+function montoTicketLinea(montoLinea, cajetillasLinea) {
+  const distribucionBruta = cajetillasLinea * COSTO_DISTRIBUCION_UNITARIO;
+  return Math.max(montoLinea - distribucionBruta, 0);
+}
+
+// Costo unitario POR CAJETILLA, sin distribución y sin IVA — para el
+// módulo "PARA CAPTURAR SIN IVA Y SIN COSTO".
+function costoUnitarioNeto(montoLinea, cajetillasLinea) {
+  if (!cajetillasLinea) return 0;
+  return calcularDesgloseLinea(montoLinea, cajetillasLinea) / cajetillasLinea;
+}
+
+// Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
+// hay que partir la venta en varios "tickets" — cada uno sin pasarse del
+// límite. Reparte los productos en orden, uno tras otro, sin partir un
+// mismo producto entre dos tickets.
+const LIMITE_TICKET_EFECTIVO = 2000;
+function dividirEnTickets(productos, limite) {
+  const tickets = [];
+  let actual = [];
+  let sumaActual = 0;
+  productos.forEach((p) => {
+    if (actual.length > 0 && sumaActual + p.monto > limite) {
+      tickets.push(actual);
+      actual = [];
+      sumaActual = 0;
+    }
+    actual.push(p);
+    sumaActual += p.monto;
+  });
+  if (actual.length > 0) tickets.push(actual);
+  return tickets.length > 0 ? tickets : [[]];
+}
+
 // Botón pequeño de copiar-al-portapapeles con feedback visual de 1.5s.
 function BotonCopiar({ texto, etiqueta }) {
   const [copiado, setCopiado] = useState(false);
@@ -301,19 +337,44 @@ export default function FacturasAdminView({ onLogout }) {
     return [...mapa.values()].sort((a, b) => new Date(b.creadoEn) - new Date(a.creadoEn));
   }, [filas]);
 
+  // Convierte cada venta agrupada en 1 o más "tickets" para mostrar: si es
+  // pago en EFECTIVO y el total pasa de $2,000, se reparte en varias
+  // tarjetas (cada una es su propio ticket), marcadas 1/2, 2/2, etc. Las
+  // acciones (cambiar estado/forma de pago) siguen aplicando a TODA la
+  // venta (por eso guardan la referencia a la venta original).
+  const ticketsParaMostrar = useMemo(() => {
+    const resultado = [];
+    ventasAgrupadas.forEach((venta) => {
+      const necesitaDividir = !venta.esOtc && (venta.formaPago || "EFECTIVO") === "EFECTIVO" && venta.totalMonto > LIMITE_TICKET_EFECTIVO;
+      const grupos = necesitaDividir ? dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO) : [venta.productos];
+      grupos.forEach((productos, i) => {
+        resultado.push({
+          ventaOriginal: venta,
+          claveTicket: `${venta.clave}__${i}`,
+          parteLabel: grupos.length > 1 ? `${i + 1}/${grupos.length}` : null,
+          productos,
+          totalMonto: productos.reduce((s, p) => s + p.monto, 0),
+          totalCajetillas: productos.reduce((s, p) => s + p.cajetillas, 0),
+        });
+      });
+    });
+    return resultado;
+  }, [ventasAgrupadas]);
+
   const hayNuevasPrioritarias = tab === "prioritario" && nuevasClaves.size > 0;
 
-  function textoParaCopiar(venta) {
-    const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(venta.totalMonto, venta.totalCajetillas);
+  function textoParaCopiar(ticket) {
+    const venta = ticket.ventaOriginal;
+    const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
     const lineas = [
-      `Cliente: ${venta.codigoCliente}${venta.cliente ? " — " + venta.cliente : ""}${venta.esOtc ? " (OTC)" : ""}`,
+      `Cliente: ${venta.codigoCliente}${venta.cliente ? " — " + venta.cliente : ""}${venta.esOtc ? " (OTC)" : ""}${ticket.parteLabel ? ` (ticket ${ticket.parteLabel})` : ""}`,
       `Ruta: ${venta.ruta}   Fecha: ${venta.fecha}   Forma de pago: ${venta.formaPago || "EFECTIVO"}`,
       "",
       "Productos:",
-      ...venta.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
+      ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
       "",
-      `Total cajetillas: ${num(venta.totalCajetillas)}`,
-      `Total de la venta: ${money(venta.totalMonto)}`,
+      `Total cajetillas: ${num(ticket.totalCajetillas)}`,
+      `Total de la venta: ${money(ticket.totalMonto)}`,
       "",
       ...(venta.esOtc
         ? [
@@ -415,19 +476,20 @@ export default function FacturasAdminView({ onLogout }) {
 
       {cargando ? (
         <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 30 }}>Cargando...</div>
-      ) : ventasAgrupadas.length === 0 ? (
+      ) : ticketsParaMostrar.length === 0 ? (
         <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
           No hay clientes {tab === "prioritario" ? "prioritarios" : "normales"} en estado {filtroEstado === "OBSERVACION" ? "OBSERVACIÓN" : filtroEstado} para este rango de fechas.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ fontSize: 12, color: "#9AA7BD" }}>{ventasAgrupadas.length} cliente{ventasAgrupadas.length === 1 ? "" : "s"} con venta en este rango</div>
-          {ventasAgrupadas.map((venta) => {
+          {ticketsParaMostrar.map((ticket) => {
+            const venta = ticket.ventaOriginal;
             const esNueva = nuevasClaves.has(venta.clave);
-            const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(venta.totalMonto, venta.totalCajetillas);
+            const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
             return (
               <div
-                key={venta.clave}
+                key={ticket.claveTicket}
                 className={`card ${esNueva ? "venta-nueva-prioritaria" : ""}`}
                 style={{ padding: 16 }}
                 onClick={() => esNueva && quitarParpadeo(venta.clave)}
@@ -441,9 +503,19 @@ export default function FacturasAdminView({ onLogout }) {
                       {venta.esOtc && (
                         <span style={{ fontSize: 10, fontWeight: 800, color: "#0B1220", background: "#F2B134", borderRadius: 6, padding: "2px 8px" }}>OTC</span>
                       )}
+                      {ticket.parteLabel && (
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "#0B1220", background: "#FF8C00", borderRadius: 6, padding: "2px 10px" }}>
+                          TICKET {ticket.parteLabel}
+                        </span>
+                      )}
                       <BotonCopiar texto={venta.codigoCliente} etiqueta="Copiar código" />
                     </div>
                     <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 2 }}>{venta.ruta} · {venta.fecha}</div>
+                    {ticket.parteLabel && (
+                      <div style={{ fontSize: 10.5, color: "#FF8C00", marginTop: 2 }}>
+                        Pago en efectivo mayor a {money(LIMITE_TICKET_EFECTIVO)} — dividido en {ticket.parteLabel.split("/")[1]} tickets.
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }} onClick={(e) => e.stopPropagation()}>
                     <select
@@ -474,47 +546,95 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                 )}
 
-                {/* Productos */}
+                {/* Módulo nuevo: PARA CAPTURAR SIN IVA Y SIN COSTO — costo unitario por
+                    cajetilla, ya sin distribución y sin IVA, con copiado independiente
+                    de cada código FA y de cada monto. */}
+                <div style={{ marginBottom: 14 }}>
+                  <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA Y SIN COSTO ADICIONAL</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
+                      <thead>
+                        <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+                          <th style={{ padding: "4px 8px 4px 0" }}>Código FA</th>
+                          <th>Producto</th>
+                          <th>Cajetillas</th>
+                          <th>Costo unitario</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ticket.productos.map((p, i) => (
+                          <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
+                            <td style={{ padding: "6px 8px 6px 0" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span className="mono" style={{ color: "#F2B134" }}>{p.articulo}</span>
+                                <BotonCopiar texto={p.articulo} etiqueta="" />
+                              </div>
+                            </td>
+                            <td style={{ color: "#E8EDF5" }}>{p.nombre}</td>
+                            <td className="mono">{num(p.cajetillas)}</td>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span className="mono" style={{ color: "#3DDC97" }}>{money(costoUnitarioNeto(p.monto, p.cajetillas))}</span>
+                                <BotonCopiar texto={money(costoUnitarioNeto(p.monto, p.cajetillas))} etiqueta="" />
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Módulo TICKET — monto ya sin costo de distribución (pero con IVA) */}
                 <div style={{ overflowX: "auto", marginBottom: 12 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 480 }}>
+                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>TICKET</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
                     <thead>
                       <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
                         <th style={{ padding: "4px 8px 4px 0" }}>Código FA</th>
                         <th>Producto</th>
                         <th>Cajetillas</th>
                         <th>Monto</th>
-                        <th>Sin IVA</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {venta.productos.map((p, i) => (
+                      {ticket.productos.map((p, i) => (
                         <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
-                          <td className="mono" style={{ padding: "6px 8px 6px 0", color: "#F2B134" }}>{p.articulo}</td>
+                          <td style={{ padding: "6px 8px 6px 0" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span className="mono" style={{ color: "#F2B134" }}>{p.articulo}</span>
+                              <BotonCopiar texto={p.articulo} etiqueta="" />
+                            </div>
+                          </td>
                           <td style={{ color: "#E8EDF5" }}>{p.nombre}</td>
                           <td className="mono">{num(p.cajetillas)}</td>
-                          <td className="mono">{money(p.monto)}</td>
-                          <td className="mono" style={{ color: "#3DDC97" }}>{money(calcularDesgloseLinea(p.monto, p.cajetillas))}</td>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <span className="mono">{money(montoTicketLinea(p.monto, p.cajetillas))}</span>
+                              <BotonCopiar texto={money(montoTicketLinea(p.monto, p.cajetillas))} etiqueta="" />
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
 
-                {/* Total de la venta */}
+                {/* Total de la venta (de este ticket) */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL CAJETILLAS</div>
-                      <BotonCopiar texto={num(venta.totalCajetillas)} etiqueta="" />
+                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL CAJETILLAS{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
+                      <BotonCopiar texto={num(ticket.totalCajetillas)} etiqueta="" />
                     </div>
-                    <div className="mono" style={{ fontSize: 18 }}>{num(venta.totalCajetillas)}</div>
+                    <div className="mono" style={{ fontSize: 18 }}>{num(ticket.totalCajetillas)}</div>
                   </div>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL DE LA VENTA</div>
-                      <BotonCopiar texto={money(venta.totalMonto)} etiqueta="" />
+                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL{ticket.parteLabel ? ` (${ticket.parteLabel})` : " DE LA VENTA"}</div>
+                      <BotonCopiar texto={money(ticket.totalMonto)} etiqueta="" />
                     </div>
-                    <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(venta.totalMonto)}</div>
+                    <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto)}</div>
                   </div>
                 </div>
 
@@ -525,7 +645,7 @@ export default function FacturasAdminView({ onLogout }) {
                     <div className="display" style={{ fontSize: 12, color: "#9AA7BD" }}>
                       {venta.esOtc ? "DESGLOSE (SOLO IVA, SIN DISTRIBUCIÓN)" : "DESGLOSE DE DISTRIBUCIÓN Y PRODUCTO"}
                     </div>
-                    <BotonCopiar texto={textoParaCopiar(venta)} etiqueta="Copiar todo" />
+                    <BotonCopiar texto={textoParaCopiar(ticket)} etiqueta="Copiar todo" />
                   </div>
 
                   {venta.esOtc ? (
@@ -543,7 +663,7 @@ export default function FacturasAdminView({ onLogout }) {
                   ) : (
                   <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 220px" }}>
-                      <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700, marginBottom: 4 }}>DISTRIBUCIÓN ({num(venta.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO})</div>
+                      <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700, marginBottom: 4 }}>DISTRIBUCIÓN ({num(ticket.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO})</div>
                       <div style={{ fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
                         <span style={{ color: "#9AA7BD" }}>Bruta</span> <span className="mono">{money(distribucionBruta)}</span>
                       </div>
@@ -572,7 +692,7 @@ export default function FacturasAdminView({ onLogout }) {
 
                   {!venta.esOtc && (
                   <div style={{ fontSize: 10.5, color: "#5b6478", marginTop: 10, borderTop: "1px solid #1E2A42", paddingTop: 8 }}>
-                    Comprobación: {money(precioProductoNeto)} + {money(ivaProducto)} + {money(distribucionNeta)} + {money(ivaDistribucion)} = {money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)} (debe ser igual al total: {money(venta.totalMonto)})
+                    Comprobación: {money(precioProductoNeto)} + {money(ivaProducto)} + {money(distribucionNeta)} + {money(ivaDistribucion)} = {money(precioProductoNeto + ivaProducto + distribucionNeta + ivaDistribucion)} (debe ser igual al total: {money(ticket.totalMonto)})
                   </div>
                   )}
                 </div>
