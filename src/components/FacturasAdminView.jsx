@@ -89,8 +89,43 @@ function costoUnitarioNeto(montoLinea, cajetillasLinea) {
 // arma la menor cantidad de tickets posible, mezclando productos chicos
 // entre sí para no desperdiciar espacio.
 const LIMITE_TICKET_EFECTIVO = 2000;
+// Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
+// hay que partir la venta en varios "tickets" — cada uno sin pasarse del
+// límite, en NINGÚN caso (ni cuando un solo producto ya vale más de
+// $2,000 él solo). Usa "first-fit decreasing": primero divide en pedazos
+// cualquier producto cuyo monto por sí solo ya pase el límite (mismo
+// código FA, con una porción de cajetillas/monto cada pedazo), y luego
+// ordena todo de mayor a menor y va metiendo cada pedazo en el primer
+// ticket donde SÍ quepa.
+//
+// OJO: un producto partido en pedazos sigue siendo LA MISMA fila en la
+// base de datos (mismo id), así que si sus pedazos terminan en tickets
+// distintos, cambiar el estado/forma de pago de uno de esos tickets
+// también cambia esa fila para el otro ticket que la comparte — es la
+// única forma de dividir el monto sin partir la fila real en la base de
+// datos.
 function dividirEnTickets(productos, limite) {
-  const ordenados = [...productos].sort((a, b) => b.monto - a.monto);
+  const unidades = [];
+  productos.forEach((p) => {
+    if (p.monto <= limite || !p.cajetillas) {
+      unidades.push(p);
+      return;
+    }
+    const precioPorCajetilla = p.monto / p.cajetillas;
+    const cajetillasPorPedazo = Math.floor((limite / precioPorCajetilla) * 100) / 100;
+    let cajetillasRestantes = Math.round(p.cajetillas * 100) / 100;
+    while (cajetillasRestantes > 0) {
+      const cajetillasPedazo = Math.min(cajetillasPorPedazo || cajetillasRestantes, cajetillasRestantes);
+      unidades.push({
+        ...p,
+        cajetillas: Math.round(cajetillasPedazo * 100) / 100,
+        monto: Math.round(cajetillasPedazo * precioPorCajetilla * 100) / 100,
+      });
+      cajetillasRestantes = Math.round((cajetillasRestantes - cajetillasPedazo) * 100) / 100;
+    }
+  });
+
+  const ordenados = [...unidades].sort((a, b) => b.monto - a.monto);
   const bins = [];
   ordenados.forEach((p) => {
     let destino = bins.find((b) => b.suma + p.monto <= limite);
@@ -362,6 +397,18 @@ export default function FacturasAdminView({ onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
 
+  // Respaldo por si el tiempo real fallara: refresca sola cada 30 minutos,
+  // sin importar en qué pestaña esté parado ADMIN.
+  useEffect(() => {
+    const intervalo = setInterval(() => {
+      if (vista === "clientes") cargar();
+      revisarNuevasVentasGlobal();
+      cargarMensajes();
+    }, 30 * 60 * 1000);
+    return () => clearInterval(intervalo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
+
   // Revisión global de "nuevas ventas" — corre siempre, sin importar la
   // pestaña, para que PRIORITARIO y NORMAL puedan parpadear los dos.
   useEffect(() => {
@@ -394,18 +441,21 @@ export default function FacturasAdminView({ onLogout }) {
     setNuevosNormalClaves(new Set());
   }
 
-  async function cambiarFormaPago(venta, nuevaFormaPago) {
-    // Aplica a TODAS las líneas de ESE MISMO TIPO (OTC o productos) de esa
-    // venta (mismo cliente, mismo día) — nunca cruza OTC con productos.
-    setFilas((fs) => fs.map((f) => (claveVenta(f) === venta.clave ? { ...f, forma_pago: nuevaFormaPago } : f)));
-    let query = supabase
+  async function cambiarFormaPago(ticket, nuevaFormaPago) {
+    if (ticket.estado === "FACTURADO") {
+      alert("Esta venta ya está facturada — no se puede cambiar la forma de pago. Si es un error, primero regrésala a ESPERA.");
+      return;
+    }
+    // Aplica SOLO a los productos de ESTE ticket (por su id real en la
+    // base de datos) — así, si la venta se dividió en varios tickets
+    // (1/2, 2/2...), cada uno se puede corregir sin jalar a los demás.
+    const ids = ticket.productos.map((p) => p.id).filter(Boolean);
+    if (ids.length === 0) return;
+    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago } : f)));
+    const { error: err } = await supabase
       .from("ventas_facturas")
       .update({ forma_pago: nuevaFormaPago })
-      .eq("ruta", venta.ruta)
-      .eq("codigo_cliente", venta.codigoCliente)
-      .eq("fecha", venta.fecha);
-    query = venta.esOtc ? query.eq("articulo", "OTC") : query.neq("articulo", "OTC");
-    const { error: err } = await query;
+      .in("id", ids);
     if (err) {
       console.error("Error actualizando forma de pago:", err);
       alert("No se pudo actualizar la forma de pago: " + err.message);
@@ -413,57 +463,73 @@ export default function FacturasAdminView({ onLogout }) {
     }
   }
 
-  // Cambia el estado de TODAS las líneas de esa venta (cliente+día). Si pasa
-  // a OBSERVACION, pide el mensaje y lo manda a facturas_observaciones (eso
-  // es lo que hace parpadear en naranja la pestaña FACTURAS del vendedor).
-  // Si sale de OBSERVACION hacia ESPERA o FACTURADO, cierra cualquier
-  // observación abierta de esa venta (ya se resolvió).
-  async function cambiarEstado(venta, nuevoEstado) {
+  // Cambia el estado SOLO de los productos de ESTE ticket (por id) — cada
+  // tarjeta (1/2, 2/2, etc.) queda independiente: facturar una no jala a
+  // las demás. Si pasa a OBSERVACION, pide el mensaje y lo manda a
+  // facturas_observaciones (eso hace parpadear la pestaña FACTURAS del
+  // vendedor). La observación de esa venta solo se marca resuelta cuando
+  // YA NINGÚN producto (de ningún ticket) de esa venta sigue en OBSERVACION.
+  async function cambiarEstado(ticket, nuevoEstado) {
+    const venta = ticket.ventaOriginal;
+    const ids = ticket.productos.map((p) => p.id).filter(Boolean);
+    if (ids.length === 0) return;
+
     if (nuevoEstado === "OBSERVACION") {
       const mensaje = window.prompt("¿Qué le falta o no cuadra en esta venta? Este mensaje se le manda a la ruta.");
       if (!mensaje || !mensaje.trim()) return; // cancelado
+      const prefijo = ticket.parteLabel ? `[Ticket ${ticket.parteLabel}] ` : "";
       const { error: errObs } = await supabase.from("facturas_observaciones").insert({
         ruta: venta.ruta,
         codigo_cliente: venta.codigoCliente,
         fecha: venta.fecha,
         es_otc: venta.esOtc,
-        mensaje: mensaje.trim(),
+        mensaje: prefijo + mensaje.trim(),
         autor: "ADMIN",
       });
       if (errObs) {
         alert("No se pudo enviar la observación: " + errObs.message);
         return;
       }
-    } else {
-      // Sale de observación (si tenía alguna abierta, DEL MISMO TIPO) -> se marca resuelta.
-      await supabase
-        .from("facturas_observaciones")
-        .update({ resuelta: true, resuelta_en: new Date().toISOString() })
-        .eq("ruta", venta.ruta)
-        .eq("codigo_cliente", venta.codigoCliente)
-        .eq("fecha", venta.fecha)
-        .eq("es_otc", venta.esOtc)
-        .eq("resuelta", false);
     }
 
-    setFilas((fs) => fs.map((f) => (claveVenta(f) === venta.clave ? { ...f, estado: nuevoEstado } : f)));
-    let query = supabase
+    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, estado: nuevoEstado } : f)));
+    const { error: err } = await supabase
       .from("ventas_facturas")
       .update({ estado: nuevoEstado })
-      .eq("ruta", venta.ruta)
-      .eq("codigo_cliente", venta.codigoCliente)
-      .eq("fecha", venta.fecha);
-    query = venta.esOtc ? query.eq("articulo", "OTC") : query.neq("articulo", "OTC");
-    const { error: err } = await query;
+      .in("id", ids);
     if (err) {
       console.error("Error actualizando estado:", err);
       alert("No se pudo actualizar el estado: " + err.message);
       cargar();
       return;
     }
+
+    if (nuevoEstado !== "OBSERVACION") {
+      // Antes de cerrar la conversación de observación, confirma que
+      // ningún OTRO ticket de esta misma venta siga en OBSERVACION.
+      let queryRestantes = supabase
+        .from("ventas_facturas")
+        .select("id", { count: "exact", head: true })
+        .eq("ruta", venta.ruta)
+        .eq("codigo_cliente", venta.codigoCliente)
+        .eq("fecha", venta.fecha)
+        .eq("estado", "OBSERVACION");
+      queryRestantes = venta.esOtc ? queryRestantes.eq("articulo", "OTC") : queryRestantes.neq("articulo", "OTC");
+      const { count } = await queryRestantes;
+      if (!count) {
+        await supabase
+          .from("facturas_observaciones")
+          .update({ resuelta: true, resuelta_en: new Date().toISOString() })
+          .eq("ruta", venta.ruta)
+          .eq("codigo_cliente", venta.codigoCliente)
+          .eq("fecha", venta.fecha)
+          .eq("es_otc", venta.esOtc)
+          .eq("resuelta", false);
+      }
+    }
     // Como cambió el estado, esta tarjeta ya no pertenece al filtro actual
-    // (ESPERA/FACTURADO/OBSERVACION) — se recarga para que desaparezca de
-    // la vista y aparezca en el filtro correspondiente.
+    // (PENDIENTE/FACTURADO) — se recarga para que desaparezca de la vista
+    // y aparezca en el filtro correspondiente.
     cargar();
   }
 
@@ -491,10 +557,13 @@ export default function FacturasAdminView({ onLogout }) {
       }
       const grupo = mapa.get(clave);
       grupo.productos.push({
+        id: f.id,
         articulo: f.articulo,
         nombre: f.producto_nombre || f.articulo,
         cajetillas: Number(f.cajetillas) || 0,
         monto: Number(f.monto) || 0,
+        formaPago: f.forma_pago,
+        estado: f.estado,
       });
       grupo.totalMonto += Number(f.monto) || 0;
       grupo.totalCajetillas += Number(f.cajetillas) || 0;
@@ -519,6 +588,17 @@ export default function FacturasAdminView({ onLogout }) {
     });
   }
 
+  // Forma de pago / estado "representativos" de un ticket: como ahora cada
+  // ticket se actualiza de forma independiente, se toman del primer
+  // producto de ESE ticket (en la práctica todos los productos de un mismo
+  // ticket comparten el mismo valor, porque se actualizan juntos).
+  function formaPagoDeProductos(productos) {
+    return productos[0]?.formaPago || "EFECTIVO";
+  }
+  function estadoDeProductos(productos) {
+    return productos[0]?.estado || "ESPERA";
+  }
+
   const ticketsParaMostrar = useMemo(() => {
     const resultado = [];
     ventasAgrupadas.forEach((venta) => {
@@ -534,6 +614,8 @@ export default function FacturasAdminView({ onLogout }) {
           productos: venta.productos,
           totalMonto: venta.totalMonto,
           totalCajetillas: venta.totalCajetillas,
+          formaPago: formaPagoDeProductos(venta.productos),
+          estado: estadoDeProductos(venta.productos),
         });
         return;
       }
@@ -549,6 +631,8 @@ export default function FacturasAdminView({ onLogout }) {
           productos: venta.productos,
           totalMonto: venta.totalMonto,
           totalCajetillas: venta.totalCajetillas,
+          formaPago: formaPagoDeProductos(venta.productos),
+          estado: estadoDeProductos(venta.productos),
         });
         return;
       }
@@ -564,6 +648,8 @@ export default function FacturasAdminView({ onLogout }) {
           productos,
           totalMonto: productos.reduce((s, p) => s + p.monto, 0),
           totalCajetillas: productos.reduce((s, p) => s + p.cajetillas, 0),
+          formaPago: formaPagoDeProductos(productos),
+          estado: estadoDeProductos(productos),
         });
       });
     });
@@ -778,18 +864,25 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }} onClick={(e) => e.stopPropagation()}>
                     <select
-                      value={venta.formaPago || "EFECTIVO"}
-                      onChange={(e) => cambiarFormaPago(venta, e.target.value)}
-                      style={{ fontSize: 12, fontWeight: 700, color: COLOR_FORMA_PAGO[venta.formaPago] || "#E8EDF5", padding: "6px 8px" }}
+                      value={ticket.formaPago || "EFECTIVO"}
+                      onChange={(e) => cambiarFormaPago(ticket, e.target.value)}
+                      disabled={ticket.estado === "FACTURADO"}
+                      title={ticket.estado === "FACTURADO" ? "Ya está facturado — no se puede cambiar la forma de pago" : undefined}
+                      style={{
+                        fontSize: 12, fontWeight: 700, padding: "6px 8px",
+                        color: COLOR_FORMA_PAGO[ticket.formaPago] || "#E8EDF5",
+                        opacity: ticket.estado === "FACTURADO" ? 0.6 : 1,
+                        cursor: ticket.estado === "FACTURADO" ? "not-allowed" : "pointer",
+                      }}
                     >
                       <option value="EFECTIVO">EFECTIVO</option>
                       <option value="CREDITO">CRÉDITO</option>
                       <option value="TRANSFERENCIA">TRANSFERENCIA</option>
                     </select>
                     <select
-                      value={venta.estado || "ESPERA"}
-                      onChange={(e) => cambiarEstado(venta, e.target.value)}
-                      style={{ fontSize: 12, fontWeight: 700, color: COLOR_ESTADO[venta.estado] || "#E8EDF5", padding: "6px 8px" }}
+                      value={ticket.estado || "ESPERA"}
+                      onChange={(e) => cambiarEstado(ticket, e.target.value)}
+                      style={{ fontSize: 12, fontWeight: 700, color: COLOR_ESTADO[ticket.estado] || "#E8EDF5", padding: "6px 8px" }}
                     >
                       <option value="ESPERA">ESPERA</option>
                       <option value="FACTURADO">FACTURADO</option>
@@ -799,7 +892,7 @@ export default function FacturasAdminView({ onLogout }) {
                   </div>
                 </div>
 
-                {venta.estado === "OBSERVACION" && (
+                {ticket.estado === "OBSERVACION" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#FF8C00", marginBottom: 10 }}>
                     <MessageSquare size={13} /> En observación — esperando respuesta de la ruta.
                   </div>
