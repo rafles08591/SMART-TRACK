@@ -1,5 +1,6 @@
 // @ts-nocheck
 import React from "react";
+import { AlertCircle } from "lucide-react";
 import { NOMBRES, MARCAS_DIA } from "../constants";
 import { money, unidades, metaColor } from "../utils";
 
