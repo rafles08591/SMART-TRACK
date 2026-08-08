@@ -1464,14 +1464,18 @@ export default function App() {
       const lineas = extraerLineasFacturables(filasCrudas);
       if (lineas.length === 0) return;
 
-      const rutas = [...new Set(lineas.map((l) => l.vendedor))];
+      // Ya NO se filtra por ruta al leer el catálogo: el cruce se hace SOLO
+      // por código de cliente. Un cliente puede aparecer reportado bajo una
+      // ruta distinta a la que se usó para registrarlo (pasa seguido si no
+      // se sabe con certeza bajo qué código de ruta exacto va a salir su
+      // venta en el reporte) — con el cruce solo por código, esa venta de
+      // todas formas se detecta y se manda a facturar.
       const { data: clientesFacturables, error: errClientes } = await supabase
         .from("clientes_facturables")
-        .select("id, ruta, codigo_norm, prioridad, forma_pago_default")
-        .in("ruta", rutas);
+        .select("id, ruta, codigo_norm, prioridad, forma_pago_default");
       if (errClientes) { console.error("Error leyendo clientes_facturables:", errClientes); return; }
 
-      const mapaClientes = new Map((clientesFacturables || []).map((c) => [`${c.ruta}|${c.codigo_norm}`, c]));
+      const mapaClientes = new Map((clientesFacturables || []).map((c) => [c.codigo_norm, c]));
 
       const fechas = [...new Set(lineas.map((l) => l.fecha))];
       const idsClientes = (clientesFacturables || []).map((c) => c.id);
@@ -1488,7 +1492,7 @@ export default function App() {
       const lineasSinCatalogo = [];
       lineas.forEach((l) => {
         const codigoNorm = normalizarCodigo(l.codigoCliente); // ya existe en tu archivo
-        const cliente = mapaClientes.get(`${l.vendedor}|${codigoNorm}`);
+        const cliente = mapaClientes.get(codigoNorm);
         if (!cliente) { lineasSinCatalogo.push(l); return; }
         if (setExcluidos.has(`${cliente.id}|${l.fecha}`)) return;
         filasParaFacturar.push({
@@ -1522,17 +1526,15 @@ export default function App() {
       // capturada desde la pestaña FACTURAS sin dar de alta al cliente).
       const solicitudesUsadasIds = new Set();
       if (lineasSinCatalogo.length > 0) {
-        const rutasSinCatalogo = [...new Set(lineasSinCatalogo.map((l) => l.vendedor))];
         const { data: solicitudes } = await supabase
           .from("facturas_solicitudes_unicas")
           .select("id, ruta, codigo_norm, forma_pago, prioridad")
-          .eq("usada", false)
-          .in("ruta", rutasSinCatalogo);
-        const mapaSolicitudes = new Map((solicitudes || []).map((s) => [`${s.ruta}|${s.codigo_norm}`, s]));
+          .eq("usada", false);
+        const mapaSolicitudes = new Map((solicitudes || []).map((s) => [s.codigo_norm, s]));
 
         lineasSinCatalogo.forEach((l) => {
           const codigoNorm = normalizarCodigo(l.codigoCliente);
-          const solicitud = mapaSolicitudes.get(`${l.vendedor}|${codigoNorm}`);
+          const solicitud = mapaSolicitudes.get(codigoNorm);
           if (!solicitud) return;
           filasParaFacturar.push({
             ruta: l.vendedor,
