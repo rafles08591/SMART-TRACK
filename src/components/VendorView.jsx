@@ -1,0 +1,148 @@
+// @ts-nocheck
+import React, { useEffect, useState } from "react";
+import { Target, Calendar, MapPin, Star, LogOut } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import {
+  OBJETIVO_TABS, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS,
+} from "../constants";
+import {
+  fmt, money, unidades, metaColor, analizarMesaControl,
+  calcularResumenPedidos, calcularVisitasVsObjetivo, todayISO,
+} from "../utils";
+import { supabase } from "../supabaseClient";
+import { RoadProgress, KpiCard, MarcasBreakdown, ObjetivoTabs } from "./ui";
+import TopBar from "./TopBar";
+import DiaKpis from "./DiaKpis";
+import MesaControlView from "./MesaControlView";
+import CuponeraView from "./CuponeraView";
+import RallyOtcView from "./RallyOtcView";
+import AvisosView, { hayAvisoNuevoPara } from "./AvisosView";
+import CargasView from "./CargasView";
+import UnidadesView, { unidadYaRegistradaHoy } from "./UnidadesView";
+import FacturasView from "./FacturasView";
+
+export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
+  const [tab, setTab] = useState("dia");
+
+  // Observaciones de facturación sin responder para esta ruta — hace
+  // parpadear en naranja la pestaña FACTURAS hasta que la ruta responde.
+  const [hayObservacionFacturasPendiente, setHayObservacionFacturasPendiente] = useState(false);
+  useEffect(() => {
+    if (!vendedor) return;
+    let activo = true;
+    async function revisar() {
+      try {
+        const { count } = await supabase
+          .from("facturas_observaciones")
+          .select("id", { count: "exact", head: true })
+          .eq("ruta", vendedor.name)
+          .eq("resuelta", false)
+          .is("respondido_en", null);
+        if (activo) setHayObservacionFacturasPendiente((count || 0) > 0);
+      } catch (e) {
+        console.error("Error revisando observaciones de facturas:", e);
+      }
+    }
+    revisar();
+    const intervalo = setInterval(revisar, 20000);
+    return () => { activo = false; clearInterval(intervalo); };
+  }, [vendedor?.name]);
+
+  if (!vendedor) return <div style={{ padding: 24 }}>No encontrado. <button className="btn-ghost" onClick={onLogout}>Volver</button></div>;
+  const nombre = NOMBRES[vendedor.name];
+  const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "facturas";
+  const m = !esTabEspecial ? vendedor.tabs[tab] : null;
+  const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
+  const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
+  const chartKey = unit === "units" ? "paquetes" : "monto";
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px" }}>
+      <TopBar
+        title={vendedor.name}
+        subtitle={`${nombre ? nombre + " · " : ""}Periodo ${periodo.inicio} → ${periodo.fin} · ${restantes} días hábiles restantes (Lun-Sáb)`}
+        onLogout={onLogout}
+        onRefresh={onRefresh}
+        refrescando={refrescando}
+      />
+
+      <ObjetivoTabs
+        tab={tab}
+        setTab={setTab}
+        tabs={OBJETIVO_TABS.filter((t) => !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos", "tepic"].includes(t.key))}
+        estadoTabs={{
+          rally_otc: data.rallyOtc?.activo ? "completo" : undefined,
+          avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
+          unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+          facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
+        }}
+      />
+
+      {tab === "dia" ? (
+        <DiaKpis
+          hoy={vendedor.hoy}
+          mensajeDia={mensajeDia}
+          rutaCodigo={rutaCodigo}
+          esPeor={peorVendedorNombre === vendedor.name}
+          esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
+        />
+      ) : tab === "mesa" ? (
+        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} mesaControl={data.mesaControl || []} />
+      ) : tab === "cuponera" ? (
+        <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
+      ) : tab === "rally_otc" ? (
+        <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "avisos" ? (
+        <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
+      ) : tab === "cargas" ? (
+        <CargasView data={data} persist={persist} persistCargas={persistCargas} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "unidades" ? (
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
+      ) : tab === "facturas" ? (
+        <FacturasView rol="vendedor" puesto={null} rutaActual={vendedor.name} identidad={nombre || vendedor.name} nombres={NOMBRES} vendedores={data.vendedores} />
+      ) : (
+        <>
+          <RoadProgress pct={m.avancePct} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 20 }}>
+            <span>{fmt(unit, m.avance)} {unit === "units" ? "vendidos" : "vendido"}</span>
+            <span>{m.avancePct.toFixed(0)}% de {fmt(unit, m.objetivo)}</span>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+            <KpiCard icon={<Target size={14} />} label="Resta por vender" value={fmt(unit, m.restaPorVender)} accent="#FF6B6B" />
+            <KpiCard icon={<Calendar size={14} />} label="Necesitas vender / día" value={fmt(unit, m.ventaPorDiaNecesaria)} accent="#F2B134" />
+            {tab === "max" && (
+              <>
+                <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={vendedor.visitasEfectivas} />
+                <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(vendedor.marcaOtc.vendido)} / ${money(vendedor.marcaOtc.objetivo)}`} accent={metaColor(vendedor.marcaOtc.vendido, vendedor.marcaOtc.objetivo)} />
+                <KpiCard icon={<Star size={14} />} label={`Comisión OTC (${(vendedor.tasaComisionOtc * 100).toFixed(1)}%)`} value={money(vendedor.comisionOtc)} accent="#3DDC97" />
+              </>
+            )}
+          </div>
+
+          {tab === "open" && <MarcasBreakdown titulo="MARCAS · OPEN (PAQUETES)" marcas={MARCAS_OPEN} data={vendedor.marcasOpen} />}
+          {tab === "champions" && <MarcasBreakdown titulo="MARCAS · CHAMPIONS (PAQUETES)" marcas={MARCAS_CHAMPIONS} data={vendedor.marcasChampions} />}
+
+          <div className="card" style={{ padding: 16 }}>
+            <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTA POR DÍA{unit === "units" ? " (PAQUETES)" : ""}</div>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid stroke="#1E2A42" vertical={false} />
+                  <XAxis dataKey="fecha" stroke="#9AA7BD" fontSize={11} />
+                  <YAxis stroke="#9AA7BD" fontSize={11} tickFormatter={(v) => (unit === "units" ? v : `${(v/1000).toFixed(0)}k`)} />
+                  <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid #2A3852" }} formatter={(v) => (unit === "units" ? unidades(v) : money(v))} />
+                  <Bar dataKey={chartKey} fill="#F2B134" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Bloque de avance (RoadProgress + KPIs + marcas + gráfica) para MAX/OPEN/
+// CHAMPIONS de un vendedor — el mismo que ve cada ruta, reutilizado para que
+// el staff pueda darle seguimiento tal cual.
