@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useRef } from "react";
-import { Download, ClipboardPaste, CheckCircle2 } from "lucide-react";
+import { Download, ClipboardPaste, CheckCircle2, Truck, Flag } from "lucide-react";
 import { OBJETIVO_TABS } from "../constants";
 import { unidades, money, metaColor } from "../utils";
 import { useCapturaImagen } from "./hooks";
