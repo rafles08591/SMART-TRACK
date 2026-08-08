@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from "react";
-import { Target, Upload, Trash2, Plus, CheckCircle2, AlertCircle, Image as ImageIcon } from "lucide-react";
+import { Target, Upload, Trash2, Plus, CheckCircle2, AlertCircle, Calendar, Image as ImageIcon } from "lucide-react";
 import { RUTAS, NOMBRES } from "../constants";
 import { money, unidades, fechaHoyISO } from "../utils";
 import { supabase } from "../supabaseClient";
