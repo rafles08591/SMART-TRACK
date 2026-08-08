@@ -1,8 +1,8 @@
 // @ts-nocheck
 import React, { useState, useRef } from "react";
-import { Target, Upload, Trash2, Plus, CheckCircle2, AlertCircle, Calendar, Image as ImageIcon } from "lucide-react";
-import { RUTAS, NOMBRES } from "../constants";
-import { money, unidades, fechaHoyISO } from "../utils";
+import { Target, Trash2, Plus, Calendar } from "lucide-react";
+import { NOMBRES } from "../constants";
+import { money, unidades, fechaHoyISO, metaColor } from "../utils";
 import { supabase } from "../supabaseClient";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
@@ -35,7 +35,7 @@ function calcularAvanceRallyRuta(data, rally, nombreRuta) {
 // ya cubrió su objetivo final, se oculta el número exacto y solo se marca
 // en verde como cubierto (para no mostrar "cuánto se pasó").
 function ProgresoRallyRuta({ nombreRuta, rally, data }) {
-  if (!rally.rutasParticipantes.includes(nombreRuta)) {
+  if (!(rally.rutasParticipantes || []).includes(nombreRuta)) {
     return <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Tu ruta no participa en este rally.</div>;
   }
   const fmtRally = rally.unidad === "piezas" ? unidades : money;
@@ -67,7 +67,7 @@ function ProgresoRallyRuta({ nombreRuta, rally, data }) {
 function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
   const fmtRally = rally.unidad === "piezas" ? unidades : money;
   let sumaAvanceDia = 0, sumaObjDia = 0, sumaAvanceTotal = 0, sumaObjFinal = 0;
-  const filas = rutas.map((r) => {
+  const filas = (rutas || []).map((r) => {
     const a = calcularAvanceRallyRuta(data, rally, r);
     sumaAvanceDia += a.avanceDia; sumaObjDia += a.objetivoDia;
     sumaAvanceTotal += a.avanceTotal; sumaObjFinal += a.objetivoFinal;
@@ -131,21 +131,76 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
   );
 }
 
+// Una tarjeta completa por rally (imagen + progreso + botón de guardar
+// imagen). Va en su propio componente porque useCapturaImagen es un hook:
+// para tener una "captura" independiente por cada rally que se muestre a
+// la vez, cada tarjeta necesita ser su propia instancia de componente.
+function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
+  const captura = useCapturaImagen();
+  return (
+    <div>
+      <div ref={captura.capturaRef}>
+        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+          {rally.imagen && <img src={rally.imagen} alt={rally.nombre} style={{ width: "100%", borderRadius: 10, marginBottom: 12, display: "block" }} />}
+          <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
+          <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>
+            Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
+          </div>
+        </div>
+
+        {rol === "vendedor" ? (
+          <ProgresoRallyRuta nombreRuta={vendedorActual} rally={rally} data={data} />
+        ) : (
+          <ProgresoRallyAgregado
+            rutas={rally.rutasParticipantes}
+            data={data}
+            rally={rally}
+            mostrarObjetivo={puesto !== "supervisor2"}
+          />
+        )}
+      </div>
+
+      {esGerente && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
+          <BotonGuardarImagen
+            captura={captura}
+            nombreArchivo={`rally_otc_${(rally.nombre || "rally").replace(/\s+/g, "_")}_${fechaHoyISO()}.png`}
+            etiqueta="Guardar / descargar"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function rallyVacio() {
+  return { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero" };
+}
+
+function generarIdRally() {
+  return "rally_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+}
+
 /**
- * Pestaña RALLY OTC — visible para todos los roles.
- * - Gerente: configura el rally (nombre, vigencia, rutas participantes,
- *   imagen, objetivos por ruta) y puede activarlo/desactivarlo. También
- *   tiene la opción de guardar/descargar una imagen del avance.
- * - Vendedor: ve su propio avance del día y total contra su objetivo.
- * - Supervisor-1 / Gerente: ven el avance agregado del equipo contra la
- *   suma de los objetivos de todas las rutas participantes.
- * - Supervisor-2: ve el avance agregado, sin objetivo (solo informativo).
+ * Pestaña RALLY OTC — visible para todos los roles. Soporta VARIOS rallies
+ * corriendo al mismo tiempo (antes solo dejaba tener uno).
+ * - Gerente: puede crear cuantos rallies quiera, editar cada uno, activarlo
+ *   o desactivarlo por separado, y borrarlo. También puede guardar/descargar
+ *   una imagen del avance de cada rally.
+ * - Vendedor: ve una tarjeta de progreso por cada rally ACTIVO en el que su
+ *   ruta participa (puede ser ninguno, uno, o varios a la vez).
+ * - Supervisor-1 / Gerente: ven el avance agregado del equipo de cada rally
+ *   activo, contra la suma de los objetivos de sus rutas participantes.
+ * - Supervisor-2: ve el avance agregado de cada rally activo, sin objetivo
+ *   (solo informativo).
  */
 export default function RallyOtcView({ data, persist, persistFresco, puesto, rol, vendedorActual, revisorNombre }) {
-  const rally = data.rallyOtc || { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero" };
+  // Compatibilidad con la versión vieja (un solo rally guardado en
+  // data.rallyOtc): si todavía no existe la lista nueva pero sí había un
+  // rally viejo configurado, se usa como punto de partida.
+  const rallies = data.rallyOtcs || (data.rallyOtc?.nombre ? [{ ...data.rallyOtc, id: "legacy" }] : []);
   const esGerente = rol === "staff" && puesto === "gerente";
-  const captura = useCapturaImagen();
-  const [form, setForm] = useState(null);
+  const [form, setForm] = useState(null); // null = sin editar; objeto con id (o id:null si es nuevo) = editando
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const [nuevoCodigoTexto, setNuevoCodigoTexto] = useState("");
   const fileRef = useRef(null);
@@ -155,8 +210,14 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
   // sirve de guía al capturar los suyos a mano.
   const codigosVistosEnOtc = [...new Set((data.otcDia || []).map((r) => r.codigoArticulo).filter(Boolean))].sort();
 
-  function iniciarEdicion() {
+  function iniciarNuevoRally() {
+    setForm({ ...rallyVacio(), id: null });
+    setNuevoCodigoTexto("");
+  }
+
+  function iniciarEdicion(rally) {
     setForm({
+      id: rally.id,
       nombre: rally.nombre || "",
       fechaInicio: rally.fechaInicio || "",
       fechaFin: rally.fechaFin || "",
@@ -218,26 +279,51 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
     }
   }
 
+  // Guarda la lista completa de rallies, siempre partiendo de la más
+  // reciente en Supabase (por si otro gerente estaba editando al mismo
+  // tiempo). "calcularNuevaLista" recibe la lista actual y regresa la nueva.
+  function guardarListaRallies(calcularNuevaLista) {
+    persistFresco((fresca) => {
+      const listaActual = fresca.rallyOtcs || (fresca.rallyOtc?.nombre ? [{ ...fresca.rallyOtc, id: "legacy" }] : []);
+      return { rallyOtcs: calcularNuevaLista(listaActual), rallyOtc: null };
+    });
+  }
+
   function guardarRally(activo) {
-    persistFresco(() => ({
-      rallyOtc: {
-        activo,
-        nombre: form.nombre.trim(),
-        fechaInicio: form.fechaInicio || null,
-        fechaFin: form.fechaFin || null,
-        rutasParticipantes: form.rutasParticipantes,
-        imagen: form.imagen,
-        objetivos: form.objetivos,
-        codigosParticipantes: form.codigosParticipantes,
-        unidad: form.unidad,
-      },
-    }));
+    const rallyGuardado = {
+      id: form.id || generarIdRally(),
+      activo,
+      nombre: form.nombre.trim(),
+      fechaInicio: form.fechaInicio || null,
+      fechaFin: form.fechaFin || null,
+      rutasParticipantes: form.rutasParticipantes,
+      imagen: form.imagen,
+      objetivos: form.objetivos,
+      codigosParticipantes: form.codigosParticipantes,
+      unidad: form.unidad,
+    };
+    guardarListaRallies((lista) => {
+      const existe = lista.some((r) => r.id === rallyGuardado.id);
+      return existe ? lista.map((r) => (r.id === rallyGuardado.id ? rallyGuardado : r)) : [...lista, rallyGuardado];
+    });
     setForm(null);
   }
 
-  function desactivarRally() {
-    persistFresco((fresca) => ({ rallyOtc: { ...(fresca.rallyOtc || rally), activo: false } }));
+  function toggleActivoRally(rallyId, nuevoActivo) {
+    guardarListaRallies((lista) => lista.map((r) => (r.id === rallyId ? { ...r, activo: nuevoActivo } : r)));
   }
+
+  function eliminarRally(rallyId) {
+    const ok = window.confirm("¿Borrar este rally? Esta acción no se puede deshacer.");
+    if (!ok) return;
+    guardarListaRallies((lista) => lista.filter((r) => r.id !== rallyId));
+  }
+
+  const ralliesActivos = rallies.filter((r) => r.activo);
+  // Para vendedor: solo los rallies activos donde participa su ruta.
+  const ralliesParaMostrar = rol === "vendedor"
+    ? ralliesActivos.filter((r) => (r.rutasParticipantes || []).includes(vendedorActual))
+    : ralliesActivos;
 
   return (
     <div>
@@ -245,17 +331,43 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
 
       {esGerente && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: form ? 14 : 0, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-              CONFIGURACIÓN {rally.activo ? <span style={{ color: "#3DDC97" }}>· ACTIVO</span> : <span style={{ color: "#9AA7BD" }}>· INACTIVO</span>}
+              RALLIES CONFIGURADOS ({rallies.length})
             </div>
             {!form && (
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn-ghost" onClick={iniciarEdicion}>{rally.nombre ? "Editar rally" : "Configurar rally"}</button>
-                {rally.activo && <button className="btn-ghost" onClick={desactivarRally}>Desactivar</button>}
-              </div>
+              <button className="btn" onClick={iniciarNuevoRally}>
+                <Plus size={14} style={{ verticalAlign: "-2px" }} /> Nuevo rally
+              </button>
             )}
           </div>
+
+          {!form && rallies.length === 0 && (
+            <div style={{ fontSize: 12, color: "#9AA7BD" }}>Todavía no has configurado ningún rally.</div>
+          )}
+
+          {!form && rallies.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {rallies.map((r) => (
+                <div key={r.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700 }}>{r.nombre || "(sin nombre)"}</div>
+                    <div style={{ fontSize: 11, color: "#9AA7BD" }}>{r.fechaInicio || "—"} → {r.fechaFin || "—"} · {(r.rutasParticipantes || []).length} ruta{(r.rutasParticipantes || []).length === 1 ? "" : "s"}</div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 6, color: r.activo ? "#3DDC97" : "#9AA7BD", border: `1px solid ${r.activo ? "#3DDC97" : "#9AA7BD"}` }}>
+                    {r.activo ? "ACTIVO" : "INACTIVO"}
+                  </span>
+                  <button className="btn-ghost" onClick={() => iniciarEdicion(r)}>Editar</button>
+                  <button className="btn-ghost" onClick={() => toggleActivoRally(r.id, !r.activo)}>
+                    {r.activo ? "Desactivar" : "Activar"}
+                  </button>
+                  <button className="btn-ghost" onClick={() => eliminarRally(r.id)}>
+                    <Trash2 size={13} color="#FF6B6B" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {form && (
             <div>
@@ -380,39 +492,24 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
         </div>
       )}
 
-      {!rally.activo ? (
+      {ralliesParaMostrar.length === 0 ? (
         <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-          No hay un Rally OTC activo en este momento.
+          {rol === "vendedor" ? "Tu ruta no participa en ningún rally activo por el momento." : "No hay ningún Rally OTC activo en este momento."}
         </div>
       ) : (
-        <>
-          <div ref={captura.capturaRef}>
-            <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-              {rally.imagen && <img src={rally.imagen} alt={rally.nombre} style={{ width: "100%", borderRadius: 10, marginBottom: 12, display: "block" }} />}
-              <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
-              <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>
-                Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
-              </div>
-            </div>
-
-            {rol === "vendedor" ? (
-              <ProgresoRallyRuta nombreRuta={vendedorActual} rally={rally} data={data} />
-            ) : (
-              <ProgresoRallyAgregado
-                rutas={rally.rutasParticipantes}
-                data={data}
-                rally={rally}
-                mostrarObjetivo={puesto !== "supervisor2"}
-              />
-            )}
-          </div>
-
-          {esGerente && (
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-              <BotonGuardarImagen captura={captura} nombreArchivo={`rally_otc_${fechaHoyISO()}.png`} etiqueta="Guardar / descargar" />
-            </div>
-          )}
-        </>
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          {ralliesParaMostrar.map((rally) => (
+            <TarjetaRally
+              key={rally.id}
+              rally={rally}
+              rol={rol}
+              vendedorActual={vendedorActual}
+              data={data}
+              puesto={puesto}
+              esGerente={esGerente}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
