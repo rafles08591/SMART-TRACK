@@ -1290,7 +1290,16 @@ export default function App() {
 
       const monto = Number(getVal(row, "TOTAL $", "Total $", "Total") || 0) || 0;
       const codigoArticulo = String(getVal(row, "Codigo", "Código") || "").trim();
-      const unidadesVendidas = Number(getVal(row, "Unidades") || 0) || 0;
+      // OJO: la columna "Unidades" casi siempre trae 1 (es un contador de
+      // línea, no la cantidad real). La cantidad real vendida viene en
+      // "Unidades<BR>Vendidas" — en el archivo real ese es el encabezado
+      // completo, con la etiqueta <BR> pegada y sin espacio (así la exporta
+      // el sistema de origen). Se dejan variantes de respaldo por si algún
+      // otro reporte la trae con espacio o sin la etiqueta, y "Unidades"
+      // solo como último recurso.
+      const unidadesVendidas = Number(
+        getVal(row, "Unidades<BR>Vendidas", "Unidades Vendidas", "UnidadesVendidas", "Unidades") || 0
+      ) || 0;
 
       registros.push({ fecha, vendedor, monto, codigoArticulo, unidadesVendidas });
     });
@@ -2165,4 +2174,3 @@ export default function App() {
     </div>
   );
 }
-
