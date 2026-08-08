@@ -23,8 +23,13 @@ function otcEnRango(data, rally, nombreRuta, desde, hasta) {
 function calcularAvanceRallyRuta(data, rally, nombreRuta) {
   const obj = rally.objetivos?.[nombreRuta] || { dia: 0, final: 0 };
   const hoy = fechaHoyISO();
+  // El "avance del día" solo debe contar si HOY cae dentro de la vigencia
+  // del rally (fechaInicio → fechaFin). Si el rally todavía no empieza, o
+  // ya terminó, el avance del día debe ser 0 — aunque la ruta sí haya
+  // vendido OTC hoy por su cuenta (esa venta no es parte de ESTE rally).
+  const hoyEnVigencia = (!rally.fechaInicio || hoy >= rally.fechaInicio) && (!rally.fechaFin || hoy <= rally.fechaFin);
   return {
-    avanceDia: otcEnRango(data, rally, nombreRuta, hoy, hoy),
+    avanceDia: hoyEnVigencia ? otcEnRango(data, rally, nombreRuta, hoy, hoy) : 0,
     objetivoDia: obj.dia || 0,
     avanceTotal: otcEnRango(data, rally, nombreRuta, rally.fechaInicio, rally.fechaFin),
     objetivoFinal: obj.final || 0,
