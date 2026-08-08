@@ -245,7 +245,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
       });
       if (err) {
         if (err.code === "23505") {
-          alert("Ese código de cliente ya está registrado en esta ruta.");
+          alert("Ese código de cliente ya está registrado (revisa si quedó dado de alta en otra ruta — el código es único en todo el catálogo, no se puede repetir).");
         } else {
           throw err;
         }
@@ -290,6 +290,19 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
     if (err) {
       console.error("Error actualizando forma de pago:", err);
       alert("No se pudo actualizar: " + err.message);
+      await cargarClientes();
+    }
+  }
+
+  async function cambiarRuta(cliente, nuevaRuta) {
+    setClientes((cs) => cs.map((c) => (c.id === cliente.id ? { ...c, ruta: nuevaRuta } : c)));
+    const { error: err } = await supabase
+      .from("clientes_facturables")
+      .update({ ruta: nuevaRuta, actualizado_en: new Date().toISOString() })
+      .eq("id", cliente.id);
+    if (err) {
+      console.error("Error actualizando ruta:", err);
+      alert("No se pudo actualizar la ruta: " + err.message);
       await cargarClientes();
     }
   }
@@ -685,9 +698,18 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
                     <span className="mono" style={{ color: "#F2B134" }}>{c.codigo_cliente}</span>
                     {c.cliente ? ` · ${c.cliente}` : ""}
                   </div>
-                  {esGerente && verTodasLasRutas && (
-                    <div style={{ fontSize: 11, color: "#9AA7BD" }}>{c.ruta}{nombres?.[c.ruta] ? ` · ${nombres[c.ruta]}` : ""}</div>
-                  )}
+                  {esGerente ? (
+                    <select
+                      value={c.ruta}
+                      onChange={(e) => cambiarRuta(c, e.target.value)}
+                      style={{ fontSize: 11, color: "#9AA7BD", padding: "3px 6px", marginTop: 2 }}
+                      title="Toca para corregir a qué ruta pertenece este cliente"
+                    >
+                      {listaRutas.map((r) => (
+                        <option key={r} value={r}>{r}{nombres?.[r] ? ` · ${nombres[r]}` : ""}</option>
+                      ))}
+                    </select>
+                  ) : null}
                 </div>
 
                 <button
