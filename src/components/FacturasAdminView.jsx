@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare } from "lucide-react";
+import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare, Download } from "lucide-react";
 import { supabase } from "../supabaseClient";
 
 function hoyISO() {
@@ -8,6 +8,7 @@ function hoyISO() {
 }
 
 const LLAVE_ULTIMA_VISTA = "facturas_admin_ultima_vista";
+const LLAVE_ULTIMA_VISTA_MENSAJES = "facturas_admin_ultima_vista_mensajes";
 
 // Costo de distribución por cajetilla y tasa de IVA — ajusta aquí si cambian.
 const COSTO_DISTRIBUCION_UNITARIO = 2.78;
@@ -30,6 +31,15 @@ const COLOR_ESTADO = {
   ESPERA: "#9AA7BD",
   FACTURADO: "#3DDC97",
   OBSERVACION: "#FF8C00",
+};
+
+// Filtro de arriba: solo 2 opciones. PENDIENTE agrupa ESPERA + OBSERVACION
+// (una observación NO saca la venta de la vista principal — solo facturar
+// lo hace). El estado real de cada tarjeta (los 3 valores) se sigue viendo
+// y editando en el selector de cada tarjeta.
+const COLOR_FILTRO = {
+  PENDIENTE: "#9AA7BD",
+  FACTURADO: "#3DDC97",
 };
 
 // Del monto total de una venta (que ya incluye IVA) y el total de cajetillas,
@@ -130,9 +140,89 @@ function BotonCopiar({ texto, etiqueta }) {
  * desglose de distribución/IVA. Las tarjetas de clientes prioritarios con
  * ventas nuevas parpadean en amarillo hasta que se marcan como vistas.
  */
+// Panel de la pestaña MENSAJES: cada observación que ADMIN mandó, con la
+// respuesta de la ruta (texto y/o archivo adjunto) en cuanto llega. Las que
+// tienen respuesta sin revisar parpadean en naranja.
+function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 12, color: "#9AA7BD" }}>Últimas 100 observaciones (todas las rutas)</div>
+        {nuevosIds.size > 0 && (
+          <button className="btn" style={{ background: "#FF8C00", borderColor: "#FF8C00" }} onClick={onMarcarVistos}>
+            Marcar todo como visto
+          </button>
+        )}
+      </div>
+
+      {cargando ? (
+        <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 30 }}>Cargando...</div>
+      ) : mensajes.length === 0 ? (
+        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+          Todavía no has mandado ninguna observación.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {mensajes.map((m) => {
+            const esNuevo = nuevosIds.has(m.id);
+            const estadoTexto = m.resuelta ? "RESUELTA" : m.respondido_en ? "RESPONDIDA · POR REVISAR" : "SIN RESPUESTA";
+            const estadoColor = m.resuelta ? "#3DDC97" : m.respondido_en ? "#5AA9E6" : "#FF8C00";
+            return (
+              <div
+                key={m.id}
+                className={`card ${esNuevo ? "venta-nueva-prioritaria" : ""}`}
+                style={{ padding: 16 }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>
+                      <span className="mono" style={{ color: "#F2B134" }}>{m.codigo_cliente}</span>
+                      {m.es_otc && (
+                        <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#0B1220", background: "#F2B134", borderRadius: 6, padding: "2px 8px" }}>OTC</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 2 }}>{m.ruta} · {m.fecha}</div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 6, color: estadoColor, border: `1px solid ${estadoColor}` }}>
+                    {estadoTexto}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 12 }}>Tu mensaje:</div>
+                <div style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{m.mensaje}</div>
+
+                {m.respondido_en ? (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #1E2A42" }}>
+                    <div style={{ fontSize: 11, color: "#5AA9E6", marginBottom: 4 }}>Respuesta de la ruta:</div>
+                    {m.respuesta_texto && <div style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{m.respuesta_texto}</div>}
+                    {m.respuesta_archivo_url && (
+                      <a
+                        href={m.respuesta_archivo_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-ghost"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, textDecoration: "none" }}
+                      >
+                        <Download size={13} /> {m.respuesta_archivo_nombre || "Ver archivo adjunto"}
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, fontSize: 12, color: "#9AA7BD", fontStyle: "italic" }}>Esperando respuesta de la ruta...</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FacturasAdminView({ onLogout }) {
+  const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes"
   const [tab, setTab] = useState("prioritario");
-  const [filtroEstado, setFiltroEstado] = useState("ESPERA");
+  const [filtroEstado, setFiltroEstado] = useState("PENDIENTE"); // "PENDIENTE" (ESPERA+OBSERVACION) | "FACTURADO"
   const [fechaDesde, setFechaDesde] = useState(hoyISO());
   const [fechaHasta, setFechaHasta] = useState(hoyISO());
   const [filas, setFilas] = useState([]);
@@ -147,6 +237,63 @@ export default function FacturasAdminView({ onLogout }) {
     } catch (e) { /* ignorar */ }
   }, []);
 
+  // ---- Mensajes (observaciones ADMIN <-> ruta): se cargan siempre, sin
+  // importar en qué pestaña esté ADMIN parado, para que el aviso de
+  // "hay respuesta nueva" funcione aunque no esté viendo esa pestaña. ----
+  const [mensajes, setMensajes] = useState([]);
+  const [cargandoMensajes, setCargandoMensajes] = useState(true);
+  const [nuevosMensajesIds, setNuevosMensajesIds] = useState(new Set());
+  const ultimaVistaMensajesRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      ultimaVistaMensajesRef.current = localStorage.getItem(LLAVE_ULTIMA_VISTA_MENSAJES);
+    } catch (e) { /* ignorar */ }
+  }, []);
+
+  async function cargarMensajes() {
+    setCargandoMensajes(true);
+    try {
+      const { data, error: err } = await supabase
+        .from("facturas_observaciones")
+        .select("id, ruta, codigo_cliente, fecha, es_otc, mensaje, autor, creado_en, respuesta_texto, respuesta_archivo_url, respuesta_archivo_nombre, respondido_en, resuelta, resuelta_en")
+        .order("creado_en", { ascending: false })
+        .limit(100);
+      if (err) throw err;
+      setMensajes(data || []);
+      const referencia = ultimaVistaMensajesRef.current;
+      const nuevos = new Set(
+        (data || [])
+          .filter((m) => m.respondido_en && (!referencia || new Date(m.respondido_en) > new Date(referencia)))
+          .map((m) => m.id)
+      );
+      setNuevosMensajesIds(nuevos);
+    } catch (err) {
+      console.error("Error cargando mensajes:", err);
+    } finally {
+      setCargandoMensajes(false);
+    }
+  }
+
+  useEffect(() => {
+    cargarMensajes();
+    const canal = supabase
+      .channel("facturas_observaciones_admin_mensajes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "facturas_observaciones" }, () => {
+        cargarMensajes();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(canal); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function marcarMensajesVistos() {
+    const ahora = new Date().toISOString();
+    ultimaVistaMensajesRef.current = ahora;
+    try { localStorage.setItem(LLAVE_ULTIMA_VISTA_MENSAJES, ahora); } catch (e) { /* ignorar */ }
+    setNuevosMensajesIds(new Set());
+  }
+
   // La clave de agrupación incluye el TIPO (OTC vs producto normal): así,
   // aunque sea el mismo cliente el mismo día, las ventas de OTC nunca se
   // mezclan con las de productos normales — salen en tarjetas separadas.
@@ -159,11 +306,17 @@ export default function FacturasAdminView({ onLogout }) {
     setCargando(true);
     setError(null);
     try {
-      const { data, error: err } = await supabase
+      let query = supabase
         .from("ventas_facturas")
         .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, creado_en, actualizado_en")
-        .eq("prioridad", tab === "prioritario")
-        .eq("estado", filtroEstado)
+        .eq("prioridad", tab === "prioritario");
+      // OBSERVACIÓN ya NO oculta la venta de la vista principal — solo
+      // FACTURADO la saca de aquí. Mientras está en observación, sigue
+      // apareciendo (con su aviso naranja) hasta que se facture de verdad.
+      query = filtroEstado === "FACTURADO"
+        ? query.eq("estado", "FACTURADO")
+        : query.in("estado", ["ESPERA", "OBSERVACION"]);
+      const { data, error: err } = await query
         .gte("fecha", fechaDesde)
         .lte("fecha", fechaHasta)
         .order("creado_en", { ascending: false });
@@ -187,9 +340,9 @@ export default function FacturasAdminView({ onLogout }) {
   }
 
   useEffect(() => {
-    cargar();
+    if (vista === "clientes") cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, filtroEstado, fechaDesde, fechaHasta]);
+  }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
 
   // Tiempo real: en vez de tratar de "insertar" la fila nueva a mano dentro
   // del agrupado (complicado y propenso a error), simplemente se vuelve a
@@ -448,7 +601,11 @@ export default function FacturasAdminView({ onLogout }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <button className={tab === "prioritario" ? "btn" : "btn-ghost"} style={{ flex: 1, position: "relative" }} onClick={() => setTab("prioritario")}>
+        <button
+          className={vista === "clientes" && tab === "prioritario" ? "btn" : "btn-ghost"}
+          style={{ flex: 1, position: "relative" }}
+          onClick={() => { setVista("clientes"); setTab("prioritario"); }}
+        >
           <Star size={13} style={{ verticalAlign: "-2px" }} /> PRIORITARIO
           {nuevasClaves.size > 0 && (
             <span style={{ marginLeft: 6, background: "#FFD700", color: "#1A1300", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>
@@ -456,11 +613,38 @@ export default function FacturasAdminView({ onLogout }) {
             </span>
           )}
         </button>
-        <button className={tab === "normal" ? "btn" : "btn-ghost"} style={{ flex: 1 }} onClick={() => setTab("normal")}>
+        <button
+          className={vista === "clientes" && tab === "normal" ? "btn" : "btn-ghost"}
+          style={{ flex: 1 }}
+          onClick={() => { setVista("clientes"); setTab("normal"); }}
+        >
           NORMAL
+        </button>
+        <button
+          className={vista === "mensajes" ? "btn" : "btn-ghost"}
+          style={{ flex: 1, position: "relative", borderColor: nuevosMensajesIds.size > 0 ? "#FF8C00" : undefined }}
+          onClick={() => setVista("mensajes")}
+        >
+          <MessageSquare size={13} style={{ verticalAlign: "-2px" }} /> MENSAJES
+          {nuevosMensajesIds.size > 0 && (
+            <span style={{ marginLeft: 6, background: "#FF8C00", color: "#1A1300", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>
+              {nuevosMensajesIds.size}
+            </span>
+          )}
         </button>
       </div>
 
+      {vista === "mensajes" && (
+        <MensajesPanel
+          mensajes={mensajes}
+          cargando={cargandoMensajes}
+          nuevosIds={nuevosMensajesIds}
+          onMarcarVistos={marcarMensajesVistos}
+        />
+      )}
+
+      {vista === "clientes" && (
+      <>
       <div className="card" style={{ padding: 12, marginBottom: 16, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div>
           <label style={{ fontSize: 11, color: "#9AA7BD" }}>Desde</label><br />
@@ -472,18 +656,18 @@ export default function FacturasAdminView({ onLogout }) {
         </div>
         <button className="btn-ghost" onClick={() => { setFechaDesde(hoyISO()); setFechaHasta(hoyISO()); }}>Hoy</button>
         <div style={{ display: "flex", gap: 6 }}>
-          {["ESPERA", "FACTURADO", "OBSERVACION"].map((e) => (
+          {["PENDIENTE", "FACTURADO"].map((e) => (
             <button
               key={e}
               onClick={() => setFiltroEstado(e)}
               style={{
                 fontSize: 11, fontWeight: 700, borderRadius: 8, padding: "8px 10px", cursor: "pointer",
-                background: filtroEstado === e ? COLOR_ESTADO[e] : "transparent",
-                color: filtroEstado === e ? "#0B1220" : COLOR_ESTADO[e],
-                border: `1px solid ${COLOR_ESTADO[e]}`,
+                background: filtroEstado === e ? COLOR_FILTRO[e] : "transparent",
+                color: filtroEstado === e ? "#0B1220" : COLOR_FILTRO[e],
+                border: `1px solid ${COLOR_FILTRO[e]}`,
               }}
             >
-              {e === "OBSERVACION" ? "OBSERVACIÓN" : e}
+              {e}
             </button>
           ))}
         </div>
@@ -504,7 +688,7 @@ export default function FacturasAdminView({ onLogout }) {
         <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 30 }}>Cargando...</div>
       ) : ticketsParaMostrar.length === 0 ? (
         <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-          No hay clientes {tab === "prioritario" ? "prioritarios" : "normales"} en estado {filtroEstado === "OBSERVACION" ? "OBSERVACIÓN" : filtroEstado} para este rango de fechas.
+          No hay clientes {tab === "prioritario" ? "prioritarios" : "normales"} {filtroEstado === "FACTURADO" ? "facturados" : "pendientes"} para este rango de fechas.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -676,6 +860,8 @@ export default function FacturasAdminView({ onLogout }) {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );
