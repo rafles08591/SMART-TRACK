@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
-import { AlertCircle, CheckCircle2, Clock, Download, MapPin, Star, Target, Upload } from "lucide-react";
+import { AlertCircle, Calendar, CheckCircle2, Clock, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
   NOMBRES, UMBRAL_VISITAS_EFECTIVAS_MC, UMBRAL_MS_EN_RUTA, UMBRAL_HORAS_EN_RUTA,
