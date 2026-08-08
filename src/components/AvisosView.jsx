@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Ban, CheckCircle2, AlertCircle, MessageSquare, Download } from "lucide-react";
 import { NOMBRES, RUTAS, USERS } from "../constants";
 import { fechaHoyISO } from "../utils";
