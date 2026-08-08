@@ -985,4 +985,3 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     </div>
   );
 }
-
