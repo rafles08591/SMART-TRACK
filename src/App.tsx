@@ -1080,9 +1080,24 @@ export default function App() {
     reader.readAsBinaryString(file);
   }
 
-  function descargarCargasModificadas() {
-    const cargas = data.cargas;
+  async function descargarCargasModificadas() {
+    // Antes de generar el archivo, trae la versión más reciente de
+    // Supabase — así, si un vendedor mandó su propuesta hace unos segundos
+    // y esta pantalla todavía no se había actualizado sola, el archivo
+    // igual sale con esa información (en vez de descargar una versión
+    // vieja que se le adelantó a la última actualización).
+    setCargasStatus("Buscando la información más reciente antes de generar el archivo...");
+    let cargas;
+    try {
+      const fresca = await obtenerDataFresca();
+      cargas = fresca.cargas;
+    } catch (err) {
+      console.error("No se pudo traer la carga más reciente:", err);
+      alert("No se pudo confirmar que tengas la información más reciente (revisa tu conexión). Se descargará con lo que hay en pantalla — vuelve a intentarlo si acabas de recibir una propuesta nueva.");
+      cargas = data.cargas;
+    }
     if (!cargas?.items?.length) {
+      setCargasStatus("No hay una carga cargada todavía.");
       alert("No hay una carga cargada todavía.");
       return;
     }
@@ -1105,6 +1120,7 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Carga Modificada");
     XLSX.writeFile(wb, `carga_modificada_${cargas.fecha || fechaHoyISO()}.xlsx`);
+    setCargasStatus(`Archivo generado con la información más reciente (${filas.length} filas). Se bloqueó la edición para los vendedores.`);
     // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
     persistCargas((cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
   }
@@ -2085,4 +2101,3 @@ export default function App() {
     </div>
   );
 }
-
