@@ -147,7 +147,19 @@ function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
       <div ref={captura.capturaRef}>
         <div className="card" style={{ padding: 16, marginBottom: 16 }}>
           {rally.imagen && <img src={rally.imagen} alt={rally.nombre} style={{ width: "100%", borderRadius: 10, marginBottom: 12, display: "block" }} />}
-          <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
+            {rally.exclusivoSupervisor1 && puesto === "supervisor" && (
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#0B1220", background: "#5AA9E6", borderRadius: 6, padding: "2px 10px" }}>
+                EXCLUSIVO PARA TI
+              </span>
+            )}
+            {rally.exclusivoSupervisor1 && puesto === "gerente" && (
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#5AA9E6", border: "1px solid #5AA9E6", borderRadius: 6, padding: "2px 10px" }}>
+                EXCLUSIVO DE SUPERVISOR-1
+              </span>
+            )}
+          </div>
           <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>
             Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
           </div>
@@ -335,15 +347,18 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
   }
 
   const ralliesActivos = rallies.filter((r) => r.activo);
-  // Para vendedor: solo los rallies activos donde participa su ruta (esto
-  // no se filtra por "exclusivo", ya que esa marca solo controla quién ve
-  // el AGREGADO de equipo — el vendedor siempre ve su propio avance).
-  // Para Gerente y Supervisor-2: se ocultan los rallies marcados como
-  // exclusivos de Supervisor-1.
+  // Vendedor: NUNCA ve los rallies marcados "exclusivo de Supervisor-1" —
+  // ni siquiera su propio avance individual. Son de seguimiento interno
+  // entre Gerente y Supervisor-1, no se le exponen a las rutas.
+  // Gerente: ve TODO (incluidos los exclusivos) — necesita darles
+  // seguimiento aunque los haya marcado como "de Supervisor-1".
+  // Supervisor-1: ve TODO igual que Gerente.
+  // Supervisor-2: no participa en nada de esto (además ya no tiene la
+  // pestaña visible, esto es un respaldo extra).
   const ralliesParaMostrar = rol === "vendedor"
-    ? ralliesActivos.filter((r) => (r.rutasParticipantes || []).includes(vendedorActual))
-    : (puesto === "gerente" || puesto === "supervisor2")
-    ? ralliesActivos.filter((r) => !r.exclusivoSupervisor1)
+    ? ralliesActivos.filter((r) => !r.exclusivoSupervisor1 && (r.rutasParticipantes || []).includes(vendedorActual))
+    : puesto === "supervisor2"
+    ? []
     : ralliesActivos;
 
   return (
@@ -408,7 +423,7 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                   style={{ fontSize: 12, marginBottom: 10, background: form.exclusivoSupervisor1 ? "#5AA9E6" : undefined, borderColor: "#5AA9E6", color: form.exclusivoSupervisor1 ? "#0B1220" : "#5AA9E6" }}
                   onClick={() => setForm((f) => ({ ...f, exclusivoSupervisor1: !f.exclusivoSupervisor1 }))}
                 >
-                  {form.exclusivoSupervisor1 ? "✓ Rally exclusivo de Supervisor-1 (no aparece en tu vista agregada, ni en la de Supervisor-2)" : "Marcar como rally exclusivo de Supervisor-1"}
+                  {form.exclusivoSupervisor1 ? "✓ Rally exclusivo de Supervisor-1 (tú sí lo sigues viendo; no aparece a vendedores ni a Supervisor-2)" : "Marcar como rally exclusivo de Supervisor-1"}
                 </button>
               )}
               <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
