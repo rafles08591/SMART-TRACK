@@ -539,9 +539,21 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       });
       grupo.totalMonto += Number(f.monto) || 0;
       grupo.totalCajetillas += Number(f.cajetillas) || 0;
-      if (new Date(f.creado_en) > new Date(grupo.creadoEn)) grupo.creadoEn = f.creado_en;
+      if (new Date(f.creado_en) < new Date(grupo.creadoEn)) grupo.creadoEn = f.creado_en;
     });
-    return [...mapa.values()].sort((a, b) => new Date(b.creadoEn) - new Date(a.creadoEn));
+    // Orden ESTABLE: por folio de ticket (asignado una sola vez, nunca
+    // cambia), no por fecha de creación. Si ordenara por fecha, en cuanto
+    // se factura una parte y esa fila deja de estar "pendiente", el
+    // cliente se reacomodaba solo usando la fecha de la fila que le
+    // quedaba — haciendo que "se fuera hasta abajo" de la cola justo
+    // cuando ibas a facturar la siguiente parte. Con el folio, la posición
+    // en la lista nunca se mueve sola.
+    return [...mapa.values()].sort((a, b) => {
+      const folioA = a.productos[0]?.ticketFolio;
+      const folioB = b.productos[0]?.ticketFolio;
+      if (folioA != null && folioB != null) return folioA - folioB;
+      return new Date(a.creadoEn) - new Date(b.creadoEn);
+    });
   }, [filas]);
 
   // Convierte cada venta agrupada en 1 o más "tickets" para mostrar: si es
