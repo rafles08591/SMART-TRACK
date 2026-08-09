@@ -83,20 +83,24 @@ function costoUnitarioNeto(montoLinea, cajetillasLinea) {
 
 // Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
 // hay que partir la venta en varios "tickets" — cada uno sin pasarse del
-// límite. Usa "first-fit decreasing": ordena los productos de mayor a
-// menor monto y va metiendo cada uno en el primer ticket donde SÍ quepa
-// (en vez de ir llenando uno por uno en el orden en que vinieron) — así
-// arma la menor cantidad de tickets posible, mezclando productos chicos
-// entre sí para no desperdiciar espacio.
+// límite. El límite aplica al TOTAL REAL de cada ticket (productos + la
+// distribución que les corresponde, que es justo lo que se muestra como
+// "TOTAL DEL TICKET") — nunca al monto solo.
 const LIMITE_TICKET_EFECTIVO = 2000;
-// Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
-// hay que partir la venta en varios "tickets" — cada uno sin pasarse del
-// límite, en NINGÚN caso (ni cuando un solo producto ya vale más de
-// $2,000 él solo). Usa "first-fit decreasing": primero divide en pedazos
-// cualquier producto cuyo monto por sí solo ya pase el límite (mismo
-// código FA, con una porción de cajetillas/monto cada pedazo), y luego
-// ordena todo de mayor a menor y va metiendo cada pedazo en el primer
-// ticket donde SÍ quepa.
+function distribucionDe(p) {
+  return (p.cajetillas || 0) * COSTO_DISTRIBUCION_UNITARIO;
+}
+function montoRealDe(p) {
+  return p.monto + distribucionDe(p);
+}
+// Llena los tickets de forma continua: va acomodando cajetillas de cada
+// producto, en el orden en que vienen, hasta llenar el ticket actual lo
+// más cerca posible de $2,000 SIN PASARSE — y ahí sí corta ese producto
+// (aunque no sea el único de ese renglón que valga más de $2,000 él solo),
+// usando el resto de sus cajetillas para arrancar el siguiente ticket.
+// Como todo es divisible por cajetilla, esto siempre logra el MENOR
+// número de tickets posible (nunca deja espacio desperdiciado a propósito
+// en un ticket pudiendo meter un pedazo más de otro producto).
 //
 // OJO: un producto partido en pedazos sigue siendo LA MISMA fila en la
 // base de datos (mismo id), así que si sus pedazos terminan en tickets
@@ -105,38 +109,54 @@ const LIMITE_TICKET_EFECTIVO = 2000;
 // única forma de dividir el monto sin partir la fila real en la base de
 // datos.
 function dividirEnTickets(productos, limite) {
-  const unidades = [];
+  const bins = [];
+  let productosBin = [];
+  let sumaBin = 0;
+
+  function cerrarBinSiHayAlgo() {
+    if (productosBin.length > 0) {
+      bins.push(productosBin);
+      productosBin = [];
+      sumaBin = 0;
+    }
+  }
+
   productos.forEach((p) => {
-    if (p.monto <= limite || !p.cajetillas) {
-      unidades.push(p);
+    const cajetillasTotales = p.cajetillas || 0;
+    if (cajetillasTotales <= 0) {
+      // Producto sin cajetillas (no debería pasar en ventas normales) —
+      // se coloca completo donde quepa.
+      if (sumaBin + p.monto > limite) cerrarBinSiHayAlgo();
+      productosBin.push(p);
+      sumaBin += p.monto;
       return;
     }
-    const precioPorCajetilla = p.monto / p.cajetillas;
-    const cajetillasPorPedazo = Math.floor((limite / precioPorCajetilla) * 100) / 100;
-    let cajetillasRestantes = Math.round(p.cajetillas * 100) / 100;
-    while (cajetillasRestantes > 0) {
-      const cajetillasPedazo = Math.min(cajetillasPorPedazo || cajetillasRestantes, cajetillasRestantes);
-      unidades.push({
+    const precioRealPorCajetilla = p.monto / cajetillasTotales + COSTO_DISTRIBUCION_UNITARIO;
+    let restantes = Math.round(cajetillasTotales * 100) / 100;
+    let vueltasSeguridad = 0;
+    while (restantes > 0 && vueltasSeguridad < 1000) {
+      vueltasSeguridad++;
+      const espacio = limite - sumaBin;
+      // ¿Ya no cabe ni un centavo más de este producto en el ticket actual?
+      if (espacio < precioRealPorCajetilla * 0.005) {
+        cerrarBinSiHayAlgo();
+        continue;
+      }
+      const caben = Math.floor((espacio / precioRealPorCajetilla) * 100) / 100;
+      const aAsignar = Math.min(caben, restantes);
+      if (aAsignar <= 0) { cerrarBinSiHayAlgo(); continue; }
+      const proporcion = aAsignar / cajetillasTotales;
+      productosBin.push({
         ...p,
-        cajetillas: Math.round(cajetillasPedazo * 100) / 100,
-        monto: Math.round(cajetillasPedazo * precioPorCajetilla * 100) / 100,
+        cajetillas: Math.round(aAsignar * 100) / 100,
+        monto: Math.round(p.monto * proporcion * 100) / 100,
       });
-      cajetillasRestantes = Math.round((cajetillasRestantes - cajetillasPedazo) * 100) / 100;
+      sumaBin += aAsignar * precioRealPorCajetilla;
+      restantes = Math.round((restantes - aAsignar) * 100) / 100;
     }
   });
-
-  const ordenados = [...unidades].sort((a, b) => b.monto - a.monto);
-  const bins = [];
-  ordenados.forEach((p) => {
-    let destino = bins.find((b) => b.suma + p.monto <= limite);
-    if (!destino) {
-      destino = { productos: [], suma: 0 };
-      bins.push(destino);
-    }
-    destino.productos.push(p);
-    destino.suma += p.monto;
-  });
-  return bins.length > 0 ? bins.map((b) => b.productos) : [[]];
+  cerrarBinSiHayAlgo();
+  return bins.length > 0 ? bins : [[]];
 }
 
 // Botón pequeño de copiar-al-portapapeles con feedback visual de 1.5s.
@@ -602,7 +622,8 @@ export default function FacturasAdminView({ onLogout }) {
   const ticketsParaMostrar = useMemo(() => {
     const resultado = [];
     ventasAgrupadas.forEach((venta) => {
-      const necesitaDividir = !venta.esOtc && (venta.formaPago || "EFECTIVO") === "EFECTIVO" && venta.totalMonto > LIMITE_TICKET_EFECTIVO;
+      const distribucionTotalVenta = venta.totalCajetillas * COSTO_DISTRIBUCION_UNITARIO;
+      const necesitaDividir = !venta.esOtc && (venta.formaPago || "EFECTIVO") === "EFECTIVO" && (venta.totalMonto + distribucionTotalVenta) > LIMITE_TICKET_EFECTIVO;
 
       if (!necesitaDividir) {
         resultado.push({
