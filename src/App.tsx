@@ -1765,7 +1765,7 @@ export default function App() {
       if (lineasSinCatalogo.length > 0) {
         const { data: solicitudes } = await supabase
           .from("facturas_solicitudes_unicas")
-          .select("id, ruta, codigo_norm, forma_pago, prioridad")
+          .select("id, ruta, codigo_norm, cliente, forma_pago, prioridad")
           .eq("usada", false);
         const mapaSolicitudes = new Map((solicitudes || []).map((s) => [s.codigo_norm, s]));
 
@@ -1777,7 +1777,7 @@ export default function App() {
           filasParaFacturar.push({
             ruta: l.vendedor,
             codigo_cliente: l.codigoCliente,
-            cliente: null,
+            cliente: solicitud.cliente || null,
             articulo: l.articulo,
             producto_nombre: l.productoNombre,
             fecha: l.fecha,
