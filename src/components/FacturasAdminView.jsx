@@ -82,92 +82,14 @@ function costoUnitarioNeto(montoLinea, cajetillasLinea) {
 }
 
 // Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
-// hay que partir la venta en varios "tickets" — cada uno sin pasarse del
-// límite. El límite aplica al TOTAL REAL de cada ticket (productos + la
-// distribución que les corresponde, que es justo lo que se muestra como
-// "TOTAL DEL TICKET") — nunca al monto solo.
+// la venta se divide en varios "tickets". El reparto en sí YA NO se
+// calcula aquí: se asigna una sola vez (folio + parte + total de partes,
+// columnas ticket_folio/ticket_parte/ticket_de) desde App.tsx apenas llega
+// la venta, y queda fijo — esta pantalla solo LEE esos valores y agrupa
+// por ellos (ver ticketsParaMostrar más abajo). Así, aunque llegue una
+// venta nueva de ese mismo cliente/día, la numeración 1/2, 2/2... de lo
+// que ya estaba no se mueve.
 const LIMITE_TICKET_EFECTIVO = 2000;
-function distribucionDe(p) {
-  return (p.cajetillas || 0) * COSTO_DISTRIBUCION_UNITARIO;
-}
-function montoRealDe(p) {
-  return p.monto + distribucionDe(p);
-}
-// Llena los tickets de forma continua: va acomodando cajetillas de cada
-// producto, en el orden en que vienen, hasta llenar el ticket actual lo
-// más cerca posible de $2,000 SIN PASARSE — y ahí sí corta ese producto
-// (aunque no sea el único de ese renglón que valga más de $2,000 él solo),
-// usando el resto de sus cajetillas para arrancar el siguiente ticket.
-// Como todo es divisible por cajetilla, esto siempre logra el MENOR
-// número de tickets posible (nunca deja espacio desperdiciado a propósito
-// en un ticket pudiendo meter un pedazo más de otro producto).
-//
-// OJO: un producto partido en pedazos sigue siendo LA MISMA fila en la
-// base de datos (mismo id), así que si sus pedazos terminan en tickets
-// distintos, cambiar el estado/forma de pago de uno de esos tickets
-// también cambia esa fila para el otro ticket que la comparte — es la
-// única forma de dividir el monto sin partir la fila real en la base de
-// datos.
-function dividirEnTickets(productos, limite) {
-  const bins = [];
-  let productosBin = [];
-  let sumaBin = 0;
-
-  function cerrarBinSiHayAlgo() {
-    if (productosBin.length > 0) {
-      bins.push(productosBin);
-      productosBin = [];
-      sumaBin = 0;
-    }
-  }
-
-  productos.forEach((p) => {
-    const cajetillasTotales = p.cajetillas || 0;
-    if (cajetillasTotales <= 0) {
-      // Producto sin cajetillas (no debería pasar en ventas normales) —
-      // se coloca completo donde quepa.
-      if (sumaBin + p.monto > limite) cerrarBinSiHayAlgo();
-      productosBin.push(p);
-      sumaBin += p.monto;
-      return;
-    }
-    const precioRealPorCajetilla = p.monto / cajetillasTotales + COSTO_DISTRIBUCION_UNITARIO;
-    let restantes = Math.round(cajetillasTotales * 100) / 100;
-    let vueltasSeguridad = 0;
-    while (restantes > 0 && vueltasSeguridad < 1000) {
-      vueltasSeguridad++;
-      const espacio = limite - sumaBin;
-      const costoDeLoQueQueda = restantes * precioRealPorCajetilla;
-
-      let aAsignar;
-      if (costoDeLoQueQueda <= espacio + 1e-9) {
-        // TODO lo que queda de este producto cabe entero en este ticket —
-        // se asigna completo tal cual (puede traer los decimales que ya
-        // traía desde el reporte original; eso no es un corte artificial).
-        aAsignar = restantes;
-      } else {
-        // No cabe completo: se corta, pero SOLO en cajetillas ENTERAS
-        // (nunca a la mitad). No hace falta llegar exacto a $2,000, solo
-        // acercarse lo más posible sin pasarse.
-        const cabenEnteras = Math.floor(espacio / precioRealPorCajetilla);
-        if (cabenEnteras <= 0) { cerrarBinSiHayAlgo(); continue; }
-        aAsignar = Math.min(cabenEnteras, Math.floor(restantes) || restantes);
-        if (aAsignar <= 0) { cerrarBinSiHayAlgo(); continue; }
-      }
-
-      const proporcion = aAsignar / cajetillasTotales;
-      productosBin.push({
-        ...p,
-        cajetillas: Math.round(aAsignar * 100) / 100,
-        monto: Math.round(p.monto * proporcion * 100) / 100,
-      });
-      sumaBin += aAsignar * precioRealPorCajetilla;
-      restantes = Math.round((restantes - aAsignar) * 100) / 100;
-    }
-  });
-  cerrarBinSiHayAlgo();
-  return bins.length > 0 ? bins : [[]];
-}
 
 // Botón pequeño de copiar-al-portapapeles con feedback visual de 1.5s.
 function BotonCopiar({ texto, etiqueta }) {
@@ -284,7 +206,7 @@ function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
   );
 }
 
-export default function FacturasAdminView({ onLogout }) {
+export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
   const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes"
   const [tab, setTab] = useState("prioritario");
   const [filtroEstado, setFiltroEstado] = useState("PENDIENTE"); // "PENDIENTE" (ESPERA+OBSERVACION) | "FACTURADO"
@@ -400,7 +322,7 @@ export default function FacturasAdminView({ onLogout }) {
     try {
       let query = supabase
         .from("ventas_facturas")
-        .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, creado_en, actualizado_en")
+        .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, creado_en, actualizado_en, ticket_folio, ticket_parte, ticket_de")
         .eq("prioridad", tab === "prioritario");
       // OBSERVACIÓN ya NO oculta la venta de la vista principal — solo
       // FACTURADO la saca de aquí. Mientras está en observación, sigue
@@ -413,7 +335,24 @@ export default function FacturasAdminView({ onLogout }) {
         .lte("fecha", fechaHasta)
         .order("creado_en", { ascending: false });
       if (err) throw err;
-      setFilas(data || []);
+
+      // Auto-reparación: si hay filas sin folio de ticket asignado (datos
+      // de antes de este cambio, o alguna que se coló sin numerar), se
+      // asignan una sola vez y se vuelve a cargar — así el folio queda
+      // fijo desde ahí en adelante y ya no se vuelve a mover.
+      const faltanFolios = (data || []).some((f) => f.ticket_folio == null);
+      if (faltanFolios && asignarFoliosTickets) {
+        await asignarFoliosTickets();
+        let query2 = supabase
+          .from("ventas_facturas")
+          .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, creado_en, actualizado_en, ticket_folio, ticket_parte, ticket_de")
+          .eq("prioridad", tab === "prioritario");
+        query2 = filtroEstado === "FACTURADO" ? query2.eq("estado", "FACTURADO") : query2.in("estado", ["ESPERA", "OBSERVACION"]);
+        const { data: dataFresca } = await query2.gte("fecha", fechaDesde).lte("fecha", fechaHasta).order("creado_en", { ascending: false });
+        setFilas(dataFresca || data || []);
+      } else {
+        setFilas(data || []);
+      }
     } catch (err) {
       console.error("Error cargando ventas_facturas:", err);
       setError(err?.message || "No se pudo cargar la información.");
@@ -594,6 +533,9 @@ export default function FacturasAdminView({ onLogout }) {
         monto: Number(f.monto) || 0,
         formaPago: f.forma_pago,
         estado: f.estado,
+        ticketFolio: f.ticket_folio,
+        ticketParte: f.ticket_parte || 1,
+        ticketDe: f.ticket_de || 1,
       });
       grupo.totalMonto += Number(f.monto) || 0;
       grupo.totalCajetillas += Number(f.cajetillas) || 0;
@@ -632,8 +574,8 @@ export default function FacturasAdminView({ onLogout }) {
   const ticketsParaMostrar = useMemo(() => {
     const resultado = [];
     ventasAgrupadas.forEach((venta) => {
-      const distribucionTotalVenta = venta.totalCajetillas * COSTO_DISTRIBUCION_UNITARIO;
-      const necesitaDividir = !venta.esOtc && (venta.formaPago || "EFECTIVO") === "EFECTIVO" && (venta.totalMonto + distribucionTotalVenta) > LIMITE_TICKET_EFECTIVO;
+      const totalPartes = Math.max(1, ...venta.productos.map((p) => p.ticketDe || 1));
+      const necesitaDividir = totalPartes > 1;
 
       if (!necesitaDividir) {
         resultado.push({
@@ -668,12 +610,22 @@ export default function FacturasAdminView({ onLogout }) {
         return;
       }
 
-      const grupos = dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO);
-      grupos.forEach((productos, i) => {
+      // Agrupa por la parte de ticket YA ASIGNADA (persistente en la base
+      // de datos) — ya NO se recalcula el reparto aquí. Así, aunque llegue
+      // una venta nueva del mismo cliente/día, la numeración 1/2, 2/2... de
+      // lo que ya estaba no se mueve.
+      const porParte = new Map();
+      venta.productos.forEach((p) => {
+        const parte = p.ticketParte || 1;
+        if (!porParte.has(parte)) porParte.set(parte, []);
+        porParte.get(parte).push(p);
+      });
+      [...porParte.keys()].sort((a, b) => a - b).forEach((numParte) => {
+        const productos = porParte.get(numParte);
         resultado.push({
           ventaOriginal: venta,
-          claveTicket: `${venta.clave}__${i}`,
-          parteLabel: `${i + 1}/${grupos.length}`,
+          claveTicket: `${venta.clave}__${numParte}`,
+          parteLabel: `${numParte}/${totalPartes}`,
           necesitaDividir: true,
           esVistaTotal: false,
           productos,
@@ -885,11 +837,16 @@ export default function FacturasAdminView({ onLogout }) {
                         <div style={{ fontSize: 10.5, color: "#FF8C00" }}>
                           Pago en efectivo mayor a {money(LIMITE_TICKET_EFECTIVO)}.
                         </div>
-                        {(ticket.esVistaTotal || ticket.parteLabel === "1/" + dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO).length) && (
-                          <button className="btn-ghost" style={{ fontSize: 10.5, padding: "3px 8px" }} onClick={() => toggleModoTotal(venta.clave)}>
-                            {ticket.esVistaTotal ? "Ver tickets divididos" : `Ver ticket total (junta los ${dividirEnTickets(venta.productos, LIMITE_TICKET_EFECTIVO).length})`}
-                          </button>
-                        )}
+                        {(() => {
+                          const totalPartesVenta = Math.max(1, ...venta.productos.map((p) => p.ticketDe || 1));
+                          const esPrimeraParte = ticket.parteLabel === `1/${totalPartesVenta}`;
+                          if (!ticket.esVistaTotal && !esPrimeraParte) return null;
+                          return (
+                            <button className="btn-ghost" style={{ fontSize: 10.5, padding: "3px 8px" }} onClick={() => toggleModoTotal(venta.clave)}>
+                              {ticket.esVistaTotal ? "Ver tickets divididos" : `Ver ticket total (junta los ${totalPartesVenta})`}
+                            </button>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
