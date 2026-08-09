@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Plus, Trash2, Star, Ban, CheckCircle2, AlertCircle, MessageSquare, Upload, Send } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { normalizarCodigo } from "../utils";
 
 function hoyISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
@@ -66,6 +67,35 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
   const [prioridadOtc, setPrioridadOtc] = useState(false);
   const [guardandoOtc, setGuardandoOtc] = useState(false);
 
+  // ---- Directorio de clientes_ruta (para autocompletar nombre/ruta) ----
+  // Se carga una sola vez al entrar a la pantalla. Solo hace falta el
+  // código — el nombre y la ruta se rellenan solos si el código ya existe
+  // en clientes_ruta (tanto para dar de alta como para única ocasión).
+  const [directorioClientes, setDirectorioClientes] = useState(new Map());
+  useEffect(() => {
+    (async () => {
+      const { data, error: err } = await supabase
+        .from("clientes_ruta")
+        .select("codigo_cliente, nombre, ruta")
+        .eq("activo", true);
+      if (err) { console.error("Error cargando clientes_ruta:", err); return; }
+      const mapa = new Map();
+      (data || []).forEach((c) => {
+        const norm = normalizarCodigo(c.codigo_cliente);
+        // Si el mismo código aparece varias veces (ej. distintos días de
+        // visita), se queda con la primera coincidencia — el nombre/ruta
+        // deberían ser iguales de todas formas.
+        if (!mapa.has(norm)) mapa.set(norm, { nombre: c.nombre, ruta: c.ruta });
+      });
+      setDirectorioClientes(mapa);
+    })();
+  }, []);
+
+  function buscarEnDirectorio(codigo) {
+    if (!codigo || !codigo.trim()) return null;
+    return directorioClientes.get(normalizarCodigo(codigo)) || null;
+  }
+
   async function facturarOtc() {
     const codigo = codigoOtc.trim();
     const monto = Number(montoOtc);
@@ -114,12 +144,37 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
   const [solicitudesUnicas, setSolicitudesUnicas] = useState([]);
   const [cargandoUnicas, setCargandoUnicas] = useState(true);
 
+  // Coincidencia encontrada en clientes_ruta para lo que se va escribiendo
+  // en cada campo de código — solo para mostrar de confirmación (el nombre
+  // se rellena solo, ver los useEffect de abajo).
+  const coincidenciaNuevo = buscarEnDirectorio(codigoNuevo);
+  const coincidenciaUnico = buscarEnDirectorio(codigoUnico);
+
+  useEffect(() => {
+    const match = buscarEnDirectorio(codigoNuevo);
+    if (!match) return;
+    setNombreNuevo(match.nombre || "");
+    // Solo Gerente puede ver/elegir cualquier ruta — le cambiamos la ruta
+    // seleccionada sola para que no tenga que saberse de memoria a qué
+    // ruta pertenece el cliente. Si no es Gerente, la ruta se queda fija
+    // en la suya (no tendría caso cambiarla).
+    if (esGerente && match.ruta) setRutaSeleccionada(match.ruta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigoNuevo, directorioClientes]);
+
+  useEffect(() => {
+    const match = buscarEnDirectorio(codigoUnico);
+    if (!match) return;
+    if (esGerente && match.ruta) setRutaSeleccionada(match.ruta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigoUnico, directorioClientes]);
+
   async function cargarSolicitudesUnicas() {
     setCargandoUnicas(true);
     try {
       let query = supabase
         .from("facturas_solicitudes_unicas")
-        .select("id, ruta, codigo_cliente, forma_pago, prioridad, usada, fecha_uso, creado_en")
+        .select("id, ruta, codigo_cliente, cliente, forma_pago, prioridad, usada, fecha_uso, creado_en")
         .eq("usada", false)
         .order("creado_en", { ascending: false });
       if (!(esGerente && verTodasLasRutas)) {
@@ -155,6 +210,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
       const { error: err } = await supabase.from("facturas_solicitudes_unicas").insert({
         ruta: rutaSeleccionada,
         codigo_cliente: codigo,
+        cliente: coincidenciaUnico?.nombre || null,
         forma_pago: formaPagoUnica,
         prioridad: prioridadUnica,
         creado_por: identidad || null,
@@ -391,6 +447,21 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
         .insert({ cliente_id: cliente.id, fecha: hoy });
       if (err && err.code !== "23505") { alert("No se pudo guardar: " + err.message); return; }
       setExclusionesHoy((s) => new Set(s).add(cliente.id));
+      // La exclusión sola solo evita que se VUELVA a agregar en el próximo
+      // avance del día — si esta compra de HOY ya se había guardado antes
+      // de marcar la exclusión, hay que borrarla también ahora (nunca se
+      // toca si ya quedó FACTURADA — esa ya es historia, no se puede
+      // deshacer marcando esta casilla).
+      const { error: errBorrar } = await supabase
+        .from("ventas_facturas")
+        .delete()
+        .eq("cliente_id", cliente.id)
+        .eq("fecha", hoy)
+        .neq("estado", "FACTURADO");
+      if (errBorrar) {
+        console.error("No se pudo borrar la venta de hoy ya guardada:", errBorrar);
+        alert("Se marcó la exclusión, pero no se pudo borrar la venta de hoy que ya estaba guardada: " + errBorrar.message + " — bórrala a mano desde el panel de ADMIN si hace falta.");
+      }
     }
   }
 
@@ -604,7 +675,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
             value={nombreNuevo}
             onChange={(e) => setNombreNuevo(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") agregarCliente(); }}
-            placeholder="Nombre del cliente (opcional, solo de referencia)"
+            placeholder="Nombre (se llena solo si el código está en clientes_ruta)"
             style={{ flex: "1 1 200px", minWidth: 180, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px" }}
           />
           <button
@@ -627,8 +698,17 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
             <Plus size={14} style={{ verticalAlign: "-2px" }} /> {guardando ? "Guardando..." : "Agregar"}
           </button>
         </div>
+        {codigoNuevo.trim() && (
+          coincidenciaNuevo
+            ? <p style={{ fontSize: 11, color: "#3DDC97", marginTop: 8, marginBottom: 0 }}>
+                ✓ Encontrado en clientes_ruta: {coincidenciaNuevo.nombre} — {coincidenciaNuevo.ruta}
+              </p>
+            : <p style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8, marginBottom: 0 }}>
+                No se encontró ese código en clientes_ruta — puedes escribir el nombre a mano (opcional).
+              </p>
+        )}
         <p style={{ fontSize: 11, color: "#5b6478", marginTop: 8, marginBottom: 0 }}>
-          El cruce con las ventas se hace por el código (no importa si le faltan/sobran ceros a la izquierda). El nombre es solo para identificarlo más fácil en la lista. La forma de pago se puede corregir después si cambia.
+          Solo captura el código: si ya está en clientes_ruta, el nombre (y la ruta, si eres Gerente) se llenan solos. El cruce con las ventas siempre es por el código (no importa si le faltan/sobran ceros a la izquierda).
         </p>
       </div>
 
@@ -668,13 +748,24 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
             <Plus size={14} style={{ verticalAlign: "-2px" }} /> {guardandoUnica ? "Guardando..." : "Solicitar"}
           </button>
         </div>
+        {codigoUnico.trim() && (
+          coincidenciaUnico
+            ? <p style={{ fontSize: 11, color: "#3DDC97", marginTop: 8, marginBottom: 0 }}>
+                ✓ Encontrado en clientes_ruta: {coincidenciaUnico.nombre} — {coincidenciaUnico.ruta}
+              </p>
+            : <p style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8, marginBottom: 0 }}>
+                No se encontró ese código en clientes_ruta.
+              </p>
+        )}
 
         {!cargandoUnicas && solicitudesUnicas.length > 0 && (
           <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ fontSize: 11, color: "#9AA7BD" }}>PENDIENTES (esperando que se suba el avance del día)</div>
             {solicitudesUnicas.map((s) => (
               <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#131C30", border: "1px solid #1E2A42", borderRadius: 8, padding: "8px 12px" }}>
-                <span className="mono" style={{ color: "#F2B134", fontSize: 12, flex: 1 }}>{s.codigo_cliente}</span>
+                <span className="mono" style={{ color: "#F2B134", fontSize: 12 }}>{s.codigo_cliente}</span>
+                {s.cliente && <span style={{ fontSize: 12, color: "#E8EDF5", flex: 1 }}>{s.cliente}</span>}
+                {!s.cliente && <span style={{ flex: 1 }} />}
                 {esGerente && verTodasLasRutas && <span style={{ fontSize: 11, color: "#9AA7BD" }}>{s.ruta}</span>}
                 <span style={{ fontSize: 11, fontWeight: 700, color: COLOR_FORMA_PAGO[s.forma_pago] }}>{s.forma_pago}</span>
                 {s.prioridad && <Star size={12} color="#F2B134" />}
