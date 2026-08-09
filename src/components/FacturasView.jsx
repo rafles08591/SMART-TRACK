@@ -43,6 +43,14 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
   const listaRutas = (vendedores || []).map((v) => v.name);
 
   const [rutaSeleccionada, setRutaSeleccionada] = useState(rutaActual || listaRutas[0] || "");
+  // Ruta a la que se va a registrar el cliente NUEVO — separada de
+  // "rutaSeleccionada" (que es la que filtra la LISTA de abajo). Antes
+  // compartían la misma variable, y cuando Gerente estaba en "ver todas
+  // las rutas" el selector se ocultaba por completo (esa variable ya no
+  // hacía falta para filtrar) — así que tampoco había dónde ver ni
+  // corregir a qué ruta se estaba registrando el cliente nuevo, y se
+  // quedaba pegado al valor inicial (la primera ruta de la lista).
+  const [rutaRegistro, setRutaRegistro] = useState(rutaActual || listaRutas[0] || "");
   const [verTodasLasRutas, setVerTodasLasRutas] = useState(esGerente);
 
   const [clientes, setClientes] = useState([]);
@@ -170,18 +178,17 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
     const match = buscarEnDirectorio(codigoNuevo);
     if (!match) return;
     setNombreNuevo(match.nombre || "");
-    // Solo Gerente puede ver/elegir cualquier ruta — le cambiamos la ruta
-    // seleccionada sola para que no tenga que saberse de memoria a qué
-    // ruta pertenece el cliente. Si no es Gerente, la ruta se queda fija
-    // en la suya (no tendría caso cambiarla).
-    if (esGerente && match.ruta) setRutaSeleccionada(match.ruta);
+    // Cualquier staff con el selector de ruta visible (Gerente, Supervisor-1,
+    // etc. — no solo Gerente) recibe la ruta correcta sola, para no tener
+    // que saberse de memoria a qué ruta pertenece el cliente.
+    if (esStaff && match.ruta) setRutaRegistro(match.ruta);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codigoNuevo, directorioClientes]);
 
   useEffect(() => {
     const match = buscarEnDirectorio(codigoUnico);
     if (!match) return;
-    if (esGerente && match.ruta) setRutaSeleccionada(match.ruta);
+    if (esStaff && match.ruta) setRutaRegistro(match.ruta);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codigoUnico, directorioClientes]);
 
@@ -217,14 +224,14 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
       alert("Escribe el código del cliente.");
       return;
     }
-    if (!rutaSeleccionada) {
+    if (!rutaRegistro) {
       alert("Elige primero la ruta.");
       return;
     }
     setGuardandoUnica(true);
     try {
       const { error: err } = await supabase.from("facturas_solicitudes_unicas").insert({
-        ruta: rutaSeleccionada,
+        ruta: rutaRegistro,
         codigo_cliente: codigo,
         cliente: coincidenciaUnico?.nombre || null,
         forma_pago: formaPagoUnica,
@@ -301,14 +308,14 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
       alert("Escribe el código del cliente (tal como aparece en el reporte de ventas).");
       return;
     }
-    if (!rutaSeleccionada) {
+    if (!rutaRegistro) {
       alert("Elige primero la ruta.");
       return;
     }
     setGuardando(true);
     try {
       const { error: err } = await supabase.from("clientes_facturables").insert({
-        ruta: rutaSeleccionada,
+        ruta: rutaRegistro,
         codigo_cliente: codigo,
         cliente: nombreNuevo.trim() || null,
         prioridad: prioridadNueva,
@@ -675,7 +682,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
         <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>
-          REGISTRAR CLIENTE {esStaff && !(esGerente && verTodasLasRutas) ? `· ${rutaSeleccionada}` : rutaActual ? `· ${rutaActual}` : ""}
+          REGISTRAR CLIENTE {!esStaff && rutaActual ? `· ${rutaActual}` : ""}
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input
@@ -694,6 +701,18 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
             placeholder="Nombre (se llena solo si el código está en clientes_ruta)"
             style={{ flex: "1 1 200px", minWidth: 180, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px" }}
           />
+          {esStaff && (
+            <select
+              value={rutaRegistro}
+              onChange={(e) => setRutaRegistro(e.target.value)}
+              style={{ fontSize: 12, padding: "9px 10px" }}
+              title="Ruta a la que se va a registrar este cliente (se llena sola si el código está en clientes_ruta)"
+            >
+              {listaRutas.map((r) => (
+                <option key={r} value={r}>{r}{nombres?.[r] ? ` · ${nombres[r]}` : ""}</option>
+              ))}
+            </select>
+          )}
           <button
             className={prioridadNueva ? "btn" : "btn-ghost"}
             style={{ fontSize: 12, whiteSpace: "nowrap" }}
@@ -744,6 +763,18 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
             placeholder="Código del cliente"
             style={{ flex: "1 1 200px", minWidth: 160, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px" }}
           />
+          {esStaff && (
+            <select
+              value={rutaRegistro}
+              onChange={(e) => setRutaRegistro(e.target.value)}
+              style={{ fontSize: 12, padding: "9px 10px" }}
+              title="Ruta a la que se va a mandar esta solicitud (se llena sola si el código está en clientes_ruta)"
+            >
+              {listaRutas.map((r) => (
+                <option key={r} value={r}>{r}{nombres?.[r] ? ` · ${nombres[r]}` : ""}</option>
+              ))}
+            </select>
+          )}
           <select
             value={formaPagoUnica}
             onChange={(e) => setFormaPagoUnica(e.target.value)}
