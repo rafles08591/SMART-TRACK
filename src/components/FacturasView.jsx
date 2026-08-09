@@ -55,6 +55,7 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
   const [prioridadNueva, setPrioridadNueva] = useState(false);
   const [formaPagoNueva, setFormaPagoNueva] = useState("EFECTIVO");
   const [guardando, setGuardando] = useState(false);
+  const [busquedaClientes, setBusquedaClientes] = useState("");
 
   const [fechaDesdeBorrar, setFechaDesdeBorrar] = useState("");
   const [fechaHastaBorrar, setFechaHastaBorrar] = useState("");
@@ -843,13 +844,29 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
         </div>
       )}
 
+      {!cargando && clientes.length > 0 && (
+        <input
+          type="text"
+          value={busquedaClientes}
+          onChange={(e) => setBusquedaClientes(e.target.value)}
+          placeholder="Buscar por código o nombre..."
+          style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 12 }}
+        />
+      )}
+
       {cargando ? (
         <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 24 }}>Cargando clientes...</div>
       ) : clientes.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Todavía no hay clientes registrados.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
-          {clientes.map((c) => {
+          {(() => {
+            const q = busquedaClientes.trim().toLowerCase();
+            const filtrados = clientes.filter((c) => !q || (c.codigo_cliente || "").toLowerCase().includes(q) || (c.cliente || "").toLowerCase().includes(q));
+            if (filtrados.length === 0) {
+              return <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Ningún cliente coincide con "{busquedaClientes}".</div>;
+            }
+            return filtrados.map((c) => {
             const excluidoHoy = exclusionesHoy.has(c.id);
             const editando = editandoClienteId === c.id;
 
@@ -938,7 +955,8 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
                 )}
               </div>
             );
-          })}
+            });
+          })()}
         </div>
       )}
 
