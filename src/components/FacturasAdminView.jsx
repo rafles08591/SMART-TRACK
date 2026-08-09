@@ -137,14 +137,24 @@ function dividirEnTickets(productos, limite) {
     while (restantes > 0 && vueltasSeguridad < 1000) {
       vueltasSeguridad++;
       const espacio = limite - sumaBin;
-      // ¿Ya no cabe ni un centavo más de este producto en el ticket actual?
-      if (espacio < precioRealPorCajetilla * 0.005) {
-        cerrarBinSiHayAlgo();
-        continue;
+      const costoDeLoQueQueda = restantes * precioRealPorCajetilla;
+
+      let aAsignar;
+      if (costoDeLoQueQueda <= espacio + 1e-9) {
+        // TODO lo que queda de este producto cabe entero en este ticket —
+        // se asigna completo tal cual (puede traer los decimales que ya
+        // traía desde el reporte original; eso no es un corte artificial).
+        aAsignar = restantes;
+      } else {
+        // No cabe completo: se corta, pero SOLO en cajetillas ENTERAS
+        // (nunca a la mitad). No hace falta llegar exacto a $2,000, solo
+        // acercarse lo más posible sin pasarse.
+        const cabenEnteras = Math.floor(espacio / precioRealPorCajetilla);
+        if (cabenEnteras <= 0) { cerrarBinSiHayAlgo(); continue; }
+        aAsignar = Math.min(cabenEnteras, Math.floor(restantes) || restantes);
+        if (aAsignar <= 0) { cerrarBinSiHayAlgo(); continue; }
       }
-      const caben = Math.floor((espacio / precioRealPorCajetilla) * 100) / 100;
-      const aAsignar = Math.min(caben, restantes);
-      if (aAsignar <= 0) { cerrarBinSiHayAlgo(); continue; }
+
       const proporcion = aAsignar / cajetillasTotales;
       productosBin.push({
         ...p,
