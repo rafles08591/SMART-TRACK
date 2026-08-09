@@ -1,7 +1,9 @@
 // @ts-nocheck
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare, Download } from "lucide-react";
+import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare, Download, Plus, Trash2, Ban } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { normalizarCodigo } from "../utils";
+import { RUTAS, NOMBRES } from "../constants";
 
 function hoyISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
@@ -130,6 +132,302 @@ function BotonCopiar({ texto, etiqueta }) {
 // Panel de la pestaña MENSAJES: cada observación que ADMIN mandó, con la
 // respuesta de la ruta (texto y/o archivo adjunto) en cuanto llega. Las que
 // tienen respuesta sin revisar parpadean en naranja.
+// Panel de la pestaña CLIENTES: mismas funciones que tiene Gerente en la
+// pantalla de la ruta (FACTURAS → catálogo de clientes), pero para ADMIN
+// viendo TODAS las rutas de una vez — registrar cliente, editar, marcar
+// prioritario, forma de pago por default, "no factura hoy", cambiar de
+// ruta, y borrar. También autocompleta nombre/ruta desde clientes_ruta
+// igual que en la pantalla de la ruta.
+function ClientesAdminPanel({ listaRutas, nombresRutas }) {
+  const [clientes, setClientes] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [exclusionesHoy, setExclusionesHoy] = useState(new Set());
+  const [busqueda, setBusqueda] = useState("");
+
+  const [codigoNuevo, setCodigoNuevo] = useState("");
+  const [nombreNuevo, setNombreNuevo] = useState("");
+  const [rutaNueva, setRutaNueva] = useState(listaRutas[0] || "");
+  const [prioridadNueva, setPrioridadNueva] = useState(false);
+  const [formaPagoNueva, setFormaPagoNueva] = useState("EFECTIVO");
+  const [guardando, setGuardando] = useState(false);
+
+  const [editandoClienteId, setEditandoClienteId] = useState(null);
+  const [formEdicion, setFormEdicion] = useState({ codigo: "", nombre: "" });
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+
+  const [directorioClientes, setDirectorioClientes] = useState(new Map());
+
+  useEffect(() => {
+    (async () => {
+      const TAMANO_PAGINA = 1000;
+      let desde = 0;
+      let todas = [];
+      while (true) {
+        const { data, error: err } = await supabase
+          .from("clientes_ruta")
+          .select("codigo_cliente, nombre, ruta")
+          .eq("activo", true)
+          .range(desde, desde + TAMANO_PAGINA - 1);
+        if (err) { console.error("Error cargando clientes_ruta:", err); break; }
+        todas = todas.concat(data || []);
+        if (!data || data.length < TAMANO_PAGINA) break;
+        desde += TAMANO_PAGINA;
+      }
+      const mapa = new Map();
+      todas.forEach((c) => {
+        const norm = normalizarCodigo(c.codigo_cliente);
+        if (!mapa.has(norm)) mapa.set(norm, { nombre: c.nombre, ruta: c.ruta });
+      });
+      setDirectorioClientes(mapa);
+    })();
+  }, []);
+
+  function buscarEnDirectorio(codigo) {
+    if (!codigo || !codigo.trim()) return null;
+    return directorioClientes.get(normalizarCodigo(codigo)) || null;
+  }
+  const coincidenciaNuevo = buscarEnDirectorio(codigoNuevo);
+
+  useEffect(() => {
+    const match = buscarEnDirectorio(codigoNuevo);
+    if (!match) return;
+    setNombreNuevo(match.nombre || "");
+    if (match.ruta) setRutaNueva(match.ruta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigoNuevo, directorioClientes]);
+
+  async function cargarClientes() {
+    setCargando(true);
+    try {
+      const { data, error: err } = await supabase
+        .from("clientes_facturables")
+        .select("id, ruta, codigo_cliente, cliente, prioridad, forma_pago_default")
+        .order("creado_en", { ascending: false });
+      if (err) throw err;
+      setClientes(data || []);
+      const hoy = hoyISO();
+      const ids = (data || []).map((c) => c.id);
+      if (ids.length > 0) {
+        const { data: exclusiones } = await supabase
+          .from("facturas_exclusiones_dia")
+          .select("cliente_id")
+          .eq("fecha", hoy)
+          .in("cliente_id", ids);
+        setExclusionesHoy(new Set((exclusiones || []).map((e) => e.cliente_id)));
+      } else {
+        setExclusionesHoy(new Set());
+      }
+    } catch (err) {
+      console.error("Error cargando clientes_facturables:", err);
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  useEffect(() => { cargarClientes(); }, []);
+
+  async function agregarCliente() {
+    const codigo = codigoNuevo.trim();
+    if (!codigo) { alert("Escribe el código del cliente."); return; }
+    if (!rutaNueva) { alert("Elige la ruta."); return; }
+    setGuardando(true);
+    try {
+      const { error: err } = await supabase.from("clientes_facturables").insert({
+        ruta: rutaNueva,
+        codigo_cliente: codigo,
+        cliente: nombreNuevo.trim() || null,
+        prioridad: prioridadNueva,
+        forma_pago_default: formaPagoNueva,
+      });
+      if (err) {
+        if (err.code === "23505") alert("Ese código ya está registrado en el catálogo.");
+        else throw err;
+        return;
+      }
+      setCodigoNuevo(""); setNombreNuevo(""); setPrioridadNueva(false); setFormaPagoNueva("EFECTIVO");
+      await cargarClientes();
+    } catch (err) {
+      alert("No se pudo guardar: " + (err?.message || "intenta de nuevo"));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  async function cambiarPrioridad(cliente, nuevaPrioridad) {
+    setClientes((cs) => cs.map((c) => (c.id === cliente.id ? { ...c, prioridad: nuevaPrioridad } : c)));
+    await supabase.from("clientes_facturables").update({ prioridad: nuevaPrioridad }).eq("id", cliente.id);
+  }
+
+  async function cambiarFormaPagoDefault(cliente, nuevaForma) {
+    setClientes((cs) => cs.map((c) => (c.id === cliente.id ? { ...c, forma_pago_default: nuevaForma } : c)));
+    await supabase.from("clientes_facturables").update({ forma_pago_default: nuevaForma }).eq("id", cliente.id);
+  }
+
+  async function cambiarRuta(cliente, nuevaRuta) {
+    setClientes((cs) => cs.map((c) => (c.id === cliente.id ? { ...c, ruta: nuevaRuta } : c)));
+    await supabase.from("clientes_facturables").update({ ruta: nuevaRuta }).eq("id", cliente.id);
+  }
+
+  async function toggleNoFacturaHoy(cliente) {
+    const hoy = hoyISO();
+    const yaExcluido = exclusionesHoy.has(cliente.id);
+    if (yaExcluido) {
+      await supabase.from("facturas_exclusiones_dia").delete().eq("cliente_id", cliente.id).eq("fecha", hoy);
+      setExclusionesHoy((s) => { const n = new Set(s); n.delete(cliente.id); return n; });
+    } else {
+      const { error: err } = await supabase.from("facturas_exclusiones_dia").insert({ cliente_id: cliente.id, fecha: hoy });
+      if (err && err.code !== "23505") { alert("No se pudo guardar: " + err.message); return; }
+      setExclusionesHoy((s) => new Set(s).add(cliente.id));
+      const { error: errBorrar } = await supabase
+        .from("ventas_facturas").delete().eq("cliente_id", cliente.id).eq("fecha", hoy).neq("estado", "FACTURADO");
+      if (errBorrar) alert("Se marcó la exclusión, pero no se pudo borrar la venta de hoy que ya estaba guardada: " + errBorrar.message);
+    }
+  }
+
+  async function eliminarCliente(cliente) {
+    const ok = window.confirm(`¿Borrar a "${cliente.codigo_cliente}${cliente.cliente ? " — " + cliente.cliente : ""}"? Esto no borra sus ventas ya registradas.`);
+    if (!ok) return;
+    const { error: err } = await supabase.from("clientes_facturables").delete().eq("id", cliente.id);
+    if (err) { alert("No se pudo borrar: " + err.message); return; }
+    setClientes((cs) => cs.filter((c) => c.id !== cliente.id));
+  }
+
+  function iniciarEdicionCliente(cliente) {
+    setEditandoClienteId(cliente.id);
+    setFormEdicion({ codigo: cliente.codigo_cliente, nombre: cliente.cliente || "" });
+  }
+
+  async function guardarEdicionCliente(cliente) {
+    const codigo = formEdicion.codigo.trim();
+    if (!codigo) { alert("El código no puede quedar vacío."); return; }
+    setGuardandoEdicion(true);
+    try {
+      const { error: err } = await supabase
+        .from("clientes_facturables")
+        .update({ codigo_cliente: codigo, cliente: formEdicion.nombre.trim() || null, actualizado_en: new Date().toISOString() })
+        .eq("id", cliente.id);
+      if (err) {
+        if (err.code === "23505") alert("Ese código ya está registrado en otro cliente.");
+        else throw err;
+        return;
+      }
+      await supabase.from("ventas_facturas").update({ codigo_cliente: codigo, cliente: formEdicion.nombre.trim() || null }).eq("cliente_id", cliente.id);
+      setEditandoClienteId(null);
+      await cargarClientes();
+    } catch (err) {
+      alert("No se pudo guardar: " + (err?.message || "intenta de nuevo"));
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  }
+
+  const q = busqueda.trim().toLowerCase();
+  const clientesFiltrados = clientes.filter((c) => !q || (c.codigo_cliente || "").toLowerCase().includes(q) || (c.cliente || "").toLowerCase().includes(q));
+
+  return (
+    <div>
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>REGISTRAR CLIENTE</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="text" value={codigoNuevo} onChange={(e) => setCodigoNuevo(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") agregarCliente(); }}
+            placeholder="Código del cliente"
+            style={{ flex: "1 1 180px", minWidth: 160, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px" }}
+          />
+          <input
+            type="text" value={nombreNuevo} onChange={(e) => setNombreNuevo(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") agregarCliente(); }}
+            placeholder="Nombre (se llena solo si el código está en clientes_ruta)"
+            style={{ flex: "1 1 200px", minWidth: 180, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px" }}
+          />
+          <select value={rutaNueva} onChange={(e) => setRutaNueva(e.target.value)} style={{ fontSize: 12, padding: "9px 10px" }}>
+            {listaRutas.map((r) => <option key={r} value={r}>{r}{nombresRutas?.[r] ? ` · ${nombresRutas[r]}` : ""}</option>)}
+          </select>
+          <button className={prioridadNueva ? "btn" : "btn-ghost"} style={{ fontSize: 12, whiteSpace: "nowrap" }} onClick={() => setPrioridadNueva((p) => !p)}>
+            <Star size={13} style={{ verticalAlign: "-2px" }} /> {prioridadNueva ? "Prioritario" : "Normal"}
+          </button>
+          <select value={formaPagoNueva} onChange={(e) => setFormaPagoNueva(e.target.value)} style={{ fontSize: 12, fontWeight: 700, color: COLOR_FORMA_PAGO[formaPagoNueva], padding: "9px 10px" }}>
+            <option value="EFECTIVO">EFECTIVO</option>
+            <option value="CREDITO">CRÉDITO</option>
+            <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+          </select>
+          <button className="btn" disabled={guardando} onClick={agregarCliente}>
+            <Plus size={14} style={{ verticalAlign: "-2px" }} /> {guardando ? "Guardando..." : "Agregar"}
+          </button>
+        </div>
+        {codigoNuevo.trim() && (
+          coincidenciaNuevo
+            ? <p style={{ fontSize: 11, color: "#3DDC97", marginTop: 8, marginBottom: 0 }}>✓ Encontrado en clientes_ruta: {coincidenciaNuevo.nombre} — {coincidenciaNuevo.ruta}</p>
+            : <p style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8, marginBottom: 0 }}>No se encontró ese código en clientes_ruta — puedes escribir el nombre y elegir la ruta a mano.</p>
+        )}
+      </div>
+
+      {!cargando && clientes.length > 0 && (
+        <input
+          type="text" value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="Buscar por código o nombre..."
+          style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 12 }}
+        />
+      )}
+
+      {cargando ? (
+        <div style={{ color: "#9AA7BD", fontSize: 13, textAlign: "center", padding: 24 }}>Cargando clientes...</div>
+      ) : clientes.length === 0 ? (
+        <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Todavía no hay clientes registrados.</div>
+      ) : clientesFiltrados.length === 0 ? (
+        <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Ningún cliente coincide con "{busqueda}".</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {clientesFiltrados.map((c) => {
+            const excluidoHoy = exclusionesHoy.has(c.id);
+            const editando = editandoClienteId === c.id;
+
+            if (editando) {
+              return (
+                <div key={c.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", border: "1px solid #F2B134" }}>
+                  <input type="text" value={formEdicion.codigo} onChange={(e) => setFormEdicion((f) => ({ ...f, codigo: e.target.value }))}
+                    style={{ flex: "1 1 140px", minWidth: 120, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }} />
+                  <input type="text" value={formEdicion.nombre} onChange={(e) => setFormEdicion((f) => ({ ...f, nombre: e.target.value }))}
+                    style={{ flex: "1 1 180px", minWidth: 140, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }} />
+                  <button className="btn" disabled={guardandoEdicion} onClick={() => guardarEdicionCliente(c)}>{guardandoEdicion ? "Guardando..." : "Guardar"}</button>
+                  <button className="btn-ghost" onClick={() => setEditandoClienteId(null)}>Cancelar</button>
+                </div>
+              );
+            }
+
+            return (
+              <div key={c.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 600 }}>
+                    <span className="mono" style={{ color: "#F2B134" }}>{c.codigo_cliente}</span>{c.cliente ? ` · ${c.cliente}` : ""}
+                  </div>
+                  <select value={c.ruta} onChange={(e) => cambiarRuta(c, e.target.value)} style={{ fontSize: 11, color: "#9AA7BD", padding: "3px 6px", marginTop: 2 }}>
+                    {listaRutas.map((r) => <option key={r} value={r}>{r}{nombresRutas?.[r] ? ` · ${nombresRutas[r]}` : ""}</option>)}
+                  </select>
+                </div>
+                <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => iniciarEdicionCliente(c)}>Editar</button>
+                <button className={c.prioridad ? "btn" : "btn-ghost"} style={{ fontSize: 11, background: c.prioridad ? "#F2B134" : undefined }} onClick={() => cambiarPrioridad(c, !c.prioridad)}>
+                  <Star size={12} style={{ verticalAlign: "-2px" }} /> {c.prioridad ? "PRIORITARIO" : "Normal"}
+                </button>
+                <select value={c.forma_pago_default || "EFECTIVO"} onChange={(e) => cambiarFormaPagoDefault(c, e.target.value)} style={{ fontSize: 11, fontWeight: 700, color: COLOR_FORMA_PAGO[c.forma_pago_default], padding: "6px 8px" }}>
+                  <option value="EFECTIVO">EFECTIVO</option>
+                  <option value="CREDITO">CRÉDITO</option>
+                  <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                </select>
+                <button className="btn-ghost" style={{ fontSize: 11, borderColor: excluidoHoy ? "#F2B134" : undefined, color: excluidoHoy ? "#F2B134" : undefined }} onClick={() => toggleNoFacturaHoy(c)}>
+                  <Ban size={12} style={{ verticalAlign: "-2px" }} /> {excluidoHoy ? "No factura HOY ✓" : "Marcar: no factura hoy"}
+                </button>
+                <button className="btn-ghost" onClick={() => eliminarCliente(c)}><Trash2 size={13} color="#FF6B6B" /></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
   return (
     <div>
@@ -207,7 +505,7 @@ function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
 }
 
 export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
-  const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes"
+  const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes" | "catalogo"
   const [tab, setTab] = useState("prioritario");
   const [filtroEstado, setFiltroEstado] = useState("PENDIENTE"); // "PENDIENTE" (ESPERA+OBSERVACION) | "FACTURADO"
   const [fechaDesde, setFechaDesde] = useState(hoyISO());
@@ -750,6 +1048,13 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
             </span>
           )}
         </button>
+        <button
+          className={vista === "catalogo" ? "btn" : "btn-ghost"}
+          style={{ flex: 1 }}
+          onClick={() => setVista("catalogo")}
+        >
+          CLIENTES
+        </button>
       </div>
 
       {vista === "mensajes" && (
@@ -759,6 +1064,10 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
           nuevosIds={nuevosMensajesIds}
           onMarcarVistos={marcarMensajesVistos}
         />
+      )}
+
+      {vista === "catalogo" && (
+        <ClientesAdminPanel listaRutas={RUTAS} nombresRutas={NOMBRES} />
       )}
 
       {vista === "clientes" && (
