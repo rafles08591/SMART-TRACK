@@ -97,14 +97,11 @@ export default function Login({ onLogin }) {
   const [clo, setClo] = useState(null);
   const [objetivo, setObjetivo] = useState(null); // { user, label, sub }
   const [pin, setPin] = useState("");
-  const [pinChars, setPinChars] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [activeKey, setActiveKey] = useState(null);
 
   const resetPin = useCallback(() => {
     setPin("");
-    setPinChars([]);
     setError("");
   }, []);
 
@@ -164,37 +161,28 @@ export default function Login({ onLogin }) {
         return;
       }
       onLogin?.(objetivo.user);
-    }, 300);
+    }, 150);
   }, [objetivo, onLogin, resetPin]);
 
-  const flashKey = useCallback((key) => {
-    setActiveKey(key);
-    setTimeout(() => setActiveKey((cur) => (cur === key ? null : cur)), 200);
-  }, []);
-
+  // Un solo cambio de estado por toque (nada de setTimeout encadenados
+  // para "revelar y luego ocultar" el dígito ni para el brillo del botón)
+  // — eso era lo que causaba el lag y que a veces no registrara el toque.
+  // El brillo al presionar ahora es puro CSS (:active), no JS.
   const pressDigit = useCallback((d) => {
     if (loading || pin.length >= PIN_LENGTH) return;
     setError("");
-    flashKey(d);
-    const idx = pin.length;
-    setPinChars((prev) => [...prev, { char: d, masked: false }]);
-    setTimeout(() => {
-      setPinChars((prev) => prev.map((c, i) => (i === idx ? { ...c, masked: true } : c)));
-    }, 350);
     setPin((prev) => {
       const next = (prev + d).slice(0, PIN_LENGTH);
       if (next.length === PIN_LENGTH) verify(next);
       return next;
     });
-  }, [loading, pin.length, flashKey, verify]);
+  }, [loading, pin.length, verify]);
 
   const pressDelete = useCallback(() => {
     if (loading) return;
-    flashKey("del");
     setPin((prev) => prev.slice(0, -1));
-    setPinChars((prev) => prev.slice(0, -1));
     setError("");
-  }, [loading, flashKey]);
+  }, [loading]);
 
   const backFromPin = useCallback(() => {
     resetPin(); setObjetivo(null);
@@ -218,13 +206,13 @@ export default function Login({ onLogin }) {
       color: COLOR.slate100, display: "flex", flexDirection: "column",
     }}>
       <style>{`
-        .pin-glow-btn:active { transform: scale(0.95); }
-        .pin-glow-btn:hover:not(:disabled) { border-color: ${COLOR.amber} !important; box-shadow: 0 0 16px ${COLOR.amber}55; }
-        .pin-list-btn:hover { border-color: #64748b !important; }
-        .pin-list-btn:active { transform: scale(0.98); }
+        .pin-glow-btn { -webkit-tap-highlight-color: transparent; touch-action: manipulation; will-change: transform; }
+        .pin-glow-btn:active { transform: scale(0.95); border-color: ${COLOR.amber} !important; box-shadow: 0 0 16px ${COLOR.amber}55; }
+        .pin-list-btn { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+        .pin-list-btn:active { transform: scale(0.98); border-color: #64748b !important; }
       `}</style>
-      <div style={{ position: "absolute", top: -128, left: -96, height: 320, width: 320, borderRadius: "50%", background: COLOR.amber, opacity: 0.2, filter: "blur(64px)", pointerEvents: "none" }} />
-      <div style={{ position: "absolute", bottom: -160, right: -64, height: 384, width: 384, borderRadius: "50%", background: COLOR.emerald, opacity: 0.2, filter: "blur(64px)", pointerEvents: "none" }} />
+      <div style={{ position: "absolute", top: -128, left: -96, height: 420, width: 420, borderRadius: "50%", background: `radial-gradient(circle, ${COLOR.amber}33 0%, ${COLOR.amber}00 70%)`, pointerEvents: "none" }} />
+      <div style={{ position: "absolute", bottom: -160, right: -64, height: 480, width: 480, borderRadius: "50%", background: `radial-gradient(circle, ${COLOR.emerald}33 0%, ${COLOR.emerald}00 70%)`, pointerEvents: "none" }} />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 24px", position: "relative", zIndex: 1 }}>
         <div style={{ width: "100%", maxWidth: 380 }}>
@@ -345,16 +333,16 @@ export default function Login({ onLogin }) {
             <div>
               <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 32, height: 32, alignItems: "center" }}>
                 {Array.from({ length: PIN_LENGTH }).map((_, i) => {
-                  const c = pinChars[i];
+                  const lleno = i < pin.length;
                   const colorActivo = error ? COLOR.rose : COLOR.amber;
                   return (
                     <div key={i} style={{
                       height: 36, width: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 18, fontFamily: "monospace", fontWeight: 700,
-                      borderBottom: `2px solid ${c ? colorActivo : COLOR.slate800}`,
-                      color: c ? colorActivo : "transparent",
+                      borderBottom: `2px solid ${lleno ? colorActivo : COLOR.slate800}`,
+                      color: lleno ? colorActivo : "transparent",
                     }}>
-                      {c ? (c.masked ? "*" : c.char) : "0"}
+                      {lleno ? "*" : "0"}
                     </div>
                   );
                 })}
@@ -376,10 +364,9 @@ export default function Login({ onLogin }) {
                     disabled={loading}
                     style={{
                       height: 64, borderRadius: "50%", background: COLOR.slate800,
-                      border: `1px solid ${activeKey === d ? COLOR.amber : COLOR.slate800}`,
-                      boxShadow: activeKey === d ? `0 0 16px ${COLOR.amber}55` : "none",
+                      border: `1px solid ${COLOR.slate800}`,
                       fontSize: 20, fontFamily: "monospace", fontWeight: 600,
-                      color: activeKey === d ? COLOR.amber : COLOR.slate100,
+                      color: COLOR.slate100,
                       opacity: loading ? 0.4 : 1, cursor: loading ? "default" : "pointer",
                     }}
                   >
@@ -395,19 +382,19 @@ export default function Login({ onLogin }) {
                   disabled={loading}
                   style={{
                     height: 64, borderRadius: "50%", background: COLOR.slate800,
-                    border: `1px solid ${activeKey === "0" ? COLOR.amber : COLOR.slate800}`,
-                    boxShadow: activeKey === "0" ? `0 0 16px ${COLOR.amber}55` : "none",
+                    border: `1px solid ${COLOR.slate800}`,
                     fontSize: 20, fontFamily: "monospace", fontWeight: 600,
-                    color: activeKey === "0" ? COLOR.amber : COLOR.slate100,
+                    color: COLOR.slate100,
                     opacity: loading ? 0.4 : 1, cursor: loading ? "default" : "pointer",
                   }}
                 >
                   0
                 </button>
                 <button
+                  className="pin-list-btn"
                   onClick={pressDelete}
                   disabled={loading}
-                  style={{ height: 64, borderRadius: "50%", background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: activeKey === "del" ? COLOR.rose : COLOR.slate400, opacity: loading ? 0.4 : 1, cursor: loading ? "default" : "pointer" }}
+                  style={{ height: 64, borderRadius: "50%", background: "none", border: "none", display: "flex", alignItems: "center", justifyContent: "center", color: COLOR.slate400, opacity: loading ? 0.4 : 1, cursor: loading ? "default" : "pointer" }}
                 >
                   <Delete size={20} />
                 </button>
