@@ -1513,6 +1513,49 @@ export default function App() {
     return [...mapa.values()];
   }
 
+  // Un producto que por sí solo (aunque no se repita) ya vale más de
+  // $2,000 (contando IVA + distribución) no se puede meter completo en un
+  // solo ticket. Como cada fila de ventas_facturas ahora vive completa en
+  // UN SOLO folio/parte (para que la numeración 1/2, 2/2... quede fija y
+  // no se mueva), la única forma de partirlo es ANTES de guardarlo: se
+  // parte en varias filas más chicas (mismo artículo, "pieza" 1, 2, 3...),
+  // cada una ya dentro del límite, para que cada una pueda ir a su propio
+  // ticket. Esto es distinto de "combinarLineasDuplicadas" (que junta) —
+  // aquí se hace lo contrario cuando hace falta.
+  const LIMITE_TICKET_PARTIR = 2000;
+  const COSTO_DISTRIBUCION_PARTIR = 2.78;
+  function partirLineasQueExcedenLimite(filas, limite) {
+    const resultado = [];
+    filas.forEach((fila) => {
+      const cajetillas = Number(fila.cajetillas) || 0;
+      const valorReal = Number(fila.monto || 0) + cajetillas * COSTO_DISTRIBUCION_PARTIR;
+      if (valorReal <= limite || cajetillas <= 0) {
+        resultado.push({ ...fila, pieza: 1 });
+        return;
+      }
+      const precioPorCajetillaReal = valorReal / cajetillas;
+      const cajetillasPorPieza = Math.max(1, Math.floor(limite / precioPorCajetillaReal));
+      let restantes = Math.round(cajetillas * 100) / 100;
+      let pieza = 0;
+      while (restantes > 0) {
+        pieza++;
+        const cajetillasPieza = Math.min(cajetillasPorPieza, restantes);
+        const proporcion = cajetillasPieza / cajetillas;
+        resultado.push({
+          ...fila,
+          cajetillas: Math.round(cajetillasPieza * 100) / 100,
+          monto: Math.round(fila.monto * proporcion * 100) / 100,
+          contado_monto: Math.round((fila.contado_monto || 0) * proporcion * 100) / 100,
+          credito_monto: Math.round((fila.credito_monto || 0) * proporcion * 100) / 100,
+          paquetes: Math.round((fila.paquetes || 0) * proporcion * 100) / 100,
+          pieza,
+        });
+        restantes = Math.round((restantes - cajetillasPieza) * 100) / 100;
+      }
+    });
+    return resultado;
+  }
+
   // ---- Folios de ticket persistentes ----
   // Se corre después de cada sincronización de facturas. Busca filas de
   // ventas_facturas que TODAVÍA no tengan folio asignado (ticket_folio
@@ -1761,7 +1804,12 @@ export default function App() {
 
       // Combina líneas repetidas (mismo cliente+producto+día) ANTES de
       // mandarlas — ver el porqué en el comentario de combinarLineasDuplicadas.
-      const filasCombinadas = combinarLineasDuplicadas(filasParaFacturar);
+      // Y de paso, parte cualquier línea que por sí sola ya valga más de
+      // $2,000 en varias "piezas" — ver partirLineasQueExcedenLimite.
+      const filasCombinadas = partirLineasQueExcedenLimite(
+        combinarLineasDuplicadas(filasParaFacturar),
+        LIMITE_TICKET_PARTIR
+      );
 
       // Se usa la función RPC upsert_ventas_facturas (ver SQL) en vez de
       // un upsert directo: así, si la fila ya existía, la RPC NO toca
