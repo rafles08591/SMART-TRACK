@@ -1513,6 +1513,138 @@ export default function App() {
     return [...mapa.values()];
   }
 
+  // ---- Folios de ticket persistentes ----
+  // Se corre después de cada sincronización de facturas. Busca filas de
+  // ventas_facturas que TODAVÍA no tengan folio asignado (ticket_folio
+  // IS NULL) y les asigna uno — reutilizando un ticket ya existente de ese
+  // mismo cliente/día si todavía tiene espacio y NO está facturado, o
+  // abriendo uno nuevo si no cabe. Las filas que YA tienen folio nunca se
+  // tocan (por eso la secuencia 1/2, 2/2... ya no se mueve una vez asignada).
+  const COSTO_DISTRIBUCION_FOLIO = 2.78;
+  const LIMITE_TICKET_FOLIO = 2000;
+
+  function valorRealDeFila(f) {
+    return Number(f.monto || 0) + Number(f.cajetillas || 0) * COSTO_DISTRIBUCION_FOLIO;
+  }
+
+  // Empaqueta (first-fit decreasing, por FILA completa — no se parte
+  // ninguna fila entre dos folios distintos, porque el folio vive en la
+  // fila) las filas nuevas de un mismo cliente/día en la menor cantidad de
+  // tickets nuevos posible, respetando $2,000 por ticket.
+  function empaquetarFilasNuevas(filas, limite) {
+    const ordenadas = [...filas].sort((a, b) => valorRealDeFila(b) - valorRealDeFila(a));
+    const bins = [];
+    ordenadas.forEach((f) => {
+      const valor = valorRealDeFila(f);
+      let destino = bins.find((b) => b.suma + valor <= limite);
+      if (!destino) { destino = { filas: [], suma: 0 }; bins.push(destino); }
+      destino.filas.push(f);
+      destino.suma += valor;
+    });
+    return bins;
+  }
+
+  async function asignarFoliosTickets() {
+    try {
+      const { data: filas, error: err } = await supabase
+        .from("ventas_facturas")
+        .select("id, ruta, codigo_cliente, fecha, articulo, monto, cajetillas, forma_pago, estado, ticket_folio, ticket_parte, ticket_de")
+        .order("creado_en", { ascending: true });
+      if (err) throw err;
+      if (!filas || filas.length === 0) return;
+
+      const claveGrupo = (f) => `${f.ruta}|${normalizarCodigo(f.codigo_cliente)}|${f.fecha}|${f.articulo === "OTC" ? "OTC" : "PROD"}`;
+
+      const grupos = new Map();
+      filas.forEach((f) => {
+        const k = claveGrupo(f);
+        if (!grupos.has(k)) grupos.set(k, []);
+        grupos.get(k).push(f);
+      });
+
+      const actualizaciones = []; // { id, ticket_folio, ticket_parte, ticket_de }
+
+      for (const filasGrupo of grupos.values()) {
+        const sinFolio = filasGrupo.filter((f) => f.ticket_folio == null);
+        if (sinFolio.length === 0) continue; // ya está todo asignado, no se toca
+
+        const conFolio = filasGrupo.filter((f) => f.ticket_folio != null);
+        const esOtc = filasGrupo[0].articulo === "OTC";
+        const esEfectivo = (filasGrupo[0].forma_pago || "EFECTIVO") === "EFECTIVO";
+        const necesitaDividir = !esOtc && esEfectivo;
+
+        if (!necesitaDividir || conFolio.length === 0) {
+          // Caso simple: no se divide (OTC, o no es efectivo, o pasa el
+          // límite pero no había nada previo) -> folio nuevo para TODO lo
+          // que falte, en un solo ticket (parte 1 de 1), salvo que si
+          // necesita dividir por primera vez, sí se reparte.
+          if (necesitaDividir) {
+            const { data: folioRow } = await supabase.rpc("nextval_folio_ticket");
+            const folio = folioRow;
+            const bins = empaquetarFilasNuevas(sinFolio, LIMITE_TICKET_FOLIO);
+            bins.forEach((bin, i) => {
+              bin.filas.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folio, ticket_parte: i + 1, ticket_de: bins.length }));
+            });
+          } else {
+            const { data: folioRow } = await supabase.rpc("nextval_folio_ticket");
+            sinFolio.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folioRow, ticket_parte: 1, ticket_de: 1 }));
+          }
+          continue;
+        }
+
+        // Ya había folio(s) de este cliente/día: intenta meter cada fila
+        // nueva en la parte más reciente que NO esté facturada y todavía
+        // tenga espacio; si no cabe en ninguna, abre parte(s) nueva(s).
+        const folioExistente = conFolio[0].ticket_folio;
+        const partesActuales = new Map(); // parte -> { filas, suma, facturada }
+        conFolio.forEach((f) => {
+          const p = f.ticket_parte || 1;
+          if (!partesActuales.has(p)) partesActuales.set(p, { filas: [], suma: 0, facturada: false });
+          const entry = partesActuales.get(p);
+          entry.filas.push(f);
+          entry.suma += valorRealDeFila(f);
+          if (f.estado === "FACTURADO") entry.facturada = true;
+        });
+
+        let maxParte = Math.max(...[...partesActuales.keys()]);
+        const restantesPorAsignar = [];
+        for (const f of sinFolio) {
+          const valor = valorRealDeFila(f);
+          let colocada = false;
+          for (const [numParte, entry] of partesActuales) {
+            if (!entry.facturada && entry.suma + valor <= LIMITE_TICKET_FOLIO) {
+              actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: numParte, ticket_de: null }); // ticket_de se corrige después
+              entry.suma += valor;
+              colocada = true;
+              break;
+            }
+          }
+          if (!colocada) restantesPorAsignar.push(f);
+        }
+        if (restantesPorAsignar.length > 0) {
+          const bins = empaquetarFilasNuevas(restantesPorAsignar, LIMITE_TICKET_FOLIO);
+          bins.forEach((bin) => {
+            maxParte += 1;
+            bin.filas.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: maxParte, ticket_de: null }));
+          });
+        }
+        // Recalcula ticket_de (total de partes) para TODO el folio, incluidas
+        // las filas que ya tenía antes (su parte no cambia, solo el conteo total).
+        const totalPartesFinal = maxParte;
+        conFolio.forEach((f) => {
+          if (f.ticket_de !== totalPartesFinal) actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: f.ticket_parte, ticket_de: totalPartesFinal });
+        });
+        actualizaciones.forEach((a) => { if (a.ticket_folio === folioExistente && a.ticket_de === null) a.ticket_de = totalPartesFinal; });
+      }
+
+      for (const a of actualizaciones) {
+        await supabase.from("ventas_facturas").update({ ticket_folio: a.ticket_folio, ticket_parte: a.ticket_parte, ticket_de: a.ticket_de }).eq("id", a.id);
+      }
+    } catch (err) {
+      console.error("Error asignando folios de ticket:", err);
+    }
+  }
+
   async function sincronizarVentasFacturas(filasCrudas) {
     try {
       const lineas = extraerLineasFacturables(filasCrudas);
@@ -1671,6 +1803,9 @@ export default function App() {
     }
     await persistParcialFresco(() => ({ avanceDia: registros }));
     const resultadoFacturas = await sincronizarVentasFacturas(filas);
+    if (resultadoFacturas && resultadoFacturas.ok !== false && resultadoFacturas.guardadas > 0) {
+      await asignarFoliosTickets();
+    }
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     if (resultadoFacturas && resultadoFacturas.ok === false) {
       setAvanceDiaStatus(`Avance cargado: ${registros.length} registros para ${fechas.join(", ")}. ⚠️ FACTURAS: ${resultadoFacturas.error}`);
@@ -2169,8 +2304,9 @@ export default function App() {
       )}
 
       {role === "admin" && (
-        <FacturasAdminView onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
+        <FacturasAdminView onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} asignarFoliosTickets={asignarFoliosTickets} />
       )}
     </div>
   );
 }
+
