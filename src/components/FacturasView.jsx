@@ -71,16 +71,31 @@ export default function FacturasView({ rol, puesto, rutaActual, identidad, nombr
   // Se carga una sola vez al entrar a la pantalla. Solo hace falta el
   // código — el nombre y la ruta se rellenan solos si el código ya existe
   // en clientes_ruta (tanto para dar de alta como para única ocasión).
+  //
+  // OJO: Supabase regresa como mucho 1,000 filas por consulta si no le
+  // pides más — con muchos clientes activos, algunos se quedaban fuera sin
+  // avisar (por eso "dejó de jalar" para algunos códigos). Aquí se pide
+  // por páginas de 1,000 hasta traer TODAS las filas, sin importar cuántas
+  // sean.
   const [directorioClientes, setDirectorioClientes] = useState(new Map());
   useEffect(() => {
     (async () => {
-      const { data, error: err } = await supabase
-        .from("clientes_ruta")
-        .select("codigo_cliente, nombre, ruta")
-        .eq("activo", true);
-      if (err) { console.error("Error cargando clientes_ruta:", err); return; }
+      const TAMANO_PAGINA = 1000;
+      let desde = 0;
+      let todas = [];
+      while (true) {
+        const { data, error: err } = await supabase
+          .from("clientes_ruta")
+          .select("codigo_cliente, nombre, ruta")
+          .eq("activo", true)
+          .range(desde, desde + TAMANO_PAGINA - 1);
+        if (err) { console.error("Error cargando clientes_ruta:", err); break; }
+        todas = todas.concat(data || []);
+        if (!data || data.length < TAMANO_PAGINA) break; // ya no hay más páginas
+        desde += TAMANO_PAGINA;
+      }
       const mapa = new Map();
-      (data || []).forEach((c) => {
+      todas.forEach((c) => {
         const norm = normalizarCodigo(c.codigo_cliente);
         // Si el mismo código aparece varias veces (ej. distintos días de
         // visita), se queda con la primera coincidencia — el nombre/ruta
