@@ -4,7 +4,6 @@ import {
   Fingerprint, Delete, LoaderCircle, Crown, Users, Wallet, Route, ChevronLeft, MapPin, Settings,
 } from "lucide-react";
 import { USERS, NOMBRES, RUTAS } from "../constants";
-
 // ============================================================
 // Diseño de PIN-pad (adaptado del mock que se compartió) — convertido de
 // clases de Tailwind a estilos en línea, porque este proyecto no tiene
@@ -14,7 +13,6 @@ import { USERS, NOMBRES, RUTAS } from "../constants";
 // constants.js, así que cualquier cambio de contraseña ahí se refleja aquí
 // solo, sin tocar este archivo.
 // ============================================================
-
 const COLOR = {
   fondoDe: "#0f172a",
   fondoA: "#020617",
@@ -29,28 +27,23 @@ const COLOR = {
   slate300: "#cbd5e1",
   slate100: "#f1f5f9",
 };
-
 function userDe(username) {
   return USERS.find((u) => u.username === username);
 }
-
 // Rutas: código corto para el botón ("J201") + el username real completo
 // ("RUTA J201") para el login.
 const RUTAS_BOTONES = RUTAS.map((full) => ({ full, corto: full.replace("RUTA ", "") }));
 const RUTA_PASSWORD = userDe(RUTAS[0])?.password || "1234";
-
 const GERENTE_USER = userDe("GERENTE");
 const SUPERVISOR1_USER = userDe("SUPERVISOR-1");
 const SUPERVISOR2_USER = userDe("SUPERVISOR-2");
 const LIQUIDACION_USER = userDe("LIQUIDACION- SULEMA PONCE");
 const ADMIN_USER = userDe("ADMIN");
-
 const STAFF_LISTA = [
   SUPERVISOR2_USER && { user: SUPERVISOR2_USER, nombre: NOMBRES["SUPERVISOR-2"] || "Supervisor 2", rolLabel: "Supervisor 2", Icon: Users },
   LIQUIDACION_USER && { user: LIQUIDACION_USER, nombre: NOMBRES["LIQUIDACION- SULEMA PONCE"] || "Liquidación", rolLabel: "Liquidación", Icon: Wallet },
   ADMIN_USER && { user: ADMIN_USER, nombre: NOMBRES["ADMIN"] || "Admin", rolLabel: "Admin", Icon: Settings },
 ].filter(Boolean);
-
 // Merchandising: se agrupan por CLO tomando directamente los usuarios reales
 // con role "merch" de USERS (agrupados por su password, que es distinto por
 // CLO) — así, si mañana se agrega o quita un MERCH en constants.js, aquí se
@@ -70,9 +63,7 @@ const CLOS = Object.keys(MERCH_POR_CLO).map((pass) => ({
   nombre: NOMBRE_CLO_POR_PASSWORD[pass] || pass,
   usuarios: MERCH_POR_CLO[pass],
 }));
-
 const PIN_LENGTH = 4;
-
 function estiloBotonCuadro(activo, colorActivo) {
   return {
     aspectRatio: "1 / 1",
@@ -89,7 +80,6 @@ function estiloBotonCuadro(activo, colorActivo) {
     color: COLOR.slate100,
   };
 }
-
 export default function Login({ onLogin }) {
   // Fuerza el viewport correcto (sin importar lo que tenga index.html):
   // en varios navegadores móviles, sin "maximum-scale=1, user-scalable=no"
@@ -105,8 +95,6 @@ export default function Login({ onLogin }) {
     }
     meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
   }, []);
-
-
   // step: 'root' | 'staff' | 'clo' | 'merch' | 'pin'
   const [step, setStep] = useState("root");
   const [origin, setOrigin] = useState("root");
@@ -115,57 +103,46 @@ export default function Login({ onLogin }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
   const resetPin = useCallback(() => {
     setPin("");
     setError("");
   }, []);
-
   const goRoot = useCallback(() => {
     setStep("root"); setClo(null); setObjetivo(null); resetPin();
   }, [resetPin]);
-
   const goStaff = useCallback(() => {
     setStep("staff"); setObjetivo(null); resetPin();
   }, [resetPin]);
-
   const goClo = useCallback(() => {
     setStep("clo"); setObjetivo(null); resetPin();
   }, [resetPin]);
-
   const pickRuta = useCallback((full, corto) => {
     const user = userDe(full);
     if (!user) return;
     setObjetivo({ user, label: corto, sub: NOMBRES[full] || "Ruta de venta" });
     setOrigin("root"); setStep("pin"); resetPin();
   }, [resetPin]);
-
   const pickGerente = useCallback(() => {
     if (!GERENTE_USER) return;
     setObjetivo({ user: GERENTE_USER, label: NOMBRES["GERENTE"] || "Gerente", sub: "Gerente" });
     setOrigin("root"); setStep("pin"); resetPin();
   }, [resetPin]);
-
   const pickSupervisor1 = useCallback(() => {
     if (!SUPERVISOR1_USER) return;
     setObjetivo({ user: SUPERVISOR1_USER, label: NOMBRES["SUPERVISOR-1"] || "Supervisor 1", sub: "Supervisor 1" });
     setOrigin("root"); setStep("pin"); resetPin();
   }, [resetPin]);
-
   const pickStaff = useCallback((s) => {
     setObjetivo({ user: s.user, label: s.nombre, sub: s.rolLabel });
     setOrigin("staff"); setStep("pin"); resetPin();
   }, [resetPin]);
-
   const pickClo = useCallback((c) => {
     setClo(c); setStep("merch"); resetPin();
   }, [resetPin]);
-
   const pickMerch = useCallback((user) => {
     setObjetivo({ user, label: user.username, sub: `CLO ${clo.nombre}` });
     setOrigin("merch"); setStep("pin"); resetPin();
   }, [clo, resetPin]);
-
   const verify = useCallback((pinValue) => {
     setLoading(true);
     setError("");
@@ -179,7 +156,6 @@ export default function Login({ onLogin }) {
       onLogin?.(objetivo.user);
     }, 150);
   }, [objetivo, onLogin, resetPin]);
-
   // Un solo cambio de estado por toque (nada de setTimeout encadenados
   // para "revelar y luego ocultar" el dígito ni para el brillo del botón)
   // — eso era lo que causaba el lag y que a veces no registrara el toque.
@@ -193,19 +169,43 @@ export default function Login({ onLogin }) {
       return next;
     });
   }, [loading, pin.length, verify]);
-
   const pressDelete = useCallback(() => {
     if (loading) return;
     setPin((prev) => prev.slice(0, -1));
     setError("");
   }, [loading]);
-
   const backFromPin = useCallback(() => {
     resetPin(); setObjetivo(null);
     if (origin === "merch") { setStep("merch"); return; }
     if (origin === "staff") { setStep("staff"); return; }
     setStep("root");
   }, [origin, resetPin]);
+
+  // Teclado físico de la computadora: números 0-9, Backspace/Delete y Escape.
+  // Solo activo cuando se está en la pantalla de PIN.
+  useEffect(() => {
+    if (step !== "pin") return;
+    function onKeyDown(e) {
+      if (loading) return;
+      // Evitar que el navegador haga otras cosas (ej. Backspace = atrás)
+      if (e.key === "Backspace" || e.key === "Delete" || e.key === "Escape" || /^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+      }
+      if (/^[0-9]$/.test(e.key)) {
+        pressDigit(e.key);
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        pressDelete();
+        return;
+      }
+      if (e.key === "Escape") {
+        backFromPin();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [step, loading, pressDigit, pressDelete, backFromPin]);
 
   const tituloPorPaso = {
     root: "Iniciar sesión",
@@ -214,7 +214,6 @@ export default function Login({ onLogin }) {
     merch: `CLO ${clo?.nombre || ""}`,
     pin: objetivo?.label,
   }[step];
-
   return (
     <div style={{
       minHeight: "100vh", position: "relative", overflow: "hidden",
@@ -226,10 +225,10 @@ export default function Login({ onLogin }) {
         .pin-glow-btn:active { transform: scale(0.95); border-color: ${COLOR.amber} !important; box-shadow: 0 0 16px ${COLOR.amber}55; }
         .pin-list-btn { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .pin-list-btn:active { transform: scale(0.98); border-color: #64748b !important; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
       <div style={{ position: "absolute", top: -128, left: -96, height: 420, width: 420, borderRadius: "50%", background: `radial-gradient(circle, ${COLOR.amber}33 0%, ${COLOR.amber}00 70%)`, pointerEvents: "none" }} />
       <div style={{ position: "absolute", bottom: -160, right: -64, height: 480, width: 480, borderRadius: "50%", background: `radial-gradient(circle, ${COLOR.emerald}33 0%, ${COLOR.emerald}00 70%)`, pointerEvents: "none" }} />
-
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "40px 24px", position: "relative", zIndex: 1 }}>
         <div style={{ width: "100%", maxWidth: 380 }}>
           <div style={{ marginBottom: 32, textAlign: "center" }}>
@@ -244,7 +243,6 @@ export default function Login({ onLogin }) {
               <p style={{ fontSize: 14, color: COLOR.slate400, marginTop: 4 }}>{objetivo?.sub} · ingresa tu PIN</p>
             )}
           </div>
-
           {step === "root" && (
             <div>
               <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 2, color: COLOR.slate400, fontFamily: "monospace", marginBottom: 10 }}>Rutas</p>
@@ -268,7 +266,6 @@ export default function Login({ onLogin }) {
                   </button>
                 )}
               </div>
-
               <div style={{ paddingTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <button
                   onClick={goStaff}
@@ -285,7 +282,6 @@ export default function Login({ onLogin }) {
               </div>
             </div>
           )}
-
           {step === "staff" && (
             <div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
@@ -311,7 +307,6 @@ export default function Login({ onLogin }) {
               </button>
             </div>
           )}
-
           {step === "clo" && (
             <div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -328,7 +323,6 @@ export default function Login({ onLogin }) {
               </button>
             </div>
           )}
-
           {step === "merch" && clo && (
             <div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
@@ -344,7 +338,6 @@ export default function Login({ onLogin }) {
               </button>
             </div>
           )}
-
           {step === "pin" && (
             <div>
               <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 32, height: 32, alignItems: "center" }}>
@@ -363,14 +356,12 @@ export default function Login({ onLogin }) {
                   );
                 })}
               </div>
-
               {error && <p style={{ textAlign: "center", color: COLOR.rose, fontSize: 14, marginBottom: 16, fontWeight: 600 }}>{error}</p>}
               {loading && (
                 <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
                   <LoaderCircle size={18} color={COLOR.amber} style={{ animation: "spin 1s linear infinite" }} />
                 </div>
               )}
-
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
                 {["1","2","3","4","5","6","7","8","9"].map((d) => (
                   <button
@@ -415,11 +406,13 @@ export default function Login({ onLogin }) {
                   <Delete size={20} />
                 </button>
               </div>
+              <p style={{ textAlign: "center", fontSize: 11, color: COLOR.slate400, marginTop: 16 }}>
+                También puedes usar el teclado: 0-9 · ⌫ borrar · Esc cancelar
+              </p>
             </div>
           )}
         </div>
       </div>
-
       <p style={{ textAlign: "center", fontSize: 10, color: "#475569", fontFamily: "monospace", paddingBottom: 24, letterSpacing: 3, position: "relative", zIndex: 1 }}>
         {CLOS.map((c) => c.nombre).join(" · ")}
       </p>
