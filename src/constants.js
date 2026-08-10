@@ -18,7 +18,7 @@ export const NOMBRES = {
   "SUPERVISOR-2": "Modesto Chavarín",
   "GERENTE": "Rafael Gallardo",
   "LIQUIDACION- SULEMA PONCE": "Sulema Ponce",
-  "ADMIN": "Facturación",
+  "ADMIN": "Ceci Brambilia",
 };
 
 export const OBJETIVO_TABS = [
@@ -30,6 +30,7 @@ export const OBJETIVO_TABS = [
   { key: "cuponera", label: "CUPONERA", unit: "special" },
   { key: "tiempos", label: "TIEMPOS", unit: "special" },
   { key: "unidades", label: "UNIDADES", unit: "special" },
+  { key: "km", label: "KM", unit: "special" },
   { key: "tepic", label: "TEPIC", unit: "special" },
   { key: "rutas", label: "RUTAS", unit: "special" },
   { key: "actividades_dia", label: "ACTIVIDADES DÍA", unit: "special" },
