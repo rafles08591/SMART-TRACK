@@ -7,17 +7,46 @@ import { supabase } from "../supabaseClient";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 
+// Normaliza nombre de ruta para comparar:
+// "RUTA J201", "J201", "ruta j201" → "j201"
+function normalizarRuta(nombre) {
+  return String(nombre || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^ruta\s+/i, "")
+    .replace(/\s+/g, " ");
+}
+
+// Normaliza código de artículo: trim + mayúsculas, sin espacios.
+function normalizarCodigoArticulo(codigo) {
+  return String(codigo || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
 function otcEnRango(data, rally, nombreRuta, desde, hasta) {
-  const codigos = rally.codigosParticipantes || [];
+  const codigosRaw = rally.codigosParticipantes || [];
+  const codigos = codigosRaw.map(normalizarCodigoArticulo).filter(Boolean);
   const enPiezas = rally.unidad === "piezas";
+  const rutaNorm = normalizarRuta(nombreRuta);
+
   return (data.otcDia || [])
-    .filter((r) =>
-      r.vendedor === nombreRuta
-      && (!desde || r.fecha >= desde)
-      && (!hasta || r.fecha <= hasta)
-      && (codigos.length === 0 || codigos.includes(r.codigoArticulo))
-    )
-    .reduce((s, r) => s + (enPiezas ? (Number(r.unidadesVendidas) || 0) : (Number(r.monto) || 0)), 0);
+    .filter((r) => {
+      // Match de ruta tolerante (con o sin prefijo "RUTA ", mayúsculas, espacios)
+      if (normalizarRuta(r.vendedor) !== rutaNorm) return false;
+      if (desde && r.fecha < desde) return false;
+      if (hasta && r.fecha > hasta) return false;
+      // Si hay códigos seleccionados, solo sumar esos. Si la lista está vacía, suma TODO el OTC.
+      if (codigos.length > 0) {
+        const cod = normalizarCodigoArticulo(r.codigoArticulo);
+        if (!cod || !codigos.includes(cod)) return false;
+      }
+      return true;
+    })
+    .reduce((s, r) => {
+      // Piezas → Unidades<BR>Vendidas (campo unidadesVendidas)
+      // Dinero → TOTAL $ (campo monto)
+      if (enPiezas) return s + (Number(r.unidadesVendidas) || 0);
+      return s + (Number(r.monto) || 0);
+    }, 0);
 }
 
 function calcularAvanceRallyRuta(data, rally, nombreRuta) {
@@ -80,7 +109,6 @@ function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
   });
   const cumplioDiaTotal = mostrarObjetivo && sumaObjDia > 0 && sumaAvanceDia >= sumaObjDia;
   const cumplioFinalTotal = mostrarObjetivo && sumaObjFinal > 0 && sumaAvanceTotal >= sumaObjFinal;
-
   return (
     <div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
@@ -164,7 +192,6 @@ function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
             Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
           </div>
         </div>
-
         {rol === "vendedor" ? (
           <ProgresoRallyRuta nombreRuta={vendedorActual} rally={rally} data={data} />
         ) : (
@@ -176,7 +203,6 @@ function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
           />
         )}
       </div>
-
       {esGerente && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
           <BotonGuardarImagen
@@ -193,7 +219,6 @@ function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
 function rallyVacio() {
   return { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero", exclusivoSupervisor1: false };
 }
-
 function generarIdRally() {
   return "rally_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
 }
@@ -202,14 +227,14 @@ function generarIdRally() {
  * Pestaña RALLY OTC — visible para todos los roles. Soporta VARIOS rallies
  * corriendo al mismo tiempo (antes solo dejaba tener uno).
  * - Gerente: puede crear cuantos rallies quiera, editar cada uno, activarlo
- *   o desactivarlo por separado, y borrarlo. También puede guardar/descargar
- *   una imagen del avance de cada rally.
+ * o desactivarlo por separado, y borrarlo. También puede guardar/descargar
+ * una imagen del avance de cada rally.
  * - Vendedor: ve una tarjeta de progreso por cada rally ACTIVO en el que su
- *   ruta participa (puede ser ninguno, uno, o varios a la vez).
+ * ruta participa (puede ser ninguno, uno, o varios a la vez).
  * - Supervisor-1 / Gerente: ven el avance agregado del equipo de cada rally
- *   activo, contra la suma de los objetivos de sus rutas participantes.
+ * activo, contra la suma de los objetivos de sus rutas participantes.
  * - Supervisor-2: ve el avance agregado de cada rally activo, sin objetivo
- *   (solo informativo).
+ * (solo informativo).
  */
 export default function RallyOtcView({ data, persist, persistFresco, puesto, rol, vendedorActual, revisorNombre }) {
   // Compatibilidad con la versión vieja (un solo rally guardado en
@@ -229,7 +254,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
   const [subiendoImagen, setSubiendoImagen] = useState(false);
   const [nuevoCodigoTexto, setNuevoCodigoTexto] = useState("");
   const fileRef = useRef(null);
-
   // Solo de referencia (no se usan para armar botones): códigos que ya
   // aparecieron en archivos de OTC del día subidos, por si al gerente le
   // sirve de guía al capturar los suyos a mano.
@@ -239,7 +263,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
     setForm({ ...rallyVacio(), id: null });
     setNuevoCodigoTexto("");
   }
-
   function iniciarEdicion(rally) {
     setForm({
       id: rally.id,
@@ -255,7 +278,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
     });
     setNuevoCodigoTexto("");
   }
-
   function toggleRuta(nombreRuta) {
     setForm((f) => {
       const yaEsta = f.rutasParticipantes.includes(nombreRuta);
@@ -265,22 +287,18 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
       return { ...f, rutasParticipantes, objetivos };
     });
   }
-
   function agregarCodigoManual() {
     const codigo = nuevoCodigoTexto.trim();
     if (!codigo) return;
     setForm((f) => (f.codigosParticipantes.includes(codigo) ? f : { ...f, codigosParticipantes: [...f.codigosParticipantes, codigo] }));
     setNuevoCodigoTexto("");
   }
-
   function quitarCodigoManual(codigo) {
     setForm((f) => ({ ...f, codigosParticipantes: f.codigosParticipantes.filter((c) => c !== codigo) }));
   }
-
   function actualizarObjetivo(nombreRuta, campo, valor) {
     setForm((f) => ({ ...f, objetivos: { ...f.objetivos, [nombreRuta]: { ...(f.objetivos[nombreRuta] || {}), [campo]: Number(valor) || 0 } } }));
   }
-
   async function subirImagenRally(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -304,7 +322,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
       setSubiendoImagen(false);
     }
   }
-
   // Guarda la lista completa de rallies, siempre partiendo de la más
   // reciente en Supabase (por si otro gerente estaba editando al mismo
   // tiempo). "calcularNuevaLista" recibe la lista actual y regresa la nueva.
@@ -314,7 +331,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
       return { rallyOtcs: calcularNuevaLista(listaActual), rallyOtc: null };
     });
   }
-
   function guardarRally(activo) {
     const rallyGuardado = {
       id: form.id || generarIdRally(),
@@ -335,17 +351,14 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
     });
     setForm(null);
   }
-
   function toggleActivoRally(rallyId, nuevoActivo) {
     guardarListaRallies((lista) => lista.map((r) => (r.id === rallyId ? { ...r, activo: nuevoActivo } : r)));
   }
-
   function eliminarRally(rallyId) {
     const ok = window.confirm("¿Borrar este rally? Esta acción no se puede deshacer.");
     if (!ok) return;
     guardarListaRallies((lista) => lista.filter((r) => r.id !== rallyId));
   }
-
   const ralliesActivos = rallies.filter((r) => r.activo);
   // Vendedor: NUNCA ve los rallies marcados "exclusivo de Supervisor-1" —
   // ni siquiera su propio avance individual. Son de seguimiento interno
@@ -364,7 +377,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
   return (
     <div>
       <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>RALLY OTC</div>
-
       {puedeAdministrarRallies && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
@@ -377,11 +389,9 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
               </button>
             )}
           </div>
-
           {!form && ralliesVisiblesParaAdministrar.length === 0 && (
             <div style={{ fontSize: 12, color: "#9AA7BD" }}>Todavía no has configurado ningún rally.</div>
           )}
-
           {!form && ralliesVisiblesParaAdministrar.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {ralliesVisiblesParaAdministrar.map((r) => (
@@ -409,7 +419,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
               ))}
             </div>
           )}
-
           {form && (
             <div>
               <input
@@ -436,7 +445,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                   <input type="date" value={form.fechaFin || ""} onChange={(e) => setForm((f) => ({ ...f, fechaFin: e.target.value }))} style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px" }} />
                 </div>
               </div>
-
               <div style={{ marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>RUTAS PARTICIPANTES</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -447,7 +455,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                   ))}
                 </div>
               </div>
-
               <div style={{ marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>UNIDAD DEL RALLY</div>
                 <div style={{ display: "flex", gap: 8 }}>
@@ -459,7 +466,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                   </button>
                 </div>
               </div>
-
               <div style={{ marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
                   CÓDIGOS DE ARTÍCULO QUE SE SUMAN (OTC)
@@ -477,7 +483,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                     <Plus size={14} style={{ verticalAlign: "-2px" }} /> Agregar
                   </button>
                 </div>
-
                 {form.codigosParticipantes.length === 0 ? (
                   <div style={{ fontSize: 12, color: "#9AA7BD" }}>
                     No has agregado ningún código todavía — si no agregas ninguno, se suma TODO el OTC sin filtrar.
@@ -494,14 +499,12 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                     ))}
                   </div>
                 )}
-
                 {codigosVistosEnOtc.length > 0 && (
                   <div style={{ fontSize: 11, color: "#5b6478", marginTop: 8 }}>
                     Códigos vistos en tus archivos de OTC ya subidos (por si sirve de referencia): {codigosVistosEnOtc.join(", ")}
                   </div>
                 )}
               </div>
-
               {form.rutasParticipantes.length > 0 && (
                 <div style={{ marginBottom: 10 }}>
                   <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>OBJETIVOS POR RUTA ({form.unidad === "piezas" ? "PZ" : "$"})</div>
@@ -522,7 +525,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                   ))}
                 </div>
               )}
-
               <div style={{ marginBottom: 10 }}>
                 <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>IMAGEN ALUSIVA AL RALLY</div>
                 <button className="btn" onClick={() => fileRef.current?.click()} disabled={subiendoImagen}>
@@ -531,7 +533,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
                 <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={subirImagenRally} />
                 {form.imagen && <img src={form.imagen} alt="Rally" style={{ maxWidth: 200, display: "block", marginTop: 8, borderRadius: 8 }} />}
               </div>
-
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="btn-ghost" onClick={() => setForm(null)}>Cancelar</button>
                 <button className="btn-ghost" onClick={() => guardarRally(false)}>Guardar sin activar</button>
@@ -541,7 +542,6 @@ export default function RallyOtcView({ data, persist, persistFresco, puesto, rol
           )}
         </div>
       )}
-
       {ralliesParaMostrar.length === 0 ? (
         <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
           {rol === "vendedor" ? "Tu ruta no participa en ningún rally activo por el momento." : "No hay ningún Rally OTC activo en este momento."}
