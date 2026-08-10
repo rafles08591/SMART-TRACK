@@ -977,7 +977,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
   }
 
   return (
-    <div style={{ maxWidth: 920, margin: "0 auto", padding: "24px 16px 60px" }}>
+    <div style={{ maxWidth: 920, width: "100%", boxSizing: "border-box", margin: "0 auto", padding: "24px 16px 60px", overflowX: "hidden" }}>
       <style>{`
         @keyframes parpadeoTabPrioritario {
           0%, 100% { box-shadow: 0 0 0 0 rgba(255,215,0,0.85); background-color: rgba(255,215,0,0.15); }
@@ -998,12 +998,12 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         .tab-parpadeo-mensaje { animation: parpadeoTabMensaje 0.9s ease-in-out infinite; border: 2px solid #FF8C00 !important; }
       `}</style>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 8 }}>
-        <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0 }}>
           <h1 className="display" style={{ fontSize: 24, margin: 0 }}>FACTURAS</h1>
           <div style={{ fontSize: 12, color: "#9AA7BD" }}>Panel de facturación · ADMIN</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn-ghost" onClick={cargar} disabled={cargando}>
             <RefreshCw size={14} style={{ verticalAlign: "-2px", animation: cargando ? "spin 1s linear infinite" : "none" }} /> {cargando ? "..." : "Refrescar"}
           </button>
@@ -1011,10 +1011,10 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <button
           className={`${vista === "clientes" && tab === "prioritario" ? "btn" : "btn-ghost"} ${hayNuevasPrioritarias ? "tab-parpadeo-prioritario" : ""}`}
-          style={{ flex: 1, position: "relative" }}
+          style={{ flex: "1 1 45%", minWidth: 0, position: "relative" }}
           onClick={() => { setVista("clientes"); setTab("prioritario"); }}
         >
           <Star size={13} style={{ verticalAlign: "-2px" }} /> PRIORITARIO
@@ -1026,7 +1026,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         </button>
         <button
           className={`${vista === "clientes" && tab === "normal" ? "btn" : "btn-ghost"} ${hayNuevasNormal ? "tab-parpadeo-normal" : ""}`}
-          style={{ flex: 1, position: "relative" }}
+          style={{ flex: "1 1 45%", minWidth: 0, position: "relative" }}
           onClick={() => { setVista("clientes"); setTab("normal"); }}
         >
           NORMAL
@@ -1038,7 +1038,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         </button>
         <button
           className={`${vista === "mensajes" ? "btn" : "btn-ghost"} ${nuevosMensajesIds.size > 0 ? "tab-parpadeo-mensaje" : ""}`}
-          style={{ flex: 1, position: "relative" }}
+          style={{ flex: "1 1 45%", minWidth: 0, position: "relative" }}
           onClick={() => setVista("mensajes")}
         >
           <MessageSquare size={13} style={{ verticalAlign: "-2px" }} /> MENSAJES
@@ -1050,7 +1050,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         </button>
         <button
           className={vista === "catalogo" ? "btn" : "btn-ghost"}
-          style={{ flex: 1 }}
+          style={{ flex: "1 1 45%", minWidth: 0 }}
           onClick={() => setVista("catalogo")}
         >
           CLIENTES
