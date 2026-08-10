@@ -137,9 +137,6 @@ function todasCompletas(r) {
   });
 }
 
-// Completa de forma segura cualquier ruta que venga de datos guardados con
-// un esquema anterior (áreas distintas, como el viejo Ingreso/Ingreso
-// tarde/Almacén) — así nunca truena por leer un área que no existe.
 function normalizarRuta(r, ruta) {
   const vacia = rutaVacia(ruta);
   if (!r) return vacia;
@@ -162,16 +159,6 @@ function normalizarAreas(areas) {
 
 const EMPTY_ACTIVO = { fecha: todayStr(), rutas: {} };
 
-/**
- * Panel de Tiempos, embebido dentro de SMART-TRACK.
- *
- * Props:
- * - identidad: texto a mostrar como "usuario" en cada marca.
- * - misAreas: arreglo con los nombres de área que esta identidad puede marcar
- *   (ej. ["Ingreso a CLO","Salida a ruta","Ingreso a CLO (fin de ruta)","Salida de CLO final"]
- *   para staff, ["Liquidación"] para Sulema).
- * - onLogout: opcional, botón de salir dentro del propio panel (vista exclusiva de Sulema).
- */
 export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const [activo, setActivo] = useState(EMPTY_ACTIVO);
   const [historial, setHistorial] = useState([]);
@@ -268,10 +255,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     await storage.set("historial-rutas", JSON.stringify(nuevo));
   }, []);
 
-  // Marca un checkpoint de una sola vez (ingreso_clo, salida_ruta,
-  // ingreso_clo_fin, salida_clo_final). En "salida_ruta" se puede capturar
-  // además el kilometraje con el que la unidad sale del CLO — así las rutas
-  // de reparto ya no tienen que capturarlo aparte en el módulo de Unidades.
   const marcarInstante = async (ruta, areaKey, areaNombre, extra = {}) => {
     if (!misAreas.includes(areaNombre)) return;
     const hoy = todayStr();
@@ -283,7 +266,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     let areasNuevas = { ...r.areas, [areaKey]: { ts, usuario: identidad, ...extra } };
     let rutaActualizada = { ...r, areas: areasNuevas };
 
-    // "Salida de CLO final" cierra Almacén automáticamente en ese instante.
     if (areaKey === "salida_clo_final" && rutaActualizada.areas.almacen.entrada && !rutaActualizada.areas.almacen.salida) {
       rutaActualizada = {
         ...rutaActualizada,
@@ -302,7 +284,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     }
   };
 
-  // Marca entrada de una zona de duración (solo Liquidación es manual; Almacén nunca).
   const marcarEntrada = async (ruta, areaKey, areaNombre) => {
     if (!misAreas.includes(areaNombre)) return;
     const hoy = todayStr();
@@ -327,7 +308,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     let areasNuevas = { ...r.areas, [areaKey]: { ...r.areas[areaKey], salida: ts } };
     let rutaActualizada = { ...r, areas: areasNuevas };
 
-    // Al cerrar Liquidación, Almacén arranca solo.
     if (areaKey === "liquidacion" && !rutaActualizada.areas.almacen.entrada) {
       rutaActualizada = {
         ...rutaActualizada,
@@ -350,9 +330,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const rutasHoy = activo.fecha === hoy ? activo.rutas : {};
   const segundosDesdeSync = lastSync ? Math.max(0, Math.floor((now - lastSync) / 1000)) : null;
 
-  // Acciones que la identidad conectada todavía puede reportar para la ruta
-  // seleccionada (según lo que ya esté marcado): una por cada checkpoint
-  // instantáneo pendiente, y entrada/salida por cada zona de duración manual.
   const accionesDisponibles = (ruta) => {
     const r = normalizarRuta(rutasHoy[ruta], ruta);
     const opciones = [];
@@ -378,8 +355,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRuta, JSON.stringify(opcionesAccion)]);
 
-  // true si la acción elegida ahora mismo es la salida a ruta (es el único
-  // momento en que se pide el kilometraje de salida del CLO).
   const esSalidaARuta = selectedAccion === "salida_ruta|instante";
 
   const registrarAccionSeleccionada = async () => {
@@ -409,8 +384,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     .slice()
     .sort((a, b) => (b.fecha === a.fecha ? b.finalizadoTs - a.finalizadoTs : b.fecha.localeCompare(a.fecha)));
 
-  // Solo Liquidación y Almacén se dibujan como barras de duración en la
-  // línea de tiempo; los 4 checkpoints instantáneos se muestran como chips.
   const calcularPistas = (r) => {
     const areasDuracion = AREAS.filter((a) => a.tipo === "duracion");
     const entradas = areasDuracion.map((a) => r.areas[a.key].entrada).filter(Boolean);
@@ -651,7 +624,6 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                       );
                     }
 
-                    // tipo === "duracion" (Liquidación, Almacén)
                     const activaAhora = area.entrada && !area.salida;
                     const completa = area.entrada && area.salida;
                     const elapsed = activaAhora ? now - area.entrada : null;
@@ -788,16 +760,11 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   );
 }
 
-// Pantalla completa que reescala automáticamente todo el contenido (con CSS
-// transform: scale) para que las 7 rutas (o las que estén activas) quepan
-// enteras en la pantalla, sin cortarse ni dejar espacio vacío de más. Se
-// recalcula solo cuando cambian los datos, el tamaño de ventana o al girar
-// el teléfono.
 function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
   const contenidoRef = useRef(null);
   const [escala, setEscala] = useState(1);
   const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
-  const ENCABEZADO_ALTO = 50; // alto aprox. del título + botón "Cerrar" + paddings
+  const ENCABEZADO_ALTO = 50;
 
   function cerrar() {
     const salirFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
@@ -805,8 +772,6 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
     onClose();
   }
 
-  // Si el usuario sale del fullscreen con Esc (en vez del botón "Cerrar"),
-  // se cierra igual esta pantalla para no dejarla "colgada".
   useEffect(() => {
     function onFullscreenChange() {
       if (!document.fullscreenElement) onClose();
@@ -820,28 +785,19 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
     function recalcular() {
       const contenido = contenidoRef.current;
       if (!contenido) return;
-      // Se mide a tamaño natural (sin escalar) para calcular el factor correcto.
       contenido.style.transform = "none";
-      // Se usa window.innerWidth/innerHeight directamente (en vez del tamaño
-      // de un contenedor propio): son los que de verdad reflejan el tamaño
-      // real de la pantalla apenas el navegador entra a fullscreen, sin
-      // depender de que algún div intermedio "se entere" del cambio.
       const anchoDisponible = window.innerWidth - 28;
       const altoDisponible = window.innerHeight - ENCABEZADO_ALTO - 28;
       const anchoNatural = contenido.scrollWidth;
       const altoNatural = contenido.scrollHeight;
       const escalaX = anchoNatural > 0 ? anchoDisponible / anchoNatural : 1;
       const escalaY = altoNatural > 0 ? altoDisponible / altoNatural : 1;
-      // No agranda de más si hay pocas rutas; solo encoge si hace falta.
       const nuevaEscala = Math.max(0.15, Math.min(escalaX, escalaY, 1));
       setEscala(nuevaEscala);
       setDimensiones({ ancho: anchoNatural * nuevaEscala, alto: altoNatural * nuevaEscala });
     }
 
     recalcular();
-    // Varios reintentos con retraso, más un sondeo corto de respaldo: cubre
-    // navegadores donde la transición a fullscreen tarda en terminar y no
-    // dispara ningún evento a tiempo.
     const timers = [30, 100, 200, 400, 700, 1100, 1600, 2500].map((ms) => setTimeout(recalcular, ms));
     const intervalo = setInterval(recalcular, 400);
     const detenerIntervalo = setTimeout(() => clearInterval(intervalo), 4000);
