@@ -37,12 +37,6 @@ const T = {
 const FONTS_LINK = "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap";
 const TESSERACT_LINK = "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js";
 
-// Catálogo fijo de rutas/identidades que participan en Revisión de Unidades.
-// "grupo" usa los mismos valores de "puesto" que ya existen en el resto de
-// la app (supervisor = Supervisor-1, supervisor2 = Supervisor-2, gerente).
-// "clo" separa las plazas: cada CLO ve solo lo suyo, pero comparten todo el
-// mecanismo (checklist, evidencias, seguridad, limpieza). Para abrir un CLO
-// nuevo basta agregar sus rutas aquí con su clave de clo.
 export const CLO_PVR = "PVR";
 export const CLO_TEPIC = "TEPIC";
 
@@ -53,19 +47,16 @@ export const RUTAS_UNIDADES = [
   { id: "J207", grupo: "supervisor", clo: CLO_PVR },
   { id: "MERCH07", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH28", grupo: "supervisor2", clo: CLO_PVR },
   { id: "MERCH29", grupo: "supervisor2", clo: CLO_PVR }, { id: "MERCH30", grupo: "supervisor2", clo: CLO_PVR },
-  // --- CLO TEPIC ---
   { id: "MERCH04", grupo: "supervisor2", clo: CLO_TEPIC },
   { id: "MERCH31", grupo: "supervisor2", clo: CLO_TEPIC },
   { id: "MERCH32", grupo: "supervisor2", clo: CLO_TEPIC },
   { id: "MERCH62", grupo: "supervisor2", clo: CLO_TEPIC },
   { id: "MERCH63", grupo: "supervisor2", clo: CLO_TEPIC },
-  // --- Posiciones de staff ---
   { id: "SUPERVISOR-1", grupo: "supervisor", clo: CLO_PVR },
   { id: "SUPERVISOR-2", grupo: "supervisor2", clo: CLO_PVR },
   { id: "GERENTE", grupo: "gerente", clo: CLO_PVR },
 ];
 
-// CLO al que pertenece una ruta (por defecto PVR si no se encuentra).
 export function cloDeRuta(rutaId) {
   return RUTAS_UNIDADES.find((r) => r.id === rutaId)?.clo || CLO_PVR;
 }
@@ -95,15 +86,6 @@ function todayISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 }
 
-// Convierte un timestamp guardado (new Date().toISOString(), en UTC) a la
-// fecha del CALENDARIO en México (America/Mexico_City), en vez de solo
-// recortar los primeros 10 caracteres del ISO (que da la fecha en UTC).
-// Esto importa porque México va 6 horas atrás de UTC: cualquier revisión
-// enviada después de las 6pm hora local ya cae en el día SIGUIENTE en UTC.
-// Comparar el recorte crudo contra "hoy" (calculado en hora de México)
-// hacía que esas revisiones de la tarde/noche parecieran de "mañana" y
-// desaparecieran de "Auditorías de hoy", "Salida de hoy" y el parpadeo de
-// la pestaña Unidades, aunque sí se hubieran enviado correctamente.
 function fechaLocalMX(fechaIso) {
   if (!fechaIso) return "";
   try {
@@ -119,9 +101,6 @@ function diasDesde(fechaISO) {
   return Math.floor((hoy - f) / (1000 * 60 * 60 * 24));
 }
 
-// Devuelve las etiquetas de los puntos que el conductor marcó como
-// "Atención" en una revisión, para poder mostrar en la bitácora QUÉ es lo
-// que necesita atención, no solo que algo la necesita.
 function puntosConAtencion(revision) {
   const todos = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
   const grupos = [revision?.fisico, revision?.niveles, revision?.documentacion];
@@ -149,10 +128,14 @@ const ESTADO_UI = {
 
 // true si "rutaId" (código de ruta o usuario merch) ya registró su revisión
 // del día de hoy. Se usa desde App.tsx para hacer parpadear la pestaña.
+// Los registros "esSoloKm" (de la pestaña KM, captura ligera de kilometraje
+// nada más) NO cuentan como checklist completo — si no, alguien que solo
+// capturó su km ahí dejaría de parpadear en UNIDADES sin haber hecho de
+// verdad la revisión completa del día.
 export function unidadYaRegistradaHoy(data, rutaId) {
   if (!rutaId) return true; // nada que exigir si no aplica (ej. staff/gerente)
   const hoy = todayISO();
-  return (data.revisionesUnidades || []).some((r) => r.ruta === rutaId && fechaLocalMX(r.fecha) === hoy);
+  return (data.revisionesUnidades || []).some((r) => r.ruta === rutaId && !r.esSoloKm && fechaLocalMX(r.fecha) === hoy);
 }
 
 function codigoQR(unidad) {
@@ -170,10 +153,6 @@ function capturarUbicacion() {
   });
 }
 
-// Compone la foto del odómetro con una franja de datos (unidad/ruta/fecha/GPS)
-// quemada en la imagen, y la sube al bucket "promociones" de Storage (el
-// mismo que ya usan Cuponera/Avisos/Rally) — así solo se guarda una URL corta
-// en el JSON de datos, no una imagen base64 completa por cada revisión.
 function procesarYSubirFotoOdometro(file, meta, prefijoArchivo = "unidad_odometro") {
   return new Promise((resolve, reject) => {
     const lector = new FileReader();
@@ -231,14 +210,10 @@ function fotoADataUrl(file) {
   });
 }
 
-// Recorta la imagen a la franja central (misma proporción que el recuadro
-// guía que ve el conductor al encuadrar: 12%-88% de ancho, 38%-62% de alto)
-// antes de leerla. Sin este recorte, Tesseract intenta leer TODO el tablero
-// y puede confundirse con los números del velocímetro o el reloj.
 function recortarZonaOdometro(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onerror = () => resolve(dataUrl); // si falla el recorte, se usa la imagen completa como respaldo
+    img.onerror = () => resolve(dataUrl);
     img.onload = () => {
       try {
         const x = img.width * 0.12;
@@ -277,8 +252,6 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
     .filter((r) => {
       if (alcanceIrrestricto) return true;
       if (unidadesVisibles.some((u) => u.id === r.unidadId)) return true;
-      // Revisiones de unidades que ya se dieron de baja: se conservan para
-      // no perder el histórico de lo que sí pasó ese día.
       return !unidades.some((u) => u.id === r.unidadId);
     })
     .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
@@ -321,9 +294,6 @@ function exportarBitacoraExcel(revisiones, unidades, unidadesVisibles, etiquetaR
   XLSX.writeFile(libro, `bitacora_revision_unidades_${etiquetaRol}_${fechaArchivo}.xlsx`);
 }
 
-/* ---------------------------------------------------------------
-   PIEZA: dial circular de días desde la última revisión
------------------------------------------------------------------- */
 function DialDias({ dias }) {
   const estado = estadoPorDias(dias);
   const ui = ESTADO_UI[estado];
@@ -354,17 +324,6 @@ function DialDias({ dias }) {
   );
 }
 
-/**
- * Componente raíz de la pestaña UNIDADES.
- *
- * Props:
- * - data, persistRevisionUnidad, persistConfigUnidades: vienen de App.tsx.
- * - rol: "vendedor" | "merch" | "staff" | "liquidacion"
- * - puesto: null | "supervisor" | "supervisor2" | "gerente" (solo si rol === "staff")
- * - identidad: nombre a mostrar como "capturado por"
- * - rutaPropia: código de ruta del conductor (ej. "J201" o "MERCH07"); solo
- *   aplica para rol "vendedor" o "merch".
- */
 export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, rol, puesto, identidad, rutaPropia, cloFiltro = CLO_PVR }) {
   useEffect(() => {
     if (!document.getElementById("ru-fonts")) {
@@ -389,12 +348,6 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const seguridad = data.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
   const [errorGuardado, setErrorGuardado] = useState(null);
 
-  // Wrappers "tipo setState" (aceptan valor o función actualizadora) que en
-  // realidad parten siempre del dato más reciente de Supabase antes de
-  // guardar — igual que ya se hace con "cargas", para que dos personas
-  // editando la flotilla casi al mismo tiempo no se pisen entre sí.
-  // Si el guardado falla (por ejemplo, sin conexión), se muestra el error en
-  // vez de fallar en silencio dejando la pantalla como si sí se hubiera guardado.
   async function ejecutarPersistConfig(calcularCambios) {
     try {
       setErrorGuardado(null);
@@ -427,9 +380,13 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     });
   }
 
+  // Igual que "unidadYaRegistradaHoy": los registros "esSoloKm" no cuentan
+  // como la última revisión de verdad, para no engañar el dial de "días
+  // desde la última revisión" ni el resumen ok/pendiente/atrasada.
   const lastByUnidad = useMemo(() => {
     const map = {};
     for (const r of revisiones) {
+      if (r.esSoloKm) continue;
       if (!map[r.unidadId] || new Date(r.fecha) > new Date(map[r.unidadId].fecha)) {
         map[r.unidadId] = r;
       }
@@ -441,19 +398,13 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const esGerente = rol === "staff" && puesto === "gerente";
   const esLiquidacion = rol === "liquidacion";
   const esStaff = rol === "staff";
-  // Posición del catálogo que le corresponde a cada puesto de staff, para
-  // que también puedan reportar las condiciones de su propia unidad asignada.
   const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
-  const [modoStaff, setModoStaff] = useState("panel"); // "panel" | "conductor"
+  const [modoStaff, setModoStaff] = useState("panel");
 
-  // Alcance de rutas visibles en el panel: supervisor/supervisor2 ven solo
-  // su grupo; gerente y liquidación ven todo (liquidación solo lectura).
-  const [scopeGerente, setScopeGerente] = useState("todos"); // "todos" | "supervisor" | "supervisor2"
+  const [scopeGerente, setScopeGerente] = useState("todos");
   const grupoFijo = rol === "staff" ? puesto : null;
   const alcanceIrrestricto = esLiquidacion || (esGerente && scopeGerente === "todos");
   const rutasVisibles = useMemo(() => {
-    // Primero se acota al CLO que se está consultando (PVR o TEPIC): cada
-    // plaza se ve por separado. "todos" solo lo usa el reporte combinado.
     const delClo = cloFiltro === "todos" ? RUTAS_UNIDADES : RUTAS_UNIDADES.filter((r) => r.clo === cloFiltro);
     if (esLiquidacion) return delClo;
     if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") return delClo.filter((r) => r.grupo === grupoFijo);
@@ -461,14 +412,6 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     return delClo;
   }, [grupoFijo, esGerente, scopeGerente, esLiquidacion, cloFiltro]);
 
-  // Con "Todos" (Gerente o Liquidación) se muestran TODAS las unidades sin
-  // filtrar por ruta — así, si alguna unidad quedó con una ruta que ya no
-  // existe en el catálogo (por ejemplo, si el catálogo de rutas cambió),
-  // sigue apareciendo aquí en vez de desaparecer en silencio.
-  // Unidades visibles: siempre acotadas al CLO que se está consultando. Con
-  // alcance completo (Gerente en "Todos" o Liquidación) se agregan además las
-  // unidades cuya ruta ya no exista en el catálogo, para que no desaparezcan
-  // en silencio — pero solo al ver el CLO base, no al consultar otra plaza.
   const unidadesVisibles = useMemo(() => {
     if (alcanceIrrestricto && cloFiltro === "todos") return unidades;
     const enRutasVisibles = unidades.filter((u) => rutasVisibles.some((r) => r.id === u.ruta));
@@ -575,9 +518,6 @@ function EstilosUnidades() {
   );
 }
 
-/* ---------------------------------------------------------------
-   VISTA CONDUCTOR — captura diaria
------------------------------------------------------------------- */
 const ETIQUETAS_PASO = {
   confirmar: "Confirmar unidad",
   qr: "Verificar QR",
@@ -597,8 +537,8 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   const [ubicacion, setUbicacion] = useState(null);
   const [ubicacionEstado, setUbicacionEstado] = useState(seguridad.gps ? "pendiente" : "desactivado");
   const [foto, setFoto] = useState(null);
-  const [itemFotoRequerida, setItemFotoRequerida] = useState(null); // id del punto elegido al azar (o null)
-  const [evidenciaItem, setEvidenciaItem] = useState(null); // { url, nombreArchivo }
+  const [itemFotoRequerida, setItemFotoRequerida] = useState(null);
+  const [evidenciaItem, setEvidenciaItem] = useState(null);
   const [subiendoEvidenciaItem, setSubiendoEvidenciaItem] = useState(false);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
   const [paso, setPaso] = useState(0);
@@ -617,9 +557,6 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   const unidadesRuta = unidades.filter((u) => u.ruta === ruta);
   const unidadActual = unidades.find((u) => u.id === unidadId);
 
-  // Las rutas de reparto (grupo de Supervisor-1: J201-J207) capturan su
-  // kilometraje al marcar "Salida a ruta" en la pestaña TIEMPOS, así que
-  // aquí no se les vuelve a pedir — se les evita capturarlo dos veces.
   const kmSeCapturaEnTiempos = RUTAS_UNIDADES.find((r) => r.id === ruta)?.grupo === "supervisor";
 
   const stepKeys = useMemo(() => {
@@ -650,12 +587,6 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
     setCombustible("3/4"); setObs(""); setEnviado(false);
   }
 
-  // Si toca auditoría, además de pedir la foto del odómetro, se elige al
-  // azar UN punto cualquiera del checklist (físico, niveles o
-  // documentación — licencia, llantas, limpieza, fluidos, póliza, etc.) y
-  // se le exige al conductor una foto de evidencia de ese punto en
-  // particular. No es siempre el mismo ni siempre se pide — depende de la
-  // misma probabilidad de auditoría configurada por Gerente.
   function avanzarDesdeConfirmacion() {
     const auditoria = seguridad.auditoria ? Math.random() * 100 < seguridad.probabilidadAuditoria : false;
     setEsAuditoria(auditoria);
@@ -749,11 +680,6 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
 
   const puedeEnviar = (!itemFotoRequerida || !!evidenciaItem) && (kmSeCapturaEnTiempos || !!kilometraje) && !subiendoFoto && !subiendoEvidenciaItem;
 
-  // Todas las respuestas son obligatorias: no se puede avanzar de un paso
-  // con checklist (físico, niveles, documentación) si falta contestar
-  // "Bien" o "Atención" en alguno de sus puntos. Si además ese paso tiene el
-  // punto elegido al azar para pedir evidencia, tampoco se puede avanzar
-  // sin haber tomado esa foto.
   function todosContestados(items, valores) {
     return items.every((it) => valores[it.id] === "bien" || valores[it.id] === "atencion");
   }
@@ -968,16 +894,11 @@ function VistaConductor({ unidades, onRegistrar, lastByUnidad, usuarioSesion, us
   );
 }
 
-// Cámara en vivo para la foto del odómetro (funciona igual en celular y en
-// computadora, a diferencia de un <input type="file" capture="environment">
-// que en computadora solo abre el explorador de archivos). Si el navegador
-// no puede acceder a la cámara (sin permiso, sin cámara, etc.), cae a un
-// selector de archivo normal para no dejar al usuario sin poder continuar.
 function CapturaCamaraOdometro({ onCapturar, procesando, tituloBoton, instrucciones, mostrarGuia = true }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const [camara, setCamara] = useState("iniciando"); // iniciando | activa | no_disponible
-  const [zoom, setZoom] = useState(2); // 1x a 3x, recorte digital del centro del cuadro
+  const [camara, setCamara] = useState("iniciando");
+  const [zoom, setZoom] = useState(2);
 
   useEffect(() => {
     let activo = true;
@@ -1002,10 +923,6 @@ function CapturaCamaraOdometro({ onCapturar, procesando, tituloBoton, instruccio
     };
   }, []);
 
-  // Al tomar la foto se recorta solo el centro del cuadro (según el zoom
-  // elegido) y se estira para llenar el cuadro completo — así el odómetro
-  // se ve más grande y legible en la foto final, tanto para el ojo humano
-  // (auditoría) como para la lectura automática de dígitos.
   function tomarFoto() {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return;
@@ -1256,17 +1173,6 @@ function Checklist({ icon, titulo, items, valores, setValores, conRelleno, relle
   );
 }
 
-/* ---------------------------------------------------------------
-   VISTA PANEL — supervisión y gerencia
------------------------------------------------------------------- */
-// Genera (con html2canvas) una imagen descargable/compartible con el
-// resumen del día: Unidad, Chofer, Km y hora en que se registró el
-// checklist de cada ruta visible — pensado para mandarlo rápido por
-// WhatsApp sin tener que abrir el Excel.
-// Trae, para la fecha dada, la hora de "Salida a ruta" registrada en el
-// panel de Tiempos (otro proyecto de Supabase) por cada código de ruta.
-// Primero revisa el día activo del board; si una ruta no aparece ahí (por
-// ejemplo porque ya se cerró el día), la busca en el historial.
 async function obtenerSalidasRutaHoy(fecha) {
   const mapa = {};
   try {
@@ -1300,7 +1206,7 @@ async function obtenerSalidasRutaHoy(fecha) {
 function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
   const capturaRef = useRef(null);
   const [generando, setGenerando] = useState(false);
-  const [imagenLista, setImagenLista] = useState(null); // { blob, nombreArchivo, url }
+  const [imagenLista, setImagenLista] = useState(null);
   const [error, setError] = useState(null);
   const [salidasPorRuta, setSalidasPorRuta] = useState({});
   const [cargandoSalidas, setCargandoSalidas] = useState(true);
@@ -1318,17 +1224,11 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
       });
     }
     cargar();
-    // Se refresca cada 20s, igual que el resto de las pantallas que
-    // consultan Tiempos, para que la hora de salida aparezca en cuanto se
-    // registre sin tener que recargar la página.
     const intervalo = setInterval(cargar, 20000);
     return () => { activo = false; clearInterval(intervalo); };
   }, [hoy]);
 
   const filas = useMemo(() => {
-    // Orden por ruta siguiendo el catálogo (J201, J202, ... MERCH07-30, y al
-    // final las posiciones de staff). Las unidades con una ruta que ya no
-    // exista en el catálogo se van hasta el final, para que no se pierdan.
     const ordenRuta = (ruta) => {
       const idx = RUTAS_UNIDADES.findIndex((r) => r.id === ruta);
       return idx === -1 ? RUTAS_UNIDADES.length : idx;
@@ -1348,10 +1248,6 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     setImagenLista(null);
     try {
       if (!capturaRef.current) return;
-      // Se mide el ancho real que necesita la tabla (puede ser más ancha que
-      // la pantalla en celular, por el contenedor con scroll horizontal que
-      // se le agregó) y se fuerza a html2canvas a usar ese ancho completo,
-      // para que la imagen generada no salga recortada.
       const anchoCompleto = Math.max(
         capturaRef.current.scrollWidth,
         capturaRef.current.clientWidth,
@@ -1410,9 +1306,6 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     document.body.removeChild(link);
   }
 
-  // El kilometraje puede venir de dos lados: las rutas de reparto lo
-  // capturan en TIEMPOS al marcar la salida a ruta, y el resto lo captura en
-  // su propio checklist de Unidades. Esta función devuelve el que aplique.
   function kmDeUnidad(unidad, revision) {
     const kmTiempos = salidasPorRuta[unidad.ruta]?.km;
     if (kmTiempos != null) return Number(kmTiempos);
@@ -1420,10 +1313,6 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     return kmChecklist ? Number(kmChecklist) : null;
   }
 
-  // Excel del resumen de hoy: SIEMPRE una fila por cada unidad visible
-  // (igual que la tabla/imagen de arriba), aunque todavía no tenga ningún
-  // registro — así nunca sale en blanco, a diferencia de la bitácora
-  // detallada de más abajo, que solo lista revisiones ya hechas.
   function descargarExcelResumenHoy() {
     const filasExcel = filas.map(({ unidad, revision }) => {
       const km = kmDeUnidad(unidad, revision);
@@ -1443,10 +1332,6 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     XLSX.writeFile(libro, `salida_hoy_unidades_${etiqueta}_${hoy}.xlsx`);
   }
 
-  // Arma el SCRIPT COMPLETO de autollenado (con los kilometrajes de hoy ya
-  // embebidos) y lo copia al portapapeles, listo para pegar directo en la
-  // consola/snippet de la plataforma de Kilometraje — sin tener que armar
-  // ni editar nada a mano.
   async function copiarListaKilometrajes() {
     const conKm = filas
       .map(({ unidad, revision }) => ({ unidad, km: kmDeUnidad(unidad, revision) }))
@@ -1501,7 +1386,6 @@ ${lineas.join("\n")}
       setCopiado(`Script copiado con ${conKm.length} unidad${conKm.length === 1 ? "" : "es"}. Pégalo en la consola de la plataforma de Kilometraje y da Enter.`);
       setTimeout(() => setCopiado(null), 8000);
     } catch (e) {
-      // Si el navegador bloquea el portapapeles, se muestra para copiar a mano.
       window.prompt("Copia el script (Ctrl+C):", texto);
     }
   }
@@ -1575,12 +1459,6 @@ ${lineas.join("\n")}
   );
 }
 
-// Lista, para todo el staff, qué rutas/unidades resultaron elegidas HOY para
-// auditoría aleatoria y de qué punto se les pidió (o se les está pidiendo)
-// foto de evidencia. Solo se basa en revisiones YA ENVIADAS (nunca en
-// checklists a medias) — el sorteo en sí ocurre al momento de confirmar la
-// unidad, así que esta lista se va llenando conforme cada quien termina y
-// envía su revisión del día, no antes.
 function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   const hoy = todayISO();
   const todosLosItems = [...CHECKS_FISICO, ...CHECKS_NIVELES, ...CHECKS_DOC];
@@ -1592,7 +1470,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
       const itemInfo = r.evidenciaItem ? todosLosItems.find((it) => it.id === r.evidenciaItem.itemId) : null;
       return { revision: r, unidad, itemLabel: itemInfo?.label || "Odómetro" };
     })
-    .filter((a) => a.unidad); // solo dentro del alcance que este staff puede ver
+    .filter((a) => a.unidad);
 
   if (auditadasHoy.length === 0) {
     return (
@@ -1623,8 +1501,8 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
 }
 
 function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, puedeReporteCombinado }) {
-  const [gestion, setGestion] = useState("tablero"); // tablero | asignar | seguridad
-  const mostrarGestion = esGerente; // solo Gerente puede asignar unidades y tocar seguridad; el resto solo ve el tablero
+  const [gestion, setGestion] = useState("tablero");
+  const mostrarGestion = esGerente;
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
 
   return (
@@ -1760,14 +1638,8 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
               <tbody>
                 {revisiones
                   .filter((r) => {
-                    // Con alcance completo (Gerente en "Todos" o Liquidación) se
-                    // muestran TODAS las revisiones — incluso si su unidad se
-                    // borró después o cambió de ruta; antes esas desaparecían
-                    // en silencio y se perdía el registro de lo que pasó.
                     if (alcanceIrrestricto) return true;
                     if (unidadesVisibles.some((u) => u.id === r.unidadId)) return true;
-                    // Si la unidad ya no existe, se cae a la ruta que quedó
-                    // guardada en el propio registro de la revisión.
                     const existeUnidad = unidades.some((u) => u.id === r.unidadId);
                     return !existeUnidad && rutasVisibles.some((rv) => rv.id === r.ruta);
                   })
@@ -1876,9 +1748,6 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
     { key: "auditoria", titulo: "Auditoría aleatoria", detalle: "Un porcentaje de revisiones se marca al azar y exige foto de evidencia del odómetro." },
   ];
 
-  // Reflejo local optimista: el toggle/slider se ve y se mueve al instante,
-  // sin esperar el viaje de ida y vuelta a Supabase (que ahora va en fila
-  // junto con cualquier otro cambio de configuración de Unidades).
   const [local, setLocal] = useState({});
   const valor = (key) => (local[key] !== undefined ? local[key] : seguridad[key]);
 
@@ -1889,9 +1758,6 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
     setSeguridad((prev) => ({ ...prev, [key]: nuevo }));
   }
 
-  // El slider dispara "onChange" muchísimas veces mientras se arrastra —
-  // solo se actualiza la vista en cada uno (instantáneo), y el guardado real
-  // a Supabase se manda apenas UNA vez, al soltar el control.
   function moverSlider(valorNuevo) {
     setLocal((prev) => ({ ...prev, probabilidadAuditoria: valorNuevo }));
   }
@@ -1961,9 +1827,6 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
   );
 }
 
-// Extrae el nombre de archivo guardado en Storage a partir de la URL pública
-// que se guardó en el registro (la URL siempre termina en el nombre del
-// archivo, sin importar el resto de la ruta).
 function extraerNombreArchivoStorage(url) {
   if (!url) return null;
   try {
@@ -1974,13 +1837,6 @@ function extraerNombreArchivoStorage(url) {
   }
 }
 
-/**
- * Limpieza de registros antiguos — exclusivo de Gerente. Borra del
- * historial las revisiones más viejas que el número de días elegido, y de
- * paso borra del bucket de Storage las fotos (odómetro / evidencia) que
- * esos registros tuvieran guardadas, para que no se acumulen imágenes
- * huérfanas y la base de datos no se sature con el tiempo.
- */
 function PanelLimpieza({ revisiones, persistConfigUnidades }) {
   const [dias, setDias] = useState(90);
   const [procesando, setProcesando] = useState(false);
@@ -2001,8 +1857,6 @@ function PanelLimpieza({ revisiones, persistConfigUnidades }) {
     setResultado(null);
     setErrorLimpieza(null);
     try {
-      // 1) Borrar del bucket de Storage las fotos de los registros que se
-      // van a eliminar (odómetro y, si la tuvieran, la de evidencia extra).
       const archivos = [];
       aBorrar.forEach((r) => {
         const foto1 = extraerNombreArchivoStorage(r.foto);
@@ -2015,8 +1869,6 @@ function PanelLimpieza({ revisiones, persistConfigUnidades }) {
         if (error) console.error("No se pudieron borrar algunas imágenes del bucket:", error);
       }
 
-      // 2) Quitar esos registros del historial, partiendo siempre del dato
-      // más reciente (por si alguien más registró una revisión justo antes).
       const idsABorrar = new Set(aBorrar.map((r) => r.id));
       await persistConfigUnidades((fresca) => ({
         revisionesUnidades: (fresca.revisionesUnidades || []).filter((r) => !idsABorrar.has(r.id)),
@@ -2066,10 +1918,6 @@ function PanelLimpieza({ revisiones, persistConfigUnidades }) {
 }
 
 function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asignaciones, setAsignaciones }) {
-  // Selección local optimista: en cuanto se elige una opción se refleja de
-  // inmediato en pantalla (sin esperar el viaje de ida y vuelta a Supabase),
-  // y solo se descarta si el guardado real termina fallando (ver "Guardando…"
-  // / aviso de error arriba del panel).
   const [seleccionLocal, setSeleccionLocal] = useState({});
   const [guardandoPorRuta, setGuardandoPorRuta] = useState({});
 
