@@ -1266,11 +1266,22 @@ export default function App() {
   }
 
   function convertirFilasOtcDia(rows) {
+    // Normaliza encabezados: quita HTML (<BR>, <br/>, etc.), colapsa espacios
+    // y pasa a minúsculas. Así "Unidades<BR>Vendidas", "Unidades<br>Vendidas"
+    // y "Unidades Vendidas" se comparan igual.
+    const normHeader = (s) =>
+      String(s || "")
+        .replace(/<br\s*\/?>/gi, " ")
+        .replace(/<[^>]*>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
 
     const getVal = (row, ...names) => {
       const keys = Object.keys(row);
       for (const name of names) {
-        const key = keys.find((k) => k.trim().toLowerCase() === name.toLowerCase());
+        const target = normHeader(name);
+        const key = keys.find((k) => normHeader(k) === target);
         if (key !== undefined) return row[key];
       }
       return "";
@@ -1288,17 +1299,21 @@ export default function App() {
       if (!dd || !mm || !yyyy) return;
       const fecha = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 
+      // Dinero del rally / OTC: siempre TOTAL $
       const monto = Number(getVal(row, "TOTAL $", "Total $", "Total") || 0) || 0;
       const codigoArticulo = String(getVal(row, "Codigo", "Código") || "").trim();
-      // OJO: la columna "Unidades" casi siempre trae 1 (es un contador de
-      // línea, no la cantidad real). La cantidad real vendida viene en
-      // "Unidades<BR>Vendidas" — en el archivo real ese es el encabezado
-      // completo, con la etiqueta <BR> pegada y sin espacio (así la exporta
-      // el sistema de origen). Se dejan variantes de respaldo por si algún
-      // otro reporte la trae con espacio o sin la etiqueta, y "Unidades"
-      // solo como último recurso.
+
+      // Piezas del rally: SIEMPRE "Unidades<BR>Vendidas" (cantidad real).
+      // NUNCA usar la columna "Unidades" sola — esa trae 1 (contador de línea).
       const unidadesVendidas = Number(
-        getVal(row, "Unidades<BR>Vendidas", "Unidades Vendidas", "UnidadesVendidas", "Unidades") || 0
+        getVal(
+          row,
+          "Unidades<BR>Vendidas",
+          "Unidades<br>Vendidas",
+          "Unidades Vendidas",
+          "UnidadesVendidas",
+          "Unidades vendidas"
+        ) || 0
       ) || 0;
 
       registros.push({ fecha, vendedor, monto, codigoArticulo, unidadesVendidas });
@@ -2121,9 +2136,17 @@ export default function App() {
       setOtcDiaStatus("No se encontraron filas válidas. Revisa el formato.");
       return;
     }
-    await persistParcialFresco(() => ({ otcDia: registros }));
-    const fechas = [...new Set(registros.map((r) => r.fecha))];
-    setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
+    // ACUMULA por fecha (para que los rallies multi-día sumen todo el periodo
+    // de vigencia). Las fechas que trae este archivo se REEMPLAZAN (así no
+    // hay duplicados si se vuelve a subir el mismo día). El resto de fechas
+    // que ya estaban guardadas se conservan.
+    const fechasNuevas = new Set(registros.map((r) => r.fecha).filter(Boolean));
+    await persistParcialFresco((fresca) => {
+      const anteriores = (fresca.otcDia || []).filter((r) => !fechasNuevas.has(r.fecha));
+      return { otcDia: [...anteriores, ...registros] };
+    });
+    const fechas = [...fechasNuevas].sort();
+    setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")} (se acumula; no se borran días anteriores).`);
   }
 
   async function handleOtcDiaFile(e) {
