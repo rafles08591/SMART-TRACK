@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   Fingerprint, Delete, LoaderCircle, Crown, Users, Wallet, Route, ChevronLeft, MapPin, Settings,
 } from "lucide-react";
@@ -91,6 +91,22 @@ function estiloBotonCuadro(activo, colorActivo) {
 }
 
 export default function Login({ onLogin }) {
+  // Fuerza el viewport correcto (sin importar lo que tenga index.html):
+  // en varios navegadores móviles, sin "maximum-scale=1, user-scalable=no"
+  // cada toque espera ~300ms antes de responder por si el usuario va a
+  // hacer doble-toque para hacer zoom — eso es lo que se sentía como
+  // "touch lento" al marcar el PIN.
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "viewport";
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
+  }, []);
+
+
   // step: 'root' | 'staff' | 'clo' | 'merch' | 'pin'
   const [step, setStep] = useState("root");
   const [origin, setOrigin] = useState("root");
