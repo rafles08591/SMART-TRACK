@@ -66,18 +66,14 @@ function calcularDesglose(montoTotal, totalCajetillas) {
   return { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto };
 }
 
-// Mismo cálculo pero para una sola línea de producto (usa sus propias
-// cajetillas y su propio monto) — para mostrar "precio sin IVA" por renglón.
+// Solo quita el IVA del monto de la línea. NO resta la distribución.
+// Así el "costo unitario" incluye el costo de distribución y solo se limpia el IVA.
 function calcularDesgloseLinea(montoLinea, cajetillasLinea) {
-  const distribucionBruta = cajetillasLinea * COSTO_DISTRIBUCION_UNITARIO;
-  const subtotalProducto = Math.max(montoLinea - distribucionBruta, 0);
-  const ivaProducto = subtotalProducto * IVA_TASA;
-  const precioProductoNeto = subtotalProducto - ivaProducto;
-  return precioProductoNeto;
+  const precioSinIva = montoLinea / (1 + IVA_TASA);
+  return precioSinIva;
 }
 
-// Costo unitario POR CAJETILLA, sin distribución y sin IVA — para el
-// módulo "PARA CAPTURAR SIN IVA Y SIN COSTO".
+// Costo unitario POR CAJETILLA, solo sin IVA (la distribución se mantiene dentro).
 function costoUnitarioNeto(montoLinea, cajetillasLinea) {
   if (!cajetillasLinea) return 0;
   return calcularDesgloseLinea(montoLinea, cajetillasLinea) / cajetillasLinea;
@@ -1207,11 +1203,11 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 )}
 
-                {/* Módulo nuevo: PARA CAPTURAR SIN IVA Y SIN COSTO — costo unitario por
-                    cajetilla, ya sin distribución y sin IVA, con copiado independiente
-                    de cada código FA y de cada monto. */}
+                {/* Módulo: PARA CAPTURAR · SIN IVA — costo unitario por cajetilla
+                    (solo se quita el IVA; la distribución se mantiene dentro del costo).
+                    Copiado independiente de cada código FA y de cada monto. */}
                 <div style={{ marginBottom: 14 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA Y SIN COSTO ADICIONAL</div>
+                  <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA</div>
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
                       <thead>
