@@ -1570,10 +1570,9 @@ export default function App() {
     return Number(f.monto || 0) + Number(f.cajetillas || 0) * COSTO_DISTRIBUCION_FOLIO;
   }
 
-  // Empaqueta (first-fit decreasing, por FILA completa — no se parte
-  // ninguna fila entre dos folios distintos, porque el folio vive en la
-  // fila) las filas nuevas de un mismo cliente/día en la menor cantidad de
-  // tickets nuevos posible, respetando $2,000 por ticket.
+  // Empaqueta por FILA completa (first-fit decreasing). Se usa cuando no
+  // queremos partir cantidades (filas ya existentes con folio, o casos
+  // simples).
   function empaquetarFilasNuevas(filas, limite) {
     const ordenadas = [...filas].sort((a, b) => valorRealDeFila(b) - valorRealDeFila(a));
     const bins = [];
@@ -1587,11 +1586,82 @@ export default function App() {
     return bins;
   }
 
+  // Empaqueta PERMITIENDO partir cajetillas de un mismo producto entre
+  // varios tickets. Así se alcanza el mínimo número de tickets posible
+  // (ceil(total / 2000)) mezclando productos distintos.
+  //
+  // Devuelve: array de bins. Cada bin tiene:
+  //   { asignaciones: [ { fila, cajetillas, monto, paquetes, contado_monto, credito_monto } ], suma }
+  // Una misma fila original puede aparecer en varios bins (partida).
+  function empaquetarPermitiendoParticion(filas, limite) {
+    // Trabajamos con cantidades restantes de cada fila.
+    const items = filas
+      .map((f) => {
+        const caj = Number(f.cajetillas) || 0;
+        const monto = Number(f.monto) || 0;
+        if (caj <= 0) return null;
+        return {
+          fila: f,
+          cajRestantes: caj,
+          montoOriginal: monto,
+          paquetesOriginal: Number(f.paquetes) || 0,
+          contadoOriginal: Number(f.contado_monto) || 0,
+          creditoOriginal: Number(f.credito_monto) || 0,
+          valorPorCaj: (monto + caj * COSTO_DISTRIBUCION_FOLIO) / caj,
+        };
+      })
+      .filter(Boolean);
+
+    // Ordenar por valor por cajetilla descendente ayuda a llenar mejor.
+    items.sort((a, b) => b.valorPorCaj - a.valorPorCaj);
+
+    const bins = [];
+    let current = { asignaciones: [], suma: 0 };
+
+    for (const item of items) {
+      while (item.cajRestantes > 0.0001) {
+        const espacio = limite - current.suma;
+        // Si el espacio que queda es menor que el valor de 1 cajetilla, abrimos otro ticket.
+        if (espacio < item.valorPorCaj - 0.01) {
+          if (current.asignaciones.length > 0) bins.push(current);
+          current = { asignaciones: [], suma: 0 };
+          continue;
+        }
+        const maxCaj = Math.floor((espacio + 0.01) / item.valorPorCaj);
+        if (maxCaj <= 0) {
+          if (current.asignaciones.length > 0) bins.push(current);
+          current = { asignaciones: [], suma: 0 };
+          continue;
+        }
+        const tomar = Math.min(item.cajRestantes, maxCaj);
+        const prop = tomar / (Number(item.fila.cajetillas) || 1);
+        const montoTomado = Math.round(item.montoOriginal * prop * 100) / 100;
+        const paquetesTomado = Math.round(item.paquetesOriginal * prop * 100) / 100;
+        const contadoTomado = Math.round(item.contadoOriginal * prop * 100) / 100;
+        const creditoTomado = Math.round(item.creditoOriginal * prop * 100) / 100;
+
+        current.asignaciones.push({
+          fila: item.fila,
+          cajetillas: Math.round(tomar * 100) / 100,
+          monto: montoTomado,
+          paquetes: paquetesTomado,
+          contado_monto: contadoTomado,
+          credito_monto: creditoTomado,
+        });
+        current.suma += tomar * item.valorPorCaj;
+        item.cajRestantes = Math.round((item.cajRestantes - tomar) * 100) / 100;
+      }
+    }
+    if (current.asignaciones.length > 0) bins.push(current);
+    return bins;
+  }
+
   async function asignarFoliosTickets() {
     try {
+      // Pedimos más campos porque al partir una fila necesitamos copiarlos a las piezas nuevas.
       const { data: filas, error: err } = await supabase
         .from("ventas_facturas")
-        .select("id, ruta, codigo_cliente, fecha, articulo, monto, cajetillas, forma_pago, estado, ticket_folio, ticket_parte, ticket_de")
+        .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, ticket_folio, ticket_parte, ticket_de, creado_en")
         .order("creado_en", { ascending: true });
       if (err) throw err;
       if (!filas || filas.length === 0) return;
@@ -1606,6 +1676,7 @@ export default function App() {
       });
 
       const actualizaciones = []; // { id, ticket_folio, ticket_parte, ticket_de }
+      const inserciones = [];     // filas nuevas que nacen de partir una existente
 
       for (const filasGrupo of grupos.values()) {
         const sinFolio = filasGrupo.filter((f) => f.ticket_folio == null);
@@ -1617,17 +1688,89 @@ export default function App() {
         const necesitaDividir = !esOtc && esEfectivo;
 
         if (!necesitaDividir || conFolio.length === 0) {
-          // Caso simple: no se divide (OTC, o no es efectivo, o pasa el
-          // límite pero no había nada previo) -> folio nuevo para TODO lo
-          // que falte, en un solo ticket (parte 1 de 1), salvo que si
-          // necesita dividir por primera vez, sí se reparte.
+          // Primera asignación (o no necesita dividir).
           if (necesitaDividir) {
             const { data: folioRow } = await supabase.rpc("nextval_folio_ticket");
             const folio = folioRow;
-            const bins = empaquetarFilasNuevas(sinFolio, LIMITE_TICKET_FOLIO);
-            bins.forEach((bin, i) => {
-              bin.filas.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folio, ticket_parte: i + 1, ticket_de: bins.length }));
-            });
+
+            // 1) Intentamos primero empaquetar filas completas (más simple).
+            let binsEnteros = empaquetarFilasNuevas(sinFolio, LIMITE_TICKET_FOLIO);
+            const totalValor = sinFolio.reduce((s, f) => s + valorRealDeFila(f), 0);
+            const minimoTeorico = Math.max(1, Math.ceil(totalValor / LIMITE_TICKET_FOLIO - 1e-9));
+
+            // 2) Si con filas completas salen MÁS tickets de los necesarios,
+            //    re-empaquetamos permitiendo partir cajetillas.
+            if (binsEnteros.length > minimoTeorico) {
+              const binsPartidos = empaquetarPermitiendoParticion(sinFolio, LIMITE_TICKET_FOLIO);
+              const totalPartes = binsPartidos.length;
+
+              // Agrupamos las asignaciones por id de fila original para saber
+              // qué filas hay que partir.
+              const porId = new Map(); // id -> [ { parte, cajetillas, monto, ... } ]
+              binsPartidos.forEach((bin, idx) => {
+                const parte = idx + 1;
+                bin.asignaciones.forEach((asig) => {
+                  const id = asig.fila.id;
+                  if (!porId.has(id)) porId.set(id, []);
+                  porId.get(id).push({ parte, ...asig });
+                });
+              });
+
+              for (const [id, piezas] of porId) {
+                // Ordenamos las piezas por número de parte.
+                piezas.sort((a, b) => a.parte - b.parte);
+                const original = piezas[0].fila;
+
+                // La primera pieza se queda en la fila original (UPDATE de cantidades).
+                const primera = piezas[0];
+                actualizaciones.push({
+                  id,
+                  ticket_folio: folio,
+                  ticket_parte: primera.parte,
+                  ticket_de: totalPartes,
+                  // también actualizamos cantidades de la fila original
+                  cajetillas: primera.cajetillas,
+                  monto: primera.monto,
+                  paquetes: primera.paquetes,
+                  contado_monto: primera.contado_monto,
+                  credito_monto: primera.credito_monto,
+                });
+
+                // Las piezas siguientes se insertan como filas nuevas.
+                for (let p = 1; p < piezas.length; p++) {
+                  const pieza = piezas[p];
+                  inserciones.push({
+                    ruta: original.ruta,
+                    codigo_cliente: original.codigo_cliente,
+                    cliente: original.cliente,
+                    fecha: original.fecha,
+                    articulo: original.articulo,
+                    producto_nombre: original.producto_nombre,
+                    paquetes: pieza.paquetes,
+                    cajetillas: pieza.cajetillas,
+                    contado_monto: pieza.contado_monto,
+                    credito_monto: pieza.credito_monto,
+                    monto: pieza.monto,
+                    forma_pago: original.forma_pago || "EFECTIVO",
+                    estado: original.estado || "ESPERA",
+                    prioridad: original.prioridad || false,
+                    ticket_folio: folio,
+                    ticket_parte: pieza.parte,
+                    ticket_de: totalPartes,
+                  });
+                }
+              }
+            } else {
+              // Empaquetado con filas completas fue suficiente.
+              binsEnteros.forEach((bin, i) => {
+                bin.filas.forEach((f) => actualizaciones.push({
+                  id: f.id,
+                  ticket_folio: folio,
+                  ticket_parte: i + 1,
+                  ticket_de: binsEnteros.length,
+                }));
+              });
+            }
           } else {
             const { data: folioRow } = await supabase.rpc("nextval_folio_ticket");
             sinFolio.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folioRow, ticket_parte: 1, ticket_de: 1 }));
@@ -1638,6 +1781,8 @@ export default function App() {
         // Ya había folio(s) de este cliente/día: intenta meter cada fila
         // nueva en la parte más reciente que NO esté facturada y todavía
         // tenga espacio; si no cabe en ninguna, abre parte(s) nueva(s).
+        // (Aquí seguimos sin partir filas ya existentes para no mover lo que
+        // ya se asignó).
         const folioExistente = conFolio[0].ticket_folio;
         const partesActuales = new Map(); // parte -> { filas, suma, facturada }
         conFolio.forEach((f) => {
@@ -1656,7 +1801,7 @@ export default function App() {
           let colocada = false;
           for (const [numParte, entry] of partesActuales) {
             if (!entry.facturada && entry.suma + valor <= LIMITE_TICKET_FOLIO) {
-              actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: numParte, ticket_de: null }); // ticket_de se corrige después
+              actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: numParte, ticket_de: null });
               entry.suma += valor;
               colocada = true;
               break;
@@ -1665,23 +1810,106 @@ export default function App() {
           if (!colocada) restantesPorAsignar.push(f);
         }
         if (restantesPorAsignar.length > 0) {
-          const bins = empaquetarFilasNuevas(restantesPorAsignar, LIMITE_TICKET_FOLIO);
-          bins.forEach((bin) => {
-            maxParte += 1;
-            bin.filas.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: maxParte, ticket_de: null }));
-          });
+          // Para lo que no cupo, intentamos empaquetar permitiendo partición.
+          const totalValorRest = restantesPorAsignar.reduce((s, f) => s + valorRealDeFila(f), 0);
+          const minimoTeoricoRest = Math.max(1, Math.ceil(totalValorRest / LIMITE_TICKET_FOLIO - 1e-9));
+          let binsRest = empaquetarFilasNuevas(restantesPorAsignar, LIMITE_TICKET_FOLIO);
+
+          if (binsRest.length > minimoTeoricoRest) {
+            // Partimos las que sobran.
+            const binsPartidos = empaquetarPermitiendoParticion(restantesPorAsignar, LIMITE_TICKET_FOLIO);
+            const porId = new Map();
+            binsPartidos.forEach((bin, idx) => {
+              const parte = maxParte + idx + 1;
+              bin.asignaciones.forEach((asig) => {
+                const id = asig.fila.id;
+                if (!porId.has(id)) porId.set(id, []);
+                porId.get(id).push({ parte, ...asig });
+              });
+            });
+            maxParte += binsPartidos.length;
+
+            for (const [id, piezas] of porId) {
+              piezas.sort((a, b) => a.parte - b.parte);
+              const original = piezas[0].fila;
+              const primera = piezas[0];
+              actualizaciones.push({
+                id,
+                ticket_folio: folioExistente,
+                ticket_parte: primera.parte,
+                ticket_de: null, // se corrige al final
+                cajetillas: primera.cajetillas,
+                monto: primera.monto,
+                paquetes: primera.paquetes,
+                contado_monto: primera.contado_monto,
+                credito_monto: primera.credito_monto,
+              });
+              for (let p = 1; p < piezas.length; p++) {
+                const pieza = piezas[p];
+                inserciones.push({
+                  ruta: original.ruta,
+                  codigo_cliente: original.codigo_cliente,
+                  cliente: original.cliente,
+                  fecha: original.fecha,
+                  articulo: original.articulo,
+                  producto_nombre: original.producto_nombre,
+                  paquetes: pieza.paquetes,
+                  cajetillas: pieza.cajetillas,
+                  contado_monto: pieza.contado_monto,
+                  credito_monto: pieza.credito_monto,
+                  monto: pieza.monto,
+                  forma_pago: original.forma_pago || "EFECTIVO",
+                  estado: original.estado || "ESPERA",
+                  prioridad: original.prioridad || false,
+                  ticket_folio: folioExistente,
+                  ticket_parte: pieza.parte,
+                  ticket_de: null,
+                });
+              }
+            }
+          } else {
+            binsRest.forEach((bin) => {
+              maxParte += 1;
+              bin.filas.forEach((f) => actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: maxParte, ticket_de: null }));
+            });
+          }
         }
-        // Recalcula ticket_de (total de partes) para TODO el folio, incluidas
-        // las filas que ya tenía antes (su parte no cambia, solo el conteo total).
+        // Recalcula ticket_de (total de partes) para TODO el folio.
         const totalPartesFinal = maxParte;
         conFolio.forEach((f) => {
-          if (f.ticket_de !== totalPartesFinal) actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: f.ticket_parte, ticket_de: totalPartesFinal });
+          if (f.ticket_de !== totalPartesFinal) {
+            actualizaciones.push({ id: f.id, ticket_folio: folioExistente, ticket_parte: f.ticket_parte, ticket_de: totalPartesFinal });
+          }
         });
-        actualizaciones.forEach((a) => { if (a.ticket_folio === folioExistente && a.ticket_de === null) a.ticket_de = totalPartesFinal; });
+        actualizaciones.forEach((a) => {
+          if (a.ticket_folio === folioExistente && a.ticket_de == null) a.ticket_de = totalPartesFinal;
+        });
+        inserciones.forEach((ins) => {
+          if (ins.ticket_folio === folioExistente && ins.ticket_de == null) ins.ticket_de = totalPartesFinal;
+        });
       }
 
+      // 1) Actualizar filas existentes (pueden incluir cambio de cantidades si se partieron).
       for (const a of actualizaciones) {
-        await supabase.from("ventas_facturas").update({ ticket_folio: a.ticket_folio, ticket_parte: a.ticket_parte, ticket_de: a.ticket_de }).eq("id", a.id);
+        const payload = {
+          ticket_folio: a.ticket_folio,
+          ticket_parte: a.ticket_parte,
+          ticket_de: a.ticket_de,
+        };
+        if (a.cajetillas != null) {
+          payload.cajetillas = a.cajetillas;
+          payload.monto = a.monto;
+          payload.paquetes = a.paquetes;
+          payload.contado_monto = a.contado_monto;
+          payload.credito_monto = a.credito_monto;
+        }
+        await supabase.from("ventas_facturas").update(payload).eq("id", a.id);
+      }
+
+      // 2) Insertar las piezas nuevas que nacieron de partir.
+      if (inserciones.length > 0) {
+        const { error: errIns } = await supabase.from("ventas_facturas").insert(inserciones);
+        if (errIns) console.error("Error insertando piezas partidas de ticket:", errIns);
       }
     } catch (err) {
       console.error("Error asignando folios de ticket:", err);
@@ -2357,4 +2585,3 @@ export default function App() {
     </div>
   );
 }
-
