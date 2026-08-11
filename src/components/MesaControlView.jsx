@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { AlertCircle, Calendar, CheckCircle2, Clock, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
+import html2canvas from "html2canvas";
 import {
   NOMBRES, UMBRAL_VISITAS_EFECTIVAS_MC, UMBRAL_MS_EN_RUTA, UMBRAL_HORAS_EN_RUTA, MARCAS_DIA,
 } from "../constants";
