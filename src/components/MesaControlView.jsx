@@ -14,6 +14,48 @@ import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 import TiemposView, { supabaseTiempos } from "./TiemposView";
 
+// html2canvas solo entiende colores en formato rgb()/rgba()/hex. Si el CSS
+// del proyecto usa formatos modernos (oklch(), color-mix(), variables CSS,
+// etc. — típico de Tailwind reciente), html2canvas no puede parsearlos y en
+// vez de marcar error simplemente no dibuja nada, dejando la captura en
+// blanco. El navegador, en cambio, siempre resuelve getComputedStyle(...)
+// a rgb()/rgba() sin importar cómo esté escrito el color original, así que
+// aquí copiamos esos valores ya resueltos como estilos inline sobre el
+// clon que arma html2canvas antes de rasterizarlo.
+function sanearColoresParaCaptura(nodoOriginal, nodoClon) {
+  const PROPS_COLOR = [
+    "color", "backgroundColor",
+    "borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor",
+    "boxShadow", "backgroundImage", "fill", "stroke", "outlineColor",
+  ];
+  const originales = [nodoOriginal, ...nodoOriginal.querySelectorAll("*")];
+  const clones = [nodoClon, ...nodoClon.querySelectorAll("*")];
+  originales.forEach((elOriginal, i) => {
+    const elClon = clones[i];
+    if (!elClon || !elClon.style) return;
+    let computado;
+    try {
+      computado = window.getComputedStyle(elOriginal);
+    } catch (e) {
+      return;
+    }
+    PROPS_COLOR.forEach((prop) => {
+      try {
+        const valor = computado[prop];
+        if (valor && valor !== "none") elClon.style[prop] = valor;
+      } catch (e) { /* ignorar propiedad puntual */ }
+    });
+    // backdrop-filter / filter (blur, glow, etc.) tampoco los soporta
+    // html2canvas y pueden dejar huecos transparentes o en blanco: los
+    // quitamos solo para la captura, la pantalla real no se toca.
+    elClon.style.backdropFilter = "none";
+    elClon.style.webkitBackdropFilter = "none";
+    if (computado.filter && computado.filter !== "none") {
+      elClon.style.filter = "none";
+    }
+  });
+}
+
 function formatHoraTiempos(ts) {
   if (!ts) return null;
   return new Date(ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -378,7 +420,18 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
         // pestaña), se aborta con un error visible en vez de dejar la
         // pantalla en blanco para siempre.
         const canvas = await Promise.race([
-          html2canvas(capturaRef.current, { backgroundColor: "#0B1220", scale: 1.3, useCORS: true }),
+          html2canvas(capturaRef.current, {
+            backgroundColor: "#0B1220",
+            scale: 1.3,
+            useCORS: true,
+            onclone: (_clonedDoc, clonedEl) => {
+              try {
+                sanearColoresParaCaptura(capturaRef.current, clonedEl);
+              } catch (e) {
+                console.warn("No se pudieron normalizar los colores para la captura:", e);
+              }
+            },
+          }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("Tardó demasiado en generarse (más de 20s). Prueba con una ruta con menos clientes en alerta.")), 20000)),
         ]);
         if (cancelado) return;
@@ -740,4 +793,3 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
     </div>
   );
 }
-
