@@ -1321,7 +1321,11 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
         Ruta: unidad.ruta,
         Chofer: unidad.conductor || revision?.capturadoPor || "",
         "Km": km ?? "",
-        "Hora de salida": salidasPorRuta[unidad.ruta]?.ts ? new Date(salidasPorRuta[unidad.ruta].ts).toLocaleTimeString("es-MX") : "Sin salida registrada",
+        "Hora de salida": salidasPorRuta[unidad.ruta]?.ts
+          ? new Date(salidasPorRuta[unidad.ruta].ts).toLocaleTimeString("es-MX")
+          : ["J201", "J203"].includes(unidad.ruta)
+          ? "RUTA DE PUEBLO"
+          : "Sin salida registrada",
         "Checklist de hoy": revision ? "Registrado" : "Sin registro",
       };
     });
@@ -1442,9 +1446,11 @@ ${lineas.join("\n")}
                       <td className="ru-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
                         {km != null ? `${km.toLocaleString("es-MX")} km` : "—"}
                       </td>
-                      <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : T.late, whiteSpace: "nowrap" }}>
+                      <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : (["J201", "J203"].includes(unidad.ruta) ? T.muted : T.late), whiteSpace: "nowrap" }}>
                         {tsSalida
                           ? new Date(tsSalida).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                          : ["J201", "J203"].includes(unidad.ruta)
+                          ? "RUTA DE PUEBLO"
                           : cargandoSalidas ? "Consultando…" : "Sin salida registrada"}
                       </td>
                     </tr>
