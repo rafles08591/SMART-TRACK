@@ -28,6 +28,16 @@ import { paquetesACajetillas, infoProducto } from "./productosFacturables";
 import Login from "./components/Login";
 import VendorView from "./components/VendorView";
 import StaffView from "./components/StaffView";
+
+// Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
+// horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
+// el día siguiente por default al subir una carga.
+function sumarDiasISO(fechaISO, dias) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  fecha.setUTCDate(fecha.getUTCDate() + dias);
+  return fecha.toISOString().slice(0, 10);
+}
 import TabsLiquidacion from "./components/TabsLiquidacion";
 import TabsMerch from "./components/TabsMerch";
 import FacturasAdminView from "./components/FacturasAdminView";
@@ -289,10 +299,18 @@ export default function App() {
     return tarea;
   }
 
-  async function persistCargas(calcularNuevoCargas) {
-    await persistParcialFresco((fresca) => ({
-      cargas: calcularNuevoCargas(fresca.cargas || { fecha: null, bloqueado: false, items: [], enviosPorRuta: {} }),
-    }));
+  // Las cargas ahora viven por fecha objetivo (data.cargasPorFecha[fecha]),
+  // no como un objeto único: el Gerente puede tener varias guardadas
+  // (hoy, mañana, pasado...) y solo UNA está "activa" para los vendedores
+  // (data.cargaActivaFecha). `persistCargas` opera siempre sobre la fecha
+  // que se le indique, partiendo del documento más reciente en Supabase.
+  async function persistCargas(fecha, calcularNuevoCargas) {
+    if (!fecha) return;
+    await persistParcialFresco((fresca) => {
+      const actual = fresca.cargasPorFecha || {};
+      const cargaExistente = actual[fecha] || { fecha, fechaSubida: fecha, bloqueado: false, items: [], enviosPorRuta: {} };
+      return { cargasPorFecha: { ...actual, [fecha]: calcularNuevoCargas(cargaExistente) } };
+    });
   }
 
   // Agrega una revisión de unidad al historial, partiendo siempre del
@@ -1029,10 +1047,14 @@ export default function App() {
     return { items, error: null };
   }
 
-  function handleCargasFile(e) {
+  function handleCargasFile(e, fechaObjetivo) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    // Por default, un archivo subido hoy es para el día siguiente (lunes
+    // sube -> es para martes, etc.), pero el Gerente puede elegir otra
+    // fecha en el selector antes de subir.
+    const fechaFinal = fechaObjetivo || sumarDiasISO(fechaHoyISO(), 1);
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -1066,18 +1088,32 @@ export default function App() {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        // Reemplaza TODO lo anterior (fecha, artículos y envíos por ruta) al
-        // 100%, partiendo siempre del dato más reciente en Supabase — así,
-        // aunque algún vendedor tenga la pantalla abierta desde antes con la
-        // carga vieja, su guardado no puede revivirla por encima de esta.
-        await persistCargas(() => ({ fecha: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} }));
-        setCargasStatus(`Carga actualizada: ${resultado.items.length} artículos, hoja "${hojaUsada}".`);
+        // Se guarda bajo su fecha objetivo, SIN activarla todavía — queda
+        // pendiente hasta que el Gerente la active manualmente cuando
+        // corresponda. Si ya había una carga guardada para esa misma
+        // fecha, se reemplaza por completo (partiendo siempre del
+        // documento más reciente en Supabase).
+        await persistParcialFresco((fresca) => ({
+          cargasPorFecha: {
+            ...(fresca.cargasPorFecha || {}),
+            [fechaFinal]: { fecha: fechaFinal, fechaSubida: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} },
+          },
+        }));
+        setCargasStatus(`Carga guardada para el ${fechaFinal}: ${resultado.items.length} artículos, hoja "${hojaUsada}". Actívala cuando corresponda.`);
       } catch (err) {
         console.error(err);
         setCargasStatus("No se pudo leer el archivo. Verifica el formato.");
       }
     };
     reader.readAsBinaryString(file);
+  }
+
+  // Hace que la carga guardada en `fecha` sea la que ven y editan los
+  // vendedores. Es una acción explícita del Gerente — no pasa sola aunque
+  // llegue la fecha, para poder manejar excepciones (fines de semana,
+  // días festivos, etc.) sin que el sistema se adelante solo.
+  async function activarCarga(fecha) {
+    await persistParcialFresco(() => ({ cargaActivaFecha: fecha }));
   }
 
   async function descargarCargasModificadas() {
@@ -1087,18 +1123,19 @@ export default function App() {
     // igual sale con esa información (en vez de descargar una versión
     // vieja que se le adelantó a la última actualización).
     setCargasStatus("Buscando la información más reciente antes de generar el archivo...");
-    let cargas;
+    let fresca;
     try {
-      const fresca = await obtenerDataFresca();
-      cargas = fresca.cargas;
+      fresca = await obtenerDataFresca();
     } catch (err) {
       console.error("No se pudo traer la carga más reciente:", err);
       alert("No se pudo confirmar que tengas la información más reciente (revisa tu conexión). Se descargará con lo que hay en pantalla — vuelve a intentarlo si acabas de recibir una propuesta nueva.");
-      cargas = data.cargas;
+      fresca = data;
     }
+    const fechaActiva = fresca.cargaActivaFecha;
+    const cargas = fechaActiva ? fresca.cargasPorFecha?.[fechaActiva] : null;
     if (!cargas?.items?.length) {
-      setCargasStatus("No hay una carga cargada todavía.");
-      alert("No hay una carga cargada todavía.");
+      setCargasStatus("No hay una carga activa todavía.");
+      alert("No hay una carga activa todavía. Actívala primero desde la lista de cargas guardadas.");
       return;
     }
     // Mismo formato "largo" con el que se sube: una fila por cada
@@ -1122,7 +1159,7 @@ export default function App() {
     XLSX.writeFile(wb, `carga_modificada_${cargas.fecha || fechaHoyISO()}.xlsx`);
     setCargasStatus(`Archivo generado con la información más reciente (${filas.length} filas). Se bloqueó la edición para los vendedores.`);
     // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
-    persistCargas((cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+    persistCargas(fechaActiva, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
   }
 
   function downloadOtcSemanalTemplate() {
@@ -2563,6 +2600,7 @@ export default function App() {
           cargasFileInputRef={cargasFileInputRef}
           cargasStatus={cargasStatus}
           onDescargarCargas={descargarCargasModificadas}
+          onActivarCarga={activarCarga}
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
