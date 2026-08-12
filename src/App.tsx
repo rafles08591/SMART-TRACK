@@ -38,6 +38,80 @@ function sumarDiasISO(fechaISO, dias) {
   fecha.setUTCDate(fecha.getUTCDate() + dias);
   return fecha.toISOString().slice(0, 10);
 }
+
+// Acumula, semana por semana, qué clientes SÍ tuvieron al menos una visita
+// (inicio/final no vacíos) y cuáles solo aparecieron en el reporte sin
+// nunca tener horario de visita — esos son los "sin visita" de la semana.
+// A diferencia de `data.mesaControl` (que reemplaza el día anterior de una
+// ruta cada vez que se sube uno nuevo), esto se va acumulando: cada carga
+// del día solo agrega/actualiza info, nunca borra lo ya visto esa semana.
+function fusionarVisitasSemana(historialActual, registrosNuevos) {
+  const resultado = { ...(historialActual || {}) };
+  registrosNuevos.forEach((r) => {
+    const clienteNombre = String(r.cliente || "").trim();
+    if (!clienteNombre) return;
+    const semanaInicio = lunesDeSemana(r.fecha);
+    const clave = `${r.vendedor}|${semanaInicio}`;
+    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {} };
+    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
+    const visitadoEsteDia = !!(String(r.inicio || "").trim() && String(r.final || "").trim());
+    resultado[clave] = {
+      ...entradaExistente,
+      clientes: {
+        ...entradaExistente.clientes,
+        [clienteNombre]: {
+          visitado: clienteExistente.visitado || visitadoEsteDia,
+          ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
+          fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
+        },
+      },
+    };
+  });
+  return resultado;
+}
+
+// Evita que `visitasSemana` crezca para siempre — conserva solo las
+// últimas ~8 semanas.
+function podarVisitasSemanaAntiguas(visitasSemana, semanasAConservar = 8) {
+  const limite = sumarDiasISO(lunesDeSemana(fechaHoyISO()), -7 * semanasAConservar);
+  const podado = {};
+  Object.entries(visitasSemana || {}).forEach(([clave, v]) => {
+    if (v.semanaInicio >= limite) podado[clave] = v;
+  });
+  return podado;
+}
+
+// Cruce automático "sin visita" contra Avance del Día: si un cliente tuvo
+// una venta ese día (aparece en el reporte de avance), es evidencia clara
+// de que sí se le visitó, aunque Mesa de Control no lo haya registrado
+// bien (o ni siquiera lo haya incluido ese día). Se acumula en la misma
+// estructura semanal que Mesa de Control — el orden en que se suban los
+// dos reportes no importa, cualquiera de los dos puede "salvar" a un
+// cliente de aparecer como sin visita.
+function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia) {
+  const resultado = { ...(historialActual || {}) };
+  registrosAvanceDia.forEach((r) => {
+    const clienteNombre = String(r.cliente || "").trim();
+    if (!clienteNombre || !r.fecha || !r.vendedor) return;
+    const semanaInicio = lunesDeSemana(r.fecha);
+    const clave = `${r.vendedor}|${semanaInicio}`;
+    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {} };
+    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
+    resultado[clave] = {
+      ...entradaExistente,
+      clientes: {
+        ...entradaExistente.clientes,
+        [clienteNombre]: {
+          ...clienteExistente,
+          visitado: true, // tuvo una venta ese día en Avance del Día -> contó como visitado
+          ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
+          fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
+        },
+      },
+    };
+  });
+  return resultado;
+}
 import TabsLiquidacion from "./components/TabsLiquidacion";
 import TabsMerch from "./components/TabsMerch";
 import FacturasAdminView from "./components/FacturasAdminView";
@@ -2129,7 +2203,10 @@ export default function App() {
       setAvanceDiaStatus("No se encontraron filas válidas. Revisa el formato.");
       return;
     }
-    await persistParcialFresco(() => ({ avanceDia: registros }));
+    await persistParcialFresco((fresca) => ({
+      avanceDia: registros,
+      visitasSemana: podarVisitasSemanaAntiguas(fusionarVisitasSemanaDesdeAvanceDia(fresca.visitasSemana || {}, registros)),
+    }));
     const resultadoFacturas = await sincronizarVentasFacturas(filas);
     if (resultadoFacturas && resultadoFacturas.ok !== false && resultadoFacturas.guardadas > 0) {
       await asignarFoliosTickets();
@@ -2412,35 +2489,37 @@ export default function App() {
       return;
     }
 
-    const { historial: mesaControlMerged, resumen } = fusionarMesaControlPorRuta(data?.mesaControl || [], registros);
-
-    const next = { ...(data || defaultData()), mesaControl: mesaControlMerged };
-    setData(next);
-
-    const { error } = await supabase
-      .from("ventas_app_state")
-      .upsert({
-        id: STATE_ID,
-        data: next,
-        updated_at: new Date().toISOString(),
-      })
-      .select();
-
-    if (error) {
-      console.error("Error guardando mesa de control:", error);
-      setMesaControlStatus(`Error al guardar en la nube: ${error.message} (code: ${error.code || "?"})`);
-    } else {
-      const detalle = resumen
-        .map((r) => {
-          if (r.accion === "sumado") {
-            const nota = r.duplicados > 0 ? ` (se ignoraron ${r.duplicados} ya registradas)` : "";
-            return `${r.ruta} ${r.fecha}: +${r.agregados} sumadas${nota}`;
-          }
-          return `${r.ruta} ${r.fecha}: reemplazó datos anteriores de la ruta (${r.agregados} visitas)`;
-        })
-        .join(" · ");
-      setMesaControlStatus(`Mesa de control guardada: ${etiquetaOrigen}. ${detalle}. Total acumulado: ${mesaControlMerged.length} visitas.`);
+    // Partiendo siempre del documento más reciente en Supabase (no de lo
+    // que esta pestaña tenga en pantalla) para que, si Avance del Día se
+    // sube casi al mismo tiempo, ninguno de los dos se pise al escribir en
+    // `visitasSemana` — ambos suman sobre la versión más fresca posible.
+    let resumen = [];
+    let mesaControlMerged = [];
+    let visitasSemanaMerged = {};
+    try {
+      await persistParcialFresco((fresca) => {
+        const fusion = fusionarMesaControlPorRuta(fresca.mesaControl || [], registros);
+        mesaControlMerged = fusion.historial;
+        resumen = fusion.resumen;
+        visitasSemanaMerged = podarVisitasSemanaAntiguas(fusionarVisitasSemana(fresca.visitasSemana || {}, registros));
+        return { mesaControl: mesaControlMerged, visitasSemana: visitasSemanaMerged };
+      });
+    } catch (err) {
+      console.error("Error guardando mesa de control:", err);
+      setMesaControlStatus(`Error al guardar en la nube: ${err?.message || "error desconocido"}`);
+      return;
     }
+
+    const detalle = resumen
+      .map((r) => {
+        if (r.accion === "sumado") {
+          const nota = r.duplicados > 0 ? ` (se ignoraron ${r.duplicados} ya registradas)` : "";
+          return `${r.ruta} ${r.fecha}: +${r.agregados} sumadas${nota}`;
+        }
+        return `${r.ruta} ${r.fecha}: reemplazó datos anteriores de la ruta (${r.agregados} visitas)`;
+      })
+      .join(" · ");
+    setMesaControlStatus(`Mesa de control guardada: ${etiquetaOrigen}. ${detalle}. Total acumulado: ${mesaControlMerged.length} visitas.`);
   }
 
   async function handleMesaControlFile(e) {
