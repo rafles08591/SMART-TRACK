@@ -12,6 +12,17 @@ function sumarDiasISO(fechaISO, dias) {
   return fecha.toISOString().slice(0, 10);
 }
 
+// "2026-08-17" -> "Lunes 17 de agosto". Se usa en todos lados donde se
+// muestra la fecha de una carga, para que se identifique de un vistazo
+// qué día de la semana es sin tener que hacer la cuenta mental.
+function formatoFechaConDia(fechaISO) {
+  if (!fechaISO) return "";
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  const texto = fecha.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
 /* -----------------------------------------------------------------
    Cargas por día: el archivo que se sube hoy es, por default, para el
    día siguiente (lunes sube -> es la carga del martes, etc.). Pueden
@@ -80,6 +91,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                     onChange={(e) => setFechaParaSubir(e.target.value)}
                     style={{ padding: "6px 8px", fontSize: 13, boxSizing: "border-box" }}
                   />
+                  <div style={{ fontSize: 11, color: "#F2B134", marginTop: 3, fontWeight: 600 }}>{formatoFechaConDia(fechaParaSubir)}</div>
                 </div>
                 <button className="btn" onClick={() => cargasFileInputRef.current?.click()}>
                   <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir archivo de cargas
@@ -105,7 +117,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                   <div key={fecha} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, border: activa ? "1px solid #3DDC97" : undefined }}>
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>
-                        Carga del {fecha} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
+                        {formatoFechaConDia(fecha)} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
                       </div>
                       <div style={{ fontSize: 11, color: "#9AA7BD" }}>
                         {c.items.length} artículos · subida el {c.fechaSubida} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
@@ -126,7 +138,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
                 <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-                  Editando carga activa · {cargaActiva.fecha} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
+                  Editando carga activa · {formatoFechaConDia(cargaActiva.fecha)} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
                 </div>
                 {cargaActiva.items.length > 0 && (
                   <button className="btn-ghost" onClick={onDescargar}>
@@ -224,7 +236,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       ) : rol === "vendedor" ? (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#9AA7BD", marginBottom: 10 }}>
-            <Clock size={12} /> Carga del {cargaActiva.fecha}
+            <Clock size={12} /> Carga del {formatoFechaConDia(cargaActiva.fecha)}
           </div>
           {cargaActiva.bloqueado && (
             <div className="card" style={{ padding: 12, marginBottom: 14, border: "1px solid #FF6B6B" }}>
@@ -251,7 +263,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       ) : (
         <div className="card" style={{ padding: 16 }}>
           <div style={{ fontSize: 13, color: "#9AA7BD" }}>
-            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde el {cargaActiva.fecha}.
+            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde el {formatoFechaConDia(cargaActiva.fecha)}.
             Cada vendedor ya puede entrar a su propia pestaña "CARGAS" para revisar y, si quiere, ajustar su cantidad propuesta.
           </div>
         </div>
