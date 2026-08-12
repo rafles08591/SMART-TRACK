@@ -240,16 +240,25 @@ function parseNominaArchivo(filasCrudas) {
 }
 
 /* ---------------------------------------------------------------
+   Reglas de negocio (umbrales reales, no inventados)
+------------------------------------------------------------------ */
+const UMBRAL_COB_CLASICO = 98;     // % mínimo de visitas a clientes asignados de la semana para no caer en CLÁSICO
+const UMBRAL_GPS_APERTURA = 91;    // % mínimo de clientes que deben abrirse por GPS
+const BONO_DESEMPENO_MAXIMO = 400; // bono disponible por visitas efectivas, antes de "nómina abandonada"
+const META_OTC_MINIMA = 800;       // la comisión de OTC no tiene tope; esto es solo el piso esperado
+
+/* ---------------------------------------------------------------
    Retroalimentación: traduce los números crudos en mensajes claros
 ------------------------------------------------------------------ */
 function calcularOportunidades(f) {
   const items = [];
   if (f.penalizacionClasico && f.penalizacionClasico < 0) {
+    const cobVisitas = f.cobItoPct ?? f.cobItoSemanalPct;
     items.push({
       titulo: "Penalización por clasificación CLÁSICO",
       monto: f.penalizacionClasico,
-      detalle: `Con ${numero(f.volSemana)} paq. vendidos esta semana, la ruta quedó en categoría CLÁSICO. Por estar en esa categoría se cancela la comisión que generaste (${money(Math.abs(f.comisionSemana ?? 0))}) como penalización.`,
-      accion: "Para no perderla la próxima semana, la ruta necesita subir de categoría — pregunta a tu supervisor cuánto volumen te falta para el siguiente nivel.",
+      detalle: `Esta semana visitaste al ${cobVisitas != null ? pct(cobVisitas) : "—"} de tus clientes asignados (se necesita mínimo ${UMBRAL_COB_CLASICO}% para no caer en CLÁSICO). Por estar en esa categoría se cancela la comisión que generaste (${money(Math.abs(f.comisionSemana ?? 0))}) como penalización.`,
+      accion: `Visita a todos tus clientes asignados de la semana — necesitas llegar al ${UMBRAL_COB_CLASICO}% de cobertura para no perder la comisión la próxima semana.`,
     });
   }
   if (f.descuentoMorosidad && f.descuentoMorosidad !== 0) {
@@ -261,11 +270,12 @@ function calcularOportunidades(f) {
     });
   }
   if (f.nominaAbandonada && f.nominaAbandonada !== 0) {
+    const bonoGanado = f.bonoDesempeno400 ?? (BONO_DESEMPENO_MAXIMO - Math.abs(f.nominaAbandonada));
     items.push({
-      titulo: "Nómina abandonada",
+      titulo: "Bono de desempeño no ganado (nómina abandonada)",
       monto: -Math.abs(f.nominaAbandonada),
-      detalle: `${money(Math.abs(f.nominaAbandonada))} de tu nómina quedó marcado como "abandonada" esta semana.`,
-      accion: "Pregunta a tu supervisor a qué día(s) corresponde para poder regularizarlo cuanto antes.",
+      detalle: `De los ${money(BONO_DESEMPENO_MAXIMO)} disponibles de bono por desempeño en visitas efectivas, ganaste ${money(bonoGanado)} — dejaste ${money(Math.abs(f.nominaAbandonada))} sin ganar.`,
+      accion: "Cumple el objetivo de visitas efectivas de la semana completo para ganar el bono de desempeño al 100%.",
     });
   }
   return items.sort((a, b) => a.monto - b.monto);
@@ -273,18 +283,18 @@ function calcularOportunidades(f) {
 
 function calcularFocosAmarillos(f) {
   const focos = [];
-  if (f.gpsPct !== null && f.gpsPct !== undefined && f.gpsPct < 100) {
-    focos.push({ titulo: "GPS", detalle: `Tu GPS estuvo activo el ${pct(f.gpsPct)} de la semana.`, accion: "Actívalo desde que sales a ruta y no lo apagues durante todo el recorrido." });
+  if (f.gpsPct !== null && f.gpsPct !== undefined && f.gpsPct < UMBRAL_GPS_APERTURA) {
+    focos.push({ titulo: "GPS — apertura de clientes", detalle: `Abriste el ${pct(f.gpsPct)} de tus clientes por GPS esta semana (se requiere mínimo ${UMBRAL_GPS_APERTURA}%).`, accion: `Abre a tus clientes por GPS al llegar con cada uno — necesitas llegar al ${UMBRAL_GPS_APERTURA}% para estar en regla.` });
   }
   if (f.sinVisitaItoSemana && f.sinVisitaItoSemana > 0) {
     focos.push({ titulo: "Visitas ITO sin hacer", detalle: `Te faltaron ${numero(f.sinVisitaItoSemana)} visita(s) de tu ITO esta semana.`, accion: "Revisa tu ITO diario y visita a todos los clientes programados; cada visita faltante baja tu cobertura." });
   }
   if (f.objetivoVisitasEfectivas != null && f.resultadoVisitasEfectivas != null && f.resultadoVisitasEfectivas < f.objetivoVisitasEfectivas) {
     const faltan = f.objetivoVisitasEfectivas - f.resultadoVisitasEfectivas;
-    focos.push({ titulo: "Visitas efectivas por debajo del objetivo", detalle: `Tuviste ${numero(f.resultadoVisitasEfectivas)} de ${numero(f.objetivoVisitasEfectivas)} visitas efectivas objetivo.`, accion: `Te faltaron ${numero(faltan)} visita(s) efectivas para llegar a tu objetivo semanal.` });
+    focos.push({ titulo: "Visitas efectivas por debajo del objetivo", detalle: `Tuviste ${numero(f.resultadoVisitasEfectivas)} de ${numero(f.objetivoVisitasEfectivas)} visitas efectivas objetivo.`, accion: `Te faltaron ${numero(faltan)} visita(s) efectivas para llegar a tu objetivo semanal — y cada una cuenta para el bono de desempeño.` });
   }
-  if (f.cobItoSemanalPct !== null && f.cobItoSemanalPct !== undefined && f.cobItoSemanalPct < 100) {
-    focos.push({ titulo: "Cobertura ITO semanal", detalle: `Tu cobertura ITO semanal fue de ${pct(f.cobItoSemanalPct)}.`, accion: "Entre más cerca del 100% esté tu cobertura ITO, mejor se refleja en tu bono de desempeño." });
+  if (f.otc !== null && f.otc !== undefined && f.otc < META_OTC_MINIMA) {
+    focos.push({ titulo: "OTC por debajo del piso esperado", detalle: `Tu comisión de OTC de la semana fue de ${money(f.otc)} (el piso esperado es ${money(META_OTC_MINIMA)}).`, accion: "La comisión de OTC no tiene tope — entre más vendas, más ganas. Empuja OTC el resto de la semana para superar el mínimo." });
   }
   return focos;
 }
@@ -454,8 +464,8 @@ function DetalleRuta({ fila }) {
       {/* Indicadores */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
         <Kpi icon={<Truck size={13} />} label="Volumen semana" valor={numero(fila.volSemana)} sub="paquetes" />
-        <Kpi icon={<MapPin size={13} />} label="GPS" valor={pct(fila.gpsPct)} color={colorAprovechamiento(fila.gpsPct)} />
-        <Kpi icon={<ShieldCheck size={13} />} label="Cobertura ITO" valor={pct(fila.cobItoPct)} color={colorAprovechamiento(fila.cobItoPct)} />
+        <Kpi icon={<MapPin size={13} />} label="GPS (apertura clientes)" valor={pct(fila.gpsPct)} color={fila.gpsPct != null && fila.gpsPct < UMBRAL_GPS_APERTURA ? T.bad : T.ok} />
+        <Kpi icon={<ShieldCheck size={13} />} label="Cobertura visitas asignadas" valor={pct(fila.cobItoPct)} color={fila.cobItoPct != null && fila.cobItoPct < UMBRAL_COB_CLASICO ? T.bad : T.ok} />
         <Kpi icon={<AlertTriangle size={13} />} label="Sin visita ITO" valor={numero(fila.sinVisitaItoSemana)} color={fila.sinVisitaItoSemana > 0 ? T.bad : T.ok} />
         <Kpi icon={<Target size={13} />} label="Visitas efectivas" valor={`${numero(fila.resultadoVisitasEfectivas)} / ${numero(fila.objetivoVisitasEfectivas)}`} />
         <Kpi icon={<Gauge size={13} />} label="Cobertura visitas" valor={pct(fila.cobVisitasPct)} color={colorAprovechamiento(fila.cobVisitasPct)} />
