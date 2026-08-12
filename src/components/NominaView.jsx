@@ -183,6 +183,7 @@ function filaATextoNormalizado(valoresCrudos) {
   return {
     supervisor: out.supervisor,
     clo, ruta, nur: out.nur, tipoRuta: out.tipoRuta,
+    bonoPuntualidad: BONO_PUNTUALIDAD_DEFAULT, // no viene en el Excel; se ajusta manualmente si hubo retardos/faltas
     volSemana: out.volSemana, clasificacion,
     gpsPct: out.gpsPct, cobItoPct,
     sinVisitaItoSemana: out.sinVisitaItoSemana,
@@ -247,6 +248,7 @@ const UMBRAL_GPS_APERTURA = 91;    // % mínimo de clientes que deben abrirse po
 const BONO_DESEMPENO_MAXIMO = 400; // bono disponible por visitas efectivas, antes de "nómina abandonada"
 const META_OTC_MINIMA = 800;       // la comisión de OTC no tiene tope; esto es solo el piso esperado
 const VALOR_PENALIZACION_MOROSIDAD = 2; // $ por paquete de un cliente que no pagó a tiempo
+const BONO_PUNTUALIDAD_DEFAULT = 400;   // bono semanal fijo por puntualidad y asistencia; se pierde (total o parcial) por retardos/faltas. No viene en el Excel — se captura/ajusta manualmente aquí, y por default se asume ganado completo.
 
 /* ---------------------------------------------------------------
    Retroalimentación: traduce los números crudos en mensajes claros
@@ -286,6 +288,16 @@ function calcularOportunidades(f) {
       monto: -Math.abs(f.nominaAbandonada),
       detalle: `De los ${money(BONO_DESEMPENO_MAXIMO)} disponibles de bono por desempeño en visitas efectivas, ganaste ${money(bonoGanado)} — dejaste ${money(Math.abs(f.nominaAbandonada))} sin ganar.`,
       accion: "Cumple el objetivo de visitas efectivas de la semana completo para ganar el bono de desempeño al 100%.",
+    });
+  }
+  const bonoPuntualidad = f.bonoPuntualidad ?? BONO_PUNTUALIDAD_DEFAULT;
+  if (bonoPuntualidad < BONO_PUNTUALIDAD_DEFAULT) {
+    const perdido = BONO_PUNTUALIDAD_DEFAULT - bonoPuntualidad;
+    items.push({
+      titulo: "Bono de puntualidad y asistencia no ganado",
+      monto: -perdido,
+      detalle: `De los ${money(BONO_PUNTUALIDAD_DEFAULT)} del bono semanal de puntualidad y asistencia, ganaste ${money(bonoPuntualidad)} — se perdieron ${money(perdido)} por retardos y/o faltas.`,
+      accion: "Llega puntual y sin faltas toda la semana para ganar este bono completo — es dinero aparte de tu comisión y de tu bono de desempeño.",
     });
   }
   return items.sort((a, b) => a.monto - b.monto);
@@ -343,7 +355,7 @@ function Kpi({ icon, label, valor, color, sub }) {
 /* ---------------------------------------------------------------
    Detalle de una ruta: financiero + indicadores + oportunidad
 ------------------------------------------------------------------ */
-function DetalleRuta({ fila }) {
+function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad }) {
   if (!fila) {
     return (
       <div className="nm-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
@@ -355,6 +367,10 @@ function DetalleRuta({ fila }) {
   const focos = calcularFocosAmarillos(fila);
   const colorAprov = colorAprovechamiento(fila.aprovechamientoTotal);
   const sinPerdidas = oportunidades.length === 0;
+  const bonoPuntualidad = fila.bonoPuntualidad ?? BONO_PUNTUALIDAD_DEFAULT;
+  const perdioBonoPuntualidad = bonoPuntualidad < BONO_PUNTUALIDAD_DEFAULT;
+  const nominaAPagarAjustada = (fila.nominaAPagar ?? 0) + bonoPuntualidad;
+  const nominaTotalAjustada = (fila.nominaTotal ?? 0) + bonoPuntualidad;
 
   return (
     <div>
@@ -367,7 +383,7 @@ function DetalleRuta({ fila }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 11.5, color: T.muted }}>Nómina total de la semana</div>
-          <div style={{ fontSize: 26, fontWeight: 800, color: T.primary }}>{money(fila.nominaTotal)}</div>
+          <div style={{ fontSize: 26, fontWeight: 800, color: T.primary }}>{money(nominaTotalAjustada)}</div>
         </div>
       </div>
 
@@ -457,9 +473,22 @@ function DetalleRuta({ fila }) {
             </div>
           )
         ))}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
+          <span style={{ color: T.muted }}>Bono de puntualidad y asistencia</span>
+          {editable ? (
+            <input
+              type="number" className="nm-mono"
+              value={bonoPuntualidad}
+              onChange={(e) => onCambiarBonoPuntualidad && onCambiarBonoPuntualidad(fila.ruta, e.target.value === "" ? 0 : Number(e.target.value))}
+              style={{ width: 90, textAlign: "right", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: perdioBonoPuntualidad ? T.bad : T.ink, fontWeight: 600, padding: "3px 6px", fontSize: 13 }}
+            />
+          ) : (
+            <span className="nm-mono" style={{ fontWeight: 600, color: perdioBonoPuntualidad ? T.bad : T.ink }}>{money(bonoPuntualidad)}</span>
+          )}
+        </div>
         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 4px", fontSize: 14 }}>
           <span style={{ fontWeight: 700 }}>Nómina a pagar</span>
-          <span className="nm-mono" style={{ fontWeight: 800 }}>{money(fila.nominaAPagar)}</span>
+          <span className="nm-mono" style={{ fontWeight: 800 }}>{money(nominaAPagarAjustada)}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13, color: T.muted }}>
           <span>+ OTC</span>
@@ -467,7 +496,7 @@ function DetalleRuta({ fila }) {
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0", fontSize: 16, borderTop: `1px solid ${T.border}`, marginTop: 6 }}>
           <span style={{ fontWeight: 800, color: T.primary }}>Nómina total</span>
-          <span className="nm-mono" style={{ fontWeight: 800, color: T.primary }}>{money(fila.nominaTotal)}</span>
+          <span className="nm-mono" style={{ fontWeight: 800, color: T.primary }}>{money(nominaTotalAjustada)}</span>
         </div>
         <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, fontStyle: "italic" }}>
           ** menos impuestos, faltas, descuentos y/o penalizaciones
@@ -581,6 +610,13 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
     setPreview(parseNominaTexto(texto));
   }
 
+  function actualizarBonoEnPreview(ruta, valor) {
+    setPreview((prev) => prev && ({
+      ...prev,
+      filas: prev.filas.map((f) => (f.ruta === ruta ? { ...f, bonoPuntualidad: valor } : f)),
+    }));
+  }
+
   function procesarArchivo(e) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -668,10 +704,13 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
           )}
           {preview.filas.length > 0 && (
             <div style={{ overflowX: "auto", marginBottom: 14 }}>
+              <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+                El bono de puntualidad y asistencia ($400/semana) no viene en el Excel — arranca completo para todas las rutas; ajústalo aquí si alguna tuvo retardos o faltas.
+              </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: T.cardSoft, textAlign: "left" }}>
-                    {["Ruta", "Vendedor", "Clasificación", "Nómina total", "Nómina perdida"].map((h) => <th key={h} style={{ padding: "8px 10px", color: T.muted }}>{h}</th>)}
+                    {["Ruta", "Vendedor", "Clasificación", "Bono puntualidad", "Nómina total", "Nómina perdida"].map((h) => <th key={h} style={{ padding: "8px 10px", color: T.muted }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -680,7 +719,15 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
                       <td style={{ padding: "8px 10px", fontWeight: 700 }}>{f.ruta}</td>
                       <td style={{ padding: "8px 10px" }}>{f.vendedorAsignado || "—"}</td>
                       <td style={{ padding: "8px 10px" }}>{f.clasificacion || "—"}</td>
-                      <td style={{ padding: "8px 10px" }}>{money(f.nominaTotal)}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <input
+                          type="number" className="nm-mono"
+                          value={f.bonoPuntualidad ?? BONO_PUNTUALIDAD_DEFAULT}
+                          onChange={(e) => actualizarBonoEnPreview(f.ruta, e.target.value === "" ? 0 : Number(e.target.value))}
+                          style={{ width: 80, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.ink, padding: "3px 6px", fontSize: 12 }}
+                        />
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>{money((f.nominaTotal ?? 0) + (f.bonoPuntualidad ?? BONO_PUNTUALIDAD_DEFAULT))}</td>
                       <td style={{ padding: "8px 10px", color: (f.nominaPerdida ?? 0) < 0 ? T.bad : T.ok }}>{(f.nominaPerdida ?? 0) < 0 ? money(f.nominaPerdida) : "$0"}</td>
                     </tr>
                   ))}
@@ -761,6 +808,24 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
     }
   }
 
+  // Ajuste manual del bono de puntualidad y asistencia (no viene en el Excel):
+  // el Gerente lo reduce/pone en $0 aquí mismo si hubo retardos o faltas esa
+  // semana. Por default cada ruta arranca con el bono completo ($400).
+  async function actualizarBonoPuntualidad(semanaIdObjetivo, ruta, nuevoValor) {
+    try {
+      await persistFresco((fresca) => ({
+        nominaSemanas: (fresca.nominaSemanas || []).map((s) =>
+          s.id !== semanaIdObjetivo ? s : {
+            ...s,
+            filas: s.filas.map((f) => (f.ruta === ruta ? { ...f, bonoPuntualidad: nuevoValor } : f)),
+          }
+        ),
+      }));
+    } catch (err) {
+      setErrorGuardado(err?.message || "No se pudo guardar el ajuste del bono. Intenta de nuevo.");
+    }
+  }
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <style>{`
@@ -832,7 +897,11 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
               </select>
             </div>
           )}
-          <DetalleRuta fila={filaSeleccionadaStaff} />
+          <DetalleRuta
+            fila={filaSeleccionadaStaff}
+            editable={esGerente}
+            onCambiarBonoPuntualidad={(ruta, valor) => semanaActual && actualizarBonoPuntualidad(semanaActual.id, ruta, valor)}
+          />
         </div>
       )}
 
