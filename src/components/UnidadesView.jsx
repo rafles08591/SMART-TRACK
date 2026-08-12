@@ -11,6 +11,48 @@ import { supabase } from "../supabaseClient";
 import { supabaseTiempos } from "./TiemposView";
 
 /* ---------------------------------------------------------------
+   VISOR DE ERRORES EN PANTALLA (solo temporal, para depurar en
+   celular sin DevTools). Se instala una sola vez, a nivel de módulo
+   y fuera del árbol de React: si un error hace que React tumbe toda
+   la pantalla (queda en blanco), este aviso sigue viéndose porque
+   está pegado directo al <body>, no depende de que React siga vivo.
+   Para quitarlo cuando ya no se necesite, basta con borrar este
+   bloque completo.
+------------------------------------------------------------------ */
+if (typeof window !== "undefined" && !window.__ruVisorErrores) {
+  window.__ruVisorErrores = true;
+  const mostrarErrorEnPantalla = (mensaje) => {
+    let caja = document.getElementById("ru-visor-errores");
+    if (!caja) {
+      caja = document.createElement("div");
+      caja.id = "ru-visor-errores";
+      caja.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#7f1d1d;color:#fff;padding:14px;font:11px/1.5 monospace;max-height:70vh;overflow:auto;white-space:pre-wrap;box-shadow:0 2px 12px rgba(0,0,0,.6);";
+      const titulo = document.createElement("div");
+      titulo.textContent = "Se detectó un error (envía captura de esto):";
+      titulo.style.cssText = "font-weight:700;margin-bottom:8px;font-family:sans-serif;";
+      caja.appendChild(titulo);
+      const cerrar = document.createElement("button");
+      cerrar.textContent = "Cerrar aviso";
+      cerrar.style.cssText = "display:block;margin-top:10px;background:#fff;color:#7f1d1d;border:none;padding:8px 12px;border-radius:6px;font-weight:700;font-family:sans-serif;";
+      cerrar.onclick = () => caja.remove();
+      caja.appendChild(cerrar);
+      document.body.appendChild(caja);
+    }
+    const linea = document.createElement("div");
+    linea.style.cssText = "margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.3);";
+    linea.textContent = mensaje;
+    caja.insertBefore(linea, caja.lastChild);
+  };
+  window.addEventListener("error", (e) => {
+    mostrarErrorEnPantalla((e?.error?.stack || e?.message || "Error desconocido") + `\n(${e?.filename || ""}:${e?.lineno || ""})`);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    mostrarErrorEnPantalla("Promesa rechazada sin capturar: " + (e?.reason?.stack || e?.reason?.message || String(e?.reason)));
+  });
+}
+
+
+/* ---------------------------------------------------------------
    TOKENS visuales (paleta propia de este módulo, distinta del resto
    de SMART-TRACK a propósito: aquí se busca leer como un tablero de
    inspección/flotilla, no como el dashboard de ventas).
