@@ -34,7 +34,7 @@ import CargasView from "./CargasView";
 import FacturasView from "./FacturasView";
 import NominaView from "./NominaView";
 
-export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onRefresh, refrescando, onLogout }) {
+export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
@@ -482,6 +482,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <CargasView
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
+              onActivarCarga={onActivarCarga}
             />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
