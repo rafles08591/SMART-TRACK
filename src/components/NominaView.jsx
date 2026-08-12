@@ -254,11 +254,19 @@ function calcularOportunidades(f) {
   const items = [];
   if (f.penalizacionClasico && f.penalizacionClasico < 0) {
     const cobVisitas = f.cobItoPct ?? f.cobItoSemanalPct;
+    const bajaCobertura = cobVisitas != null && cobVisitas < UMBRAL_COB_CLASICO;
+    const bajoGps = f.gpsPct != null && f.gpsPct < UMBRAL_GPS_APERTURA;
+    const causas = [];
+    if (bajaCobertura) causas.push(`visitaste al ${pct(cobVisitas)} de tus clientes asignados (mínimo ${UMBRAL_COB_CLASICO}%)`);
+    if (bajoGps) causas.push(`abriste por GPS al ${pct(f.gpsPct)} de tus clientes (mínimo ${UMBRAL_GPS_APERTURA}%)`);
+    const detalleCausas = causas.length > 0
+      ? `Esta semana ${causas.join(" y ")}.`
+      : "Tu ruta quedó en categoría CLÁSICO esta semana.";
     items.push({
       titulo: "Penalización por clasificación CLÁSICO",
       monto: f.penalizacionClasico,
-      detalle: `Esta semana visitaste al ${cobVisitas != null ? pct(cobVisitas) : "—"} de tus clientes asignados (se necesita mínimo ${UMBRAL_COB_CLASICO}% para no caer en CLÁSICO). Por estar en esa categoría se cancela la comisión que generaste (${money(Math.abs(f.comisionSemana ?? 0))}) como penalización.`,
-      accion: `Visita a todos tus clientes asignados de la semana — necesitas llegar al ${UMBRAL_COB_CLASICO}% de cobertura para no perder la comisión la próxima semana.`,
+      detalle: `${detalleCausas} La categoría CLÁSICO se aplica si no llegas al ${UMBRAL_COB_CLASICO}% de cobertura de visitas o al ${UMBRAL_GPS_APERTURA}% de apertura por GPS. Por estar en esa categoría se cancela la comisión que generaste (${money(Math.abs(f.comisionSemana ?? 0))}) como penalización.`,
+      accion: `Visita a todos tus clientes asignados y ábrelos por GPS al llegar — necesitas ${UMBRAL_COB_CLASICO}% de cobertura de visitas y ${UMBRAL_GPS_APERTURA}% de apertura por GPS para no perder la comisión la próxima semana.`,
     });
   }
   if (f.descuentoMorosidad && f.descuentoMorosidad !== 0) {
@@ -459,6 +467,9 @@ function DetalleRuta({ fila }) {
           <span style={{ fontWeight: 800, color: T.primary }}>Nómina total</span>
           <span className="nm-mono" style={{ fontWeight: 800, color: T.primary }}>{money(fila.nominaTotal)}</span>
         </div>
+        <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, fontStyle: "italic" }}>
+          ** menos impuestos, faltas, descuentos y/o penalizaciones
+        </div>
       </div>
 
       {/* Indicadores */}
@@ -544,6 +555,9 @@ function VistaResumen({ semana, onVerRuta }) {
             </tbody>
           </table>
         </div>
+      </div>
+      <div style={{ fontSize: 10.5, color: T.muted, marginTop: 10, fontStyle: "italic" }}>
+        ** menos impuestos, faltas, descuentos y/o penalizaciones
       </div>
     </div>
   );
