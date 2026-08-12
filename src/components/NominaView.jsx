@@ -246,6 +246,7 @@ const UMBRAL_COB_CLASICO = 98;     // % mínimo de visitas a clientes asignados 
 const UMBRAL_GPS_APERTURA = 91;    // % mínimo de clientes que deben abrirse por GPS
 const BONO_DESEMPENO_MAXIMO = 400; // bono disponible por visitas efectivas, antes de "nómina abandonada"
 const META_OTC_MINIMA = 800;       // la comisión de OTC no tiene tope; esto es solo el piso esperado
+const VALOR_PENALIZACION_MOROSIDAD = 2; // $ por paquete de un cliente que no pagó a tiempo
 
 /* ---------------------------------------------------------------
    Retroalimentación: traduce los números crudos en mensajes claros
@@ -270,11 +271,12 @@ function calcularOportunidades(f) {
     });
   }
   if (f.descuentoMorosidad && f.descuentoMorosidad !== 0) {
+    const paquetesMorosos = Math.round((Math.abs(f.descuentoMorosidad) / VALOR_PENALIZACION_MOROSIDAD) * 10) / 10;
     items.push({
       titulo: "Descuento por morosidad",
       monto: -Math.abs(f.descuentoMorosidad),
-      detalle: `Se aplicó un descuento de ${money(Math.abs(f.descuentoMorosidad))} por morosidad relacionada con tu ruta.`,
-      accion: "Revisa con tu supervisor o con Liquidación qué cargos generaron este descuento para poder regularizarlo.",
+      detalle: `Se aplicó un descuento de ${money(Math.abs(f.descuentoMorosidad))} por clientes de tu ruta que se atrasaron en su pago (no pagaron a tiempo). Cada paquete de un cliente moroso se penaliza a $${VALOR_PENALIZACION_MOROSIDAD} — esta semana equivale a aproximadamente ${paquetesMorosos} paquete(s).`,
+      accion: "Dale seguimiento puntual a la cobranza de tus clientes durante la semana; entre antes detectes a un cliente atrasado, menos paquetes de esa ruta quedan expuestos a este descuento.",
     });
   }
   if (f.nominaAbandonada && f.nominaAbandonada !== 0) {
