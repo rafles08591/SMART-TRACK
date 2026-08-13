@@ -2,28 +2,31 @@
 /* =====================================================================
    SinVisitaView — módulo independiente de SMART-TRACK
    ---------------------------------------------------------------------
-   Muestra, por semana, qué clientes NO han sido visitados en cada ruta.
+   El universo de "quién debe ser visitado" ya NO se infiere de Mesa de
+   Control — se toma de la tabla clientes_ruta en Supabase (el listado
+   real de clientes asignados por día a cada ruta: columnas ruta,
+   codigo_cliente, nombre, dia). Al inicio de la semana falta el 100%
+   (aparece todo el listado); conforme se sube Mesa de Control cada día,
+   se van descontando los clientes de ESE día específico (agrupado por
+   día: lunes descuenta contra el listado del lunes, martes contra el
+   de martes, etc.). El sábado, además, se descuenta contra Avance del
+   Día, y el vendedor puede descartar manualmente lo que quede — pero
+   SOLO ese día.
 
-   De dónde sale el dato: cada vez que se sube un archivo/texto de Mesa
-   de Control (en App.tsx, dentro de `procesarFilasMesaControl`), además
-   de guardar el snapshot del día en `data.mesaControl` (como ya hacía),
-   ahora también se acumula en `data.visitasSemana`: por cada cliente que
-   aparece en el reporte de un día, se marca si tuvo horario de visita
-   (inicio/final) ese día o no. Un cliente se considera "visitado" en la
-   semana si tuvo al menos un día con horario de visita; si nunca lo tuvo
-   en ningún reporte subido esa semana, aparece aquí como "sin visita".
-
-   Esto es un acumulado que crece según se van subiendo reportes durante
-   la semana — no es necesario subir todos los días de golpe: cada carga
-   suma información a la semana correspondiente, nunca la reemplaza.
+   El cruce cliente-a-cliente entre clientes_ruta.nombre y el campo
+   "cliente" que trae Mesa de Control/Avance del Día se hace por nombre
+   normalizado (mayúsculas, sin acentos, espacios colapsados) — si algún
+   día los nombres no calzan por venir muy distintos entre sistemas,
+   avisar para agregar otra forma de cruce (por código de cliente, etc.).
 
    Cómo se conecta:
-     <SinVisitaView data={data} rol={rol} puesto={puesto} rutaPropia={rutaPropia} />
+     <SinVisitaView data={data} rol={rol} puesto={puesto} rutaPropia={rutaPropia} persistFresco={persistFresco} />
 ===================================================================== */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Users, MapPin, CheckCircle2, Calendar } from "lucide-react";
 import { NOMBRES, RUTAS } from "../constants";
+import { supabase } from "../supabaseClient";
 
 const T = {
   bg: "#0B1220",
@@ -38,11 +41,19 @@ const T = {
   badSoft: "rgba(255,107,107,0.12)",
 };
 
-// Lunes de la semana que contiene `fechaISO` ("YYYY-MM-DD" -> "YYYY-MM-DD").
+const DIAS_SEMANA = [
+  { nombre: "Lunes", offset: 0 },
+  { nombre: "Martes", offset: 1 },
+  { nombre: "Miércoles", offset: 2 },
+  { nombre: "Jueves", offset: 3 },
+  { nombre: "Viernes", offset: 4 },
+  { nombre: "Sábado", offset: 5 },
+];
+
 function lunesDeSemanaLocal(fechaISO) {
   const [y, m, d] = fechaISO.split("-").map(Number);
   const fecha = new Date(Date.UTC(y, m - 1, d));
-  const dia = fecha.getUTCDay(); // 0 = domingo
+  const dia = fecha.getUTCDay();
   const offset = dia === 0 ? -6 : 1 - dia;
   fecha.setUTCDate(fecha.getUTCDate() + offset);
   return fecha.toISOString().slice(0, 10);
@@ -66,13 +77,58 @@ function nombreRutaBonito(ruta) {
   const nombre = NOMBRES[ruta];
   return nombre ? `${ruta.replace("RUTA ", "")} · ${nombre}` : ruta;
 }
+function normalizarTexto(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+// Dado un ISO date y el lunes de su semana, regresa el nombre del día
+// ("Miércoles") — se usa para explicar en qué día SÍ se visitó a alguien
+// que no fue visitado el día que le tocaba.
+function nombreDiaDeFecha(fechaISO, semanaInicio) {
+  const idx = DIAS_SEMANA.findIndex((d) => sumarDiasISOLocal(semanaInicio, d.offset) === fechaISO);
+  return idx >= 0 ? DIAS_SEMANA[idx].nombre : fechaISO;
+}
 
 export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFresco }) {
   const visitasSemana = data?.visitasSemana || {};
   const esVendedor = rol === "vendedor";
 
-  const hoyISO = new Date().toISOString().slice(0, 10);
+  const hoy = new Date();
+  const hoyISO = hoy.toISOString().slice(0, 10);
+  const esHoySabado = hoy.getDay() === 6;
   const semanaActual = lunesDeSemanaLocal(hoyISO);
+
+  const [clientesRuta, setClientesRuta] = useState(null);
+  const [errorCarga, setErrorCarga] = useState("");
+  useEffect(() => {
+    let activo = true;
+    async function cargar() {
+      try {
+        let todos = [];
+        let desde = 0;
+        const tam = 1000;
+        for (;;) {
+          const { data: pagina, error } = await supabase
+            .from("clientes_ruta")
+            .select("ruta, codigo_cliente, nombre, dia")
+            .range(desde, desde + tam - 1);
+          if (error) throw error;
+          todos = todos.concat(pagina || []);
+          if (!pagina || pagina.length < tam) break;
+          desde += tam;
+        }
+        if (activo) setClientesRuta(todos);
+      } catch (err) {
+        console.error("Error cargando clientes_ruta:", err);
+        if (activo) setErrorCarga("No se pudo cargar el listado de clientes asignados (clientes_ruta). Verifica tu conexión.");
+      }
+    }
+    cargar();
+    return () => { activo = false; };
+  }, []);
 
   const semanasDisponibles = useMemo(() => {
     const set = new Set(Object.values(visitasSemana).map((v) => v.semanaInicio));
@@ -84,18 +140,9 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const semana = semanasDisponibles.includes(semanaSeleccionada) ? semanaSeleccionada : semanaActual;
   const esSemanaActual = semana === semanaActual;
 
-  const DIAS_CORTO = ["Lun", "Mar", "Mié", "Jue", "Vie"];
-  const diasLaborales = useMemo(
-    () => DIAS_CORTO.map((nombreCorto, i) => ({ fecha: sumarDiasISOLocal(semana, i), nombreCorto })),
-    [semana]
-  );
+  const [guardandoCliente, setGuardandoCliente] = useState(null);
+  const puedeMarcarManual = esVendedor && esSemanaActual && esHoySabado && !!persistFresco;
 
-  const [guardandoCliente, setGuardandoCliente] = useState(null); // nombre del cliente en proceso, para deshabilitar el botón mientras guarda
-
-  // El vendedor puede marcar manualmente a un cliente como visitado (por si
-  // Mesa de Control/Avance del Día no lo capturaron bien) o deshacerlo si
-  // se equivocó. Solo aplica a la semana en curso — no tiene sentido editar
-  // semanas ya cerradas.
   async function marcarVisitaManual(ruta, clienteNombre, visitado) {
     if (!persistFresco) return;
     setGuardandoCliente(clienteNombre);
@@ -103,8 +150,8 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
       await persistFresco((fresca) => {
         const clave = `${ruta}|${semanaActual}`;
         const actual = fresca.visitasSemana || {};
-        const entrada = actual[clave] || { ruta, semanaInicio: semanaActual, clientes: {} };
-        const clienteActual = entrada.clientes[clienteNombre] || { visitado: false, ultimaFecha: hoyISO, fechasVistas: [] };
+        const entrada = actual[clave] || { ruta, semanaInicio: semanaActual, clientes: {}, fechasMesaControl: [] };
+        const clienteActual = entrada.clientes[clienteNombre] || { visitado: false, ultimaFecha: hoyISO, fechasVistas: [], fechasVisitado: [] };
         return {
           visitasSemana: {
             ...actual,
@@ -123,39 +170,77 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
     }
   }
 
-  const entradasSemana = useMemo(
-    () => Object.values(visitasSemana).filter((v) => v.semanaInicio === semana),
-    [visitasSemana, semana]
+  const diasLaborales = useMemo(
+    () => DIAS_SEMANA.slice(0, 5).map((d) => ({ ...d, fecha: sumarDiasISOLocal(semana, d.offset) })),
+    [semana]
   );
 
-  const entradasVisibles = esVendedor
-    ? entradasSemana.filter((e) => e.ruta === `RUTA ${rutaPropia}` || e.ruta === rutaPropia)
-    : entradasSemana;
+  const clientesRutaPorRutaYDia = useMemo(() => {
+    if (!clientesRuta) return {};
+    const mapa = {};
+    clientesRuta.forEach((c) => {
+      const diaNorm = normalizarTexto(c.dia);
+      const diaMatch = DIAS_SEMANA.find((d) => normalizarTexto(d.nombre) === diaNorm);
+      if (!diaMatch) return;
+      const clave = `${c.ruta}|${diaMatch.nombre}`;
+      if (!mapa[clave]) mapa[clave] = [];
+      mapa[clave].push(c);
+    });
+    return mapa;
+  }, [clientesRuta]);
 
-  // Por cada ruta, lista de clientes sin visita (nunca tuvieron horario
-  // de visita ni venta en ningún reporte subido esa semana, y el vendedor
-  // tampoco los marcó manualmente), ordenados por los que llevan más días
-  // apareciendo sin visitar. Aparte, los que sí se marcaron a mano, para
-  // poder deshacerlo si fue un error.
-  const rutasConPendientes = useMemo(() => {
-    return entradasVisibles
-      .map((entrada) => {
-        const pendientes = Object.entries(entrada.clientes)
-          .filter(([, c]) => !c.visitado && !c.visitadoManual)
-          .map(([nombre, c]) => ({ nombre, ultimaFecha: c.ultimaFecha, diasEnReporte: c.fechasVistas.length }))
-          .sort((a, b) => b.diasEnReporte - a.diasEnReporte || (a.nombre < b.nombre ? -1 : 1));
-        const marcadosManual = Object.entries(entrada.clientes)
-          .filter(([, c]) => !c.visitado && c.visitadoManual)
-          .map(([nombre]) => nombre)
-          .sort();
-        return { ruta: entrada.ruta, pendientes, marcadosManual, totalClientesVistos: Object.keys(entrada.clientes).length };
-      })
-      .filter((r) => r.pendientes.length > 0 || r.marcadosManual.length > 0)
-      .sort((a, b) => b.pendientes.length - a.pendientes.length);
-  }, [entradasVisibles]);
+  const visitasSemanaNorm = useMemo(() => {
+    const mapa = {};
+    Object.entries(visitasSemana).forEach(([clave, entrada]) => {
+      const clientesNorm = {};
+      Object.entries(entrada.clientes || {}).forEach(([nombre, info]) => {
+        clientesNorm[normalizarTexto(nombre)] = info;
+      });
+      mapa[clave] = clientesNorm;
+    });
+    return mapa;
+  }, [visitasSemana]);
 
-  const totalPendientes = rutasConPendientes.reduce((s, r) => s + r.pendientes.length, 0);
-  const hayDatosEstaSemana = entradasVisibles.length > 0;
+  const rutasVisibles = esVendedor ? RUTAS.filter((r) => r === `RUTA ${rutaPropia}`) : RUTAS;
+
+  const tablero = useMemo(() => {
+    if (!clientesRuta) return [];
+    return rutasVisibles.map((ruta) => {
+      const codigoRuta = ruta.replace("RUTA ", "");
+      const clientesNorm = visitasSemanaNorm[`${ruta}|${semana}`] || {};
+      const dias = diasLaborales.map((d) => {
+        const asignados = clientesRutaPorRutaYDia[`${codigoRuta}|${d.nombre}`] || [];
+        const pendientes = [];
+        const fueraDeDia = [];
+        asignados.forEach((c) => {
+          const info = clientesNorm[normalizarTexto(c.nombre)];
+          if (!info) { pendientes.push(c); return; } // nunca apareció en ningún reporte
+          if (info.visitadoManual) return; // descartado a mano, resuelto sin nota
+          const fechasVisitado = info.fechasVisitado || [];
+          if (fechasVisitado.includes(d.fecha)) return; // visitado justo su día -> resuelto sin nota
+          if (fechasVisitado.length > 0) {
+            // Sí se visitó, pero otro día — se descuenta de "sin visita",
+            // pero se deja la observación de que no fue el día que le tocaba.
+            const otraFecha = [...fechasVisitado].sort().find((f) => f !== d.fecha) || fechasVisitado[0];
+            fueraDeDia.push({ ...c, fechaVisitaReal: otraFecha, diaVisitaReal: nombreDiaDeFecha(otraFecha, semana) });
+            return;
+          }
+          pendientes.push(c); // nunca visitado esta semana
+        });
+        return { dia: d.nombre, fecha: d.fecha, totalAsignados: asignados.length, pendientes, fueraDeDia };
+      });
+      const totalPendientesRuta = dias.reduce((s, d) => s + d.pendientes.length, 0);
+      return { ruta, dias, totalPendientesRuta };
+    });
+  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, diasLaborales, semana, rutasVisibles]);
+
+  const rutasConPendientes = tablero.filter((r) => r.totalPendientesRuta > 0).sort((a, b) => b.totalPendientesRuta - a.totalPendientesRuta);
+  const totalPendientes = tablero.reduce((s, r) => s + r.totalPendientesRuta, 0);
+
+  const entradasCobertura = useMemo(
+    () => rutasVisibles.map((ruta) => ({ ruta, fechasSubidas: (visitasSemana[`${ruta}|${semana}`]?.fechasMesaControl) || [] })),
+    [visitasSemana, semana, rutasVisibles]
+  );
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -181,148 +266,157 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
         </div>
       </div>
 
-      {!esVendedor && (
-        <div className="sv-card" style={{ padding: 16, marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Cobertura de Mesa de Control esta semana</div>
-          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>
-            Debe haber un archivo subido por cada ruta, de lunes a viernes, para que "Sin visita" refleje la semana completa.
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "6px 10px", color: T.muted, fontWeight: 600 }}>Ruta</th>
-                  {diasLaborales.map((d) => (
-                    <th key={d.fecha} style={{ padding: "6px 8px", color: T.muted, fontWeight: 600 }}>{d.nombreCorto}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {RUTAS.map((ruta) => {
-                  const entrada = visitasSemana[`${ruta}|${semana}`];
-                  const fechasSubidas = entrada?.fechasMesaControl || [];
-                  const faltantes = diasLaborales.filter((d) => !fechasSubidas.includes(d.fecha)).length;
-                  return (
-                    <tr key={ruta} style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "7px 10px", fontWeight: 600, whiteSpace: "nowrap", color: faltantes > 0 ? T.ink : T.ok }}>
-                        {nombreRutaBonito(ruta)}
-                      </td>
-                      {diasLaborales.map((d) => {
-                        const subido = fechasSubidas.includes(d.fecha);
-                        return (
-                          <td key={d.fecha} style={{ textAlign: "center", padding: "7px 8px" }}>
-                            {subido ? <CheckCircle2 size={15} color={T.ok} /> : <span style={{ color: T.bad, fontWeight: 800 }}>—</span>}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {errorCarga && (
+        <div className="sv-card" style={{ padding: 14, marginBottom: 16, color: T.bad, fontSize: 12.5 }}>{errorCarga}</div>
       )}
 
-      {!esVendedor && (
-        <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-          <div className="sv-card" style={{ padding: 14, flex: "1 1 160px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
-              <MapPin size={13} /><span>Rutas con pendientes</span>
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: rutasConPendientes.length > 0 ? T.bad : T.ok }}>{rutasConPendientes.length}</div>
-          </div>
-          <div className="sv-card" style={{ padding: 14, flex: "1 1 160px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
-              <Users size={13} /><span>Clientes sin visita</span>
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: totalPendientes > 0 ? T.bad : T.ok }}>{totalPendientes}</div>
-          </div>
-        </div>
-      )}
-
-      {esVendedor && !esSemanaActual && (
-        <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12, fontStyle: "italic" }}>
-          Estás viendo una semana pasada — solo se puede marcar como visitado en la semana en curso.
-        </div>
-      )}
-
-      {!hayDatosEstaSemana ? (
+      {clientesRuta === null && !errorCarga ? (
         <div className="sv-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
-          Todavía no se ha subido Mesa de Control para {esVendedor ? "tu ruta" : "ninguna ruta"} esta semana.
-        </div>
-      ) : rutasConPendientes.length === 0 ? (
-        <div className="sv-card" style={{ padding: 30, textAlign: "center", color: T.ok, fontSize: 13, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-          <CheckCircle2 size={22} />
-          {esVendedor ? "Visitaste a todos tus clientes esta semana." : "Ninguna ruta tiene clientes sin visita esta semana."}
+          Cargando el listado de clientes asignados…
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {rutasConPendientes.map((r) => (
-            <div key={r.ruta} className="sv-card" style={{ padding: 16 }}>
-              {!esVendedor && (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{nombreRutaBonito(r.ruta)}</div>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: T.bad, background: T.badSoft, borderRadius: 999, padding: "3px 10px" }}>
-                    {r.pendientes.length} sin visita
-                  </span>
+        <>
+          {!esVendedor && (
+            <div className="sv-card" style={{ padding: 16, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Cobertura de Mesa de Control esta semana</div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>
+                Debe haber un archivo subido por cada ruta, de lunes a viernes, para que "Sin visita" refleje la semana completa.
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: "6px 10px", color: T.muted, fontWeight: 600 }}>Ruta</th>
+                      {diasLaborales.map((d) => (
+                        <th key={d.fecha} style={{ padding: "6px 8px", color: T.muted, fontWeight: 600 }}>{d.nombre.slice(0, 3)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entradasCobertura.map(({ ruta, fechasSubidas }) => {
+                      const faltantes = diasLaborales.filter((d) => !fechasSubidas.includes(d.fecha)).length;
+                      return (
+                        <tr key={ruta} style={{ borderTop: `1px solid ${T.border}` }}>
+                          <td style={{ padding: "7px 10px", fontWeight: 600, whiteSpace: "nowrap", color: faltantes > 0 ? T.ink : T.ok }}>
+                            {nombreRutaBonito(ruta)}
+                          </td>
+                          {diasLaborales.map((d) => {
+                            const subido = fechasSubidas.includes(d.fecha);
+                            return (
+                              <td key={d.fecha} style={{ textAlign: "center", padding: "7px 8px" }}>
+                                {subido ? <CheckCircle2 size={15} color={T.ok} /> : <span style={{ color: T.bad, fontWeight: 800 }}>—</span>}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!esVendedor && (
+            <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+              <div className="sv-card" style={{ padding: 14, flex: "1 1 160px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
+                  <MapPin size={13} /><span>Rutas con pendientes</span>
                 </div>
-              )}
-              {r.pendientes.length > 0 && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {r.pendientes.map((c) => (
-                    <div key={c.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.cardSoft, borderRadius: 8, gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>
-                          {c.diasEnReporte} día{c.diasEnReporte !== 1 ? "s" : ""} sin visitar · última vez en reporte: {c.ultimaFecha}
-                        </span>
-                        {esVendedor && esSemanaActual && persistFresco && (
-                          <button
-                            onClick={() => marcarVisitaManual(r.ruta, c.nombre, true)}
-                            disabled={guardandoCliente === c.nombre}
-                            style={{
-                              fontSize: 11, fontWeight: 700, color: T.ok, background: "transparent",
-                              border: `1px solid ${T.ok}`, borderRadius: 999, padding: "4px 10px", cursor: "pointer",
-                              opacity: guardandoCliente === c.nombre ? 0.5 : 1, whiteSpace: "nowrap",
-                            }}
-                          >
-                            {guardandoCliente === c.nombre ? "Guardando…" : "✓ Ya lo visité"}
-                          </button>
-                        )}
-                      </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: rutasConPendientes.length > 0 ? T.bad : T.ok }}>{rutasConPendientes.length}</div>
+              </div>
+              <div className="sv-card" style={{ padding: 14, flex: "1 1 160px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
+                  <Users size={13} /><span>Clientes sin visita</span>
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: totalPendientes > 0 ? T.bad : T.ok }}>{totalPendientes}</div>
+              </div>
+            </div>
+          )}
+
+          {esVendedor && !esSemanaActual && (
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12, fontStyle: "italic" }}>
+              Estás viendo una semana pasada — solo de lectura.
+            </div>
+          )}
+          {esVendedor && esSemanaActual && !esHoySabado && (
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12, fontStyle: "italic" }}>
+              Solo puedes descartar clientes manualmente el día sábado — entre semana la lista se actualiza sola conforme subes Mesa de Control.
+            </div>
+          )}
+
+          {totalPendientes === 0 ? (
+            <div className="sv-card" style={{ padding: 30, textAlign: "center", color: T.ok, fontSize: 13, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <CheckCircle2 size={22} />
+              {esVendedor ? "No tienes clientes sin visita esta semana." : "Ninguna ruta tiene clientes sin visita esta semana."}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {(esVendedor ? tablero : rutasConPendientes).map((r) => (
+                <div key={r.ruta} className="sv-card" style={{ padding: 16 }}>
+                  {!esVendedor && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{nombreRutaBonito(r.ruta)}</div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: T.bad, background: T.badSoft, borderRadius: 999, padding: "3px 10px" }}>
+                        {r.totalPendientesRuta} sin visita
+                      </span>
+                    </div>
+                  )}
+                  {r.dias.filter((d) => d.pendientes.length > 0 || d.fueraDeDia.length > 0).map((d) => (
+                    <div key={d.dia} style={{ marginBottom: 10 }}>
+                      {d.pendientes.length > 0 && (
+                        <>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: T.primary, marginBottom: 6 }}>
+                            {d.dia} ({d.fecha}) · {d.pendientes.length} de {d.totalAsignados} sin visita
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: d.fueraDeDia.length > 0 ? 8 : 0 }}>
+                            {d.pendientes.map((c) => (
+                              <div key={c.codigo_cliente || c.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.cardSoft, borderRadius: 8, gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+                                {puedeMarcarManual && (
+                                  <button
+                                    onClick={() => marcarVisitaManual(r.ruta, c.nombre, true)}
+                                    disabled={guardandoCliente === c.nombre}
+                                    style={{
+                                      fontSize: 11, fontWeight: 700, color: T.ok, background: "transparent",
+                                      border: `1px solid ${T.ok}`, borderRadius: 999, padding: "4px 10px", cursor: "pointer",
+                                      opacity: guardandoCliente === c.nombre ? 0.5 : 1, whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {guardandoCliente === c.nombre ? "Guardando…" : "✓ Descartar"}
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      {d.fueraDeDia.length > 0 && (
+                        <>
+                          {d.pendientes.length === 0 && (
+                            <div style={{ fontSize: 12, fontWeight: 700, color: T.muted, marginBottom: 6 }}>
+                              {d.dia} ({d.fecha})
+                            </div>
+                          )}
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {d.fueraDeDia.map((c) => (
+                              <div key={c.codigo_cliente || c.nombre} style={{ padding: "8px 10px", background: "rgba(242,177,52,0.08)", borderRadius: 8, border: `1px dashed ${T.primary}` }}>
+                                <div style={{ fontSize: 13 }}>{c.nombre}</div>
+                                <div style={{ fontSize: 11, color: T.primary, marginTop: 2 }}>
+                                  Visitado el {c.fechaVisitaReal} ({c.diaVisitaReal}) — no fue su día asignado ({d.dia})
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
-              )}
-              {r.marcadosManual.length > 0 && (
-                <div style={{ marginTop: r.pendientes.length > 0 ? 12 : 0 }}>
-                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>Marcados como visitados a mano esta semana:</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {r.marcadosManual.map((nombre) => (
-                      <div key={nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: T.cardSoft, borderRadius: 8, gap: 10, opacity: 0.85 }}>
-                        <span style={{ fontSize: 12.5 }}>{nombre}</span>
-                        {esVendedor && esSemanaActual && persistFresco && (
-                          <button
-                            onClick={() => marcarVisitaManual(r.ruta, nombre, false)}
-                            disabled={guardandoCliente === nombre}
-                            style={{
-                              fontSize: 11, color: T.muted, background: "transparent",
-                              border: `1px solid ${T.border}`, borderRadius: 999, padding: "4px 10px", cursor: "pointer",
-                              opacity: guardandoCliente === nombre ? 0.5 : 1, whiteSpace: "nowrap",
-                            }}
-                          >
-                            {guardandoCliente === nombre ? "…" : "Deshacer"}
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
