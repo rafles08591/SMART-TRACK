@@ -48,24 +48,32 @@ function sumarDiasISO(fechaISO, dias) {
 function fusionarVisitasSemana(historialActual, registrosNuevos) {
   const resultado = { ...(historialActual || {}) };
   registrosNuevos.forEach((r) => {
-    const clienteNombre = String(r.cliente || "").trim();
-    if (!clienteNombre) return;
+    if (!r.fecha || !r.vendedor) return;
     const semanaInicio = lunesDeSemana(r.fecha);
     const clave = `${r.vendedor}|${semanaInicio}`;
-    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {} };
-    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
-    const visitadoEsteDia = !!(String(r.inicio || "").trim() && String(r.final || "").trim());
-    resultado[clave] = {
-      ...entradaExistente,
-      clientes: {
+    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {}, fechasMesaControl: [] };
+    // Se registra la fecha como "subida" sin importar si esta fila en
+    // particular trae nombre de cliente o no — lo que importa aquí es que
+    // sí llegó un archivo de Mesa de Control de esa ruta para ese día.
+    const fechasMesaControl = (entradaExistente.fechasMesaControl || []).includes(r.fecha)
+      ? entradaExistente.fechasMesaControl
+      : [...(entradaExistente.fechasMesaControl || []), r.fecha];
+
+    const clienteNombre = String(r.cliente || "").trim();
+    let clientesActualizados = entradaExistente.clientes;
+    if (clienteNombre) {
+      const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
+      const visitadoEsteDia = !!(String(r.inicio || "").trim() && String(r.final || "").trim());
+      clientesActualizados = {
         ...entradaExistente.clientes,
         [clienteNombre]: {
           visitado: clienteExistente.visitado || visitadoEsteDia,
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
         },
-      },
-    };
+      };
+    }
+    resultado[clave] = { ...entradaExistente, fechasMesaControl, clientes: clientesActualizados };
   });
   return resultado;
 }
