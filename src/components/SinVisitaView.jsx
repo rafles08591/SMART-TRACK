@@ -23,7 +23,7 @@
 
 import React, { useMemo, useState } from "react";
 import { AlertTriangle, Users, MapPin, CheckCircle2, Calendar } from "lucide-react";
-import { NOMBRES } from "../constants";
+import { NOMBRES, RUTAS } from "../constants";
 
 const T = {
   bg: "#0B1220",
@@ -83,6 +83,12 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const [semanaSeleccionada, setSemanaSeleccionada] = useState(semanaActual);
   const semana = semanasDisponibles.includes(semanaSeleccionada) ? semanaSeleccionada : semanaActual;
   const esSemanaActual = semana === semanaActual;
+
+  const DIAS_CORTO = ["Lun", "Mar", "Mié", "Jue", "Vie"];
+  const diasLaborales = useMemo(
+    () => DIAS_CORTO.map((nombreCorto, i) => ({ fecha: sumarDiasISOLocal(semana, i), nombreCorto })),
+    [semana]
+  );
 
   const [guardandoCliente, setGuardandoCliente] = useState(null); // nombre del cliente en proceso, para deshabilitar el botón mientras guarda
 
@@ -174,6 +180,49 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
           </select>
         </div>
       </div>
+
+      {!esVendedor && (
+        <div className="sv-card" style={{ padding: 16, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Cobertura de Mesa de Control esta semana</div>
+          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 12 }}>
+            Debe haber un archivo subido por cada ruta, de lunes a viernes, para que "Sin visita" refleje la semana completa.
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 10px", color: T.muted, fontWeight: 600 }}>Ruta</th>
+                  {diasLaborales.map((d) => (
+                    <th key={d.fecha} style={{ padding: "6px 8px", color: T.muted, fontWeight: 600 }}>{d.nombreCorto}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {RUTAS.map((ruta) => {
+                  const entrada = visitasSemana[`${ruta}|${semana}`];
+                  const fechasSubidas = entrada?.fechasMesaControl || [];
+                  const faltantes = diasLaborales.filter((d) => !fechasSubidas.includes(d.fecha)).length;
+                  return (
+                    <tr key={ruta} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <td style={{ padding: "7px 10px", fontWeight: 600, whiteSpace: "nowrap", color: faltantes > 0 ? T.ink : T.ok }}>
+                        {nombreRutaBonito(ruta)}
+                      </td>
+                      {diasLaborales.map((d) => {
+                        const subido = fechasSubidas.includes(d.fecha);
+                        return (
+                          <td key={d.fecha} style={{ textAlign: "center", padding: "7px 8px" }}>
+                            {subido ? <CheckCircle2 size={15} color={T.ok} /> : <span style={{ color: T.bad, fontWeight: 800 }}>—</span>}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {!esVendedor && (
         <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
