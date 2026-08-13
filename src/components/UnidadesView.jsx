@@ -1344,8 +1344,16 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     link.download = nombreArchivo;
     link.href = url;
     document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      link.click();
+    } finally {
+      // .remove() (a diferencia de removeChild) no truena aunque el nodo ya
+      // no esté colgado de document.body en ese momento — en algunos
+      // navegadores/Android, iniciar la descarga puede alterar el DOM antes
+      // de que llegue esta línea, y removeChild(link) tronaba con
+      // "NotFoundError: el nodo no es hijo de este nodo".
+      link.remove();
+    }
   }
 
   function kmDeUnidad(unidad, revision) {
