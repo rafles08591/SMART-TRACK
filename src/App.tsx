@@ -72,12 +72,27 @@ function sumarDiasISO(fechaISO, dias) {
   return fecha.toISOString().slice(0, 10);
 }
 
+// Normaliza un código de cliente para poder cruzarlo entre Mesa de Control
+// (que a veces trae ceros a la izquierda, ej. "0010167065") y clientes_ruta
+// (que puede no traerlos, ej. "10167065") — quita solo ceros a la
+// izquierda, sin tocar códigos con letras (ej. "PROV000041" no se altera
+// porque no arranca con "0").
+function normalizarCodigo(c) {
+  return String(c || "").trim().replace(/^0+/, "");
+}
+
 // Acumula, semana por semana, qué clientes SÍ tuvieron al menos una visita
 // (inicio/final no vacíos) y cuáles solo aparecieron en el reporte sin
 // nunca tener horario de visita — esos son los "sin visita" de la semana.
 // A diferencia de `data.mesaControl` (que reemplaza el día anterior de una
 // ruta cada vez que se sube uno nuevo), esto se va acumulando: cada carga
 // del día solo agrega/actualiza info, nunca borra lo ya visto esa semana.
+//
+// El cliente se identifica PRINCIPALMENTE por código (más confiable que el
+// nombre, que puede venir con variaciones) — si la fila no trae código
+// (no debería pasar en Mesa de Control, pero por si acaso), se cae de
+// respaldo al nombre. Se guardan ambos (código y nombre) dentro de cada
+// registro para que el cruce contra clientes_ruta pueda usar cualquiera.
 function fusionarVisitasSemana(historialActual, registrosNuevos) {
   const resultado = { ...(historialActual || {}) };
   registrosNuevos.forEach((r) => {
@@ -93,13 +108,17 @@ function fusionarVisitasSemana(historialActual, registrosNuevos) {
       : [...(entradaExistente.fechasMesaControl || []), r.fecha];
 
     const clienteNombre = String(r.cliente || "").trim();
+    const codigoNorm = normalizarCodigo(r.clienteCodigo);
+    const claveCliente = codigoNorm || clienteNombre;
     let clientesActualizados = entradaExistente.clientes;
-    if (clienteNombre) {
-      const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
+    if (claveCliente) {
+      const clienteExistente = entradaExistente.clientes[claveCliente] || { codigo: codigoNorm || null, nombre: clienteNombre, visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
       const visitadoEsteDia = !!(String(r.inicio || "").trim() && String(r.final || "").trim());
       clientesActualizados = {
         ...entradaExistente.clientes,
-        [clienteNombre]: {
+        [claveCliente]: {
+          codigo: codigoNorm || clienteExistente.codigo || null,
+          nombre: clienteNombre || clienteExistente.nombre || "",
           visitado: clienteExistente.visitado || visitadoEsteDia,
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
@@ -136,6 +155,11 @@ function podarVisitasSemanaAntiguas(visitasSemana, semanasAConservar = 8) {
 // estructura semanal que Mesa de Control — el orden en que se suban los
 // dos reportes no importa, cualquiera de los dos puede "salvar" a un
 // cliente de aparecer como sin visita.
+// A diferencia de Mesa de Control, Avance del Día no trae código de
+// cliente — solo nombre. Para no crear una entrada duplicada de un cliente
+// que YA existe (guardado bajo su código gracias a Mesa de Control), se
+// busca primero si ya hay alguien con ese mismo nombre normalizado antes
+// de crear una llave nueva.
 function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia) {
   const resultado = { ...(historialActual || {}) };
   registrosAvanceDia.forEach((r) => {
@@ -144,13 +168,21 @@ function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia
     const semanaInicio = lunesDeSemana(r.fecha);
     const clave = `${r.vendedor}|${semanaInicio}`;
     const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {}, fechasMesaControl: [] };
-    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
+
+    const nombreNorm = clienteNombre.toUpperCase().trim();
+    const claveEncontrada = Object.keys(entradaExistente.clientes).find(
+      (k) => (entradaExistente.clientes[k].nombre || "").toUpperCase().trim() === nombreNorm
+    );
+    const claveCliente = claveEncontrada || clienteNombre;
+
+    const clienteExistente = entradaExistente.clientes[claveCliente] || { codigo: null, nombre: clienteNombre, visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
     resultado[clave] = {
       ...entradaExistente,
       clientes: {
         ...entradaExistente.clientes,
-        [clienteNombre]: {
+        [claveCliente]: {
           ...clienteExistente,
+          nombre: clienteExistente.nombre || clienteNombre,
           visitado: true, // tuvo una venta ese día en Avance del Día -> contó como visitado
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
@@ -1537,6 +1569,7 @@ export default function App() {
       const fecha = `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
 
       const cliente = String(getVal(row, "cliente") || "").trim();
+      const clienteCodigo = String(getVal(row, "codigo") || "").trim();
       const inicio = String(getVal(row, "inicio") || "").trim();
       const final = String(getVal(row, "final") || "").trim();
       const tiempoEstancia = Number(getVal(row, "Tiempo_estancia", "tiempo_estancia") || 0) || 0;
@@ -1545,7 +1578,7 @@ export default function App() {
       const volumen = Number(getVal(row, "volumen") || 0) || 0;
       const descuento = Number(getVal(row, "descuento") || 0) || 0;
 
-      registros.push({ vendedor, fecha, cliente, inicio, final, tiempoEstancia, tipoInicio, tipoFin, volumen, descuento });
+      registros.push({ vendedor, fecha, cliente, clienteCodigo, inicio, final, tiempoEstancia, tipoInicio, tipoFin, volumen, descuento });
     });
     return registros;
   }
