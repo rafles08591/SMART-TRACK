@@ -72,14 +72,8 @@ function sumarDiasISO(fechaISO, dias) {
   return fecha.toISOString().slice(0, 10);
 }
 
-// Normaliza un código de cliente para poder cruzarlo entre Mesa de Control
-// (que a veces trae ceros a la izquierda, ej. "0010167065") y clientes_ruta
-// (que puede no traerlos, ej. "10167065") — quita solo ceros a la
-// izquierda, sin tocar códigos con letras (ej. "PROV000041" no se altera
-// porque no arranca con "0").
-function normalizarCodigo(c) {
-  return String(c || "").trim().replace(/^0+/, "");
-}
+// normalizarCodigo ya viene importada de "./utils" (se usa aquí para
+// cruzar el código de cliente de Mesa de Control contra clientes_ruta).
 
 // Acumula, semana por semana, qué clientes SÍ tuvieron al menos una visita
 // (inicio/final no vacíos) y cuáles solo aparecieron en el reporte sin
