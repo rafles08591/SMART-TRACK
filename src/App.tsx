@@ -102,14 +102,14 @@ function fusionarVisitasSemana(historialActual, registrosNuevos) {
         [clienteNombre]: {
           visitado: clienteExistente.visitado || visitadoEsteDia,
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
-          fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
+          fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
           // Fechas exactas en las que SÍ tuvo horario de visita (a diferencia
           // de fechasVistas, que incluye también los días que apareció en el
           // reporte sin visitarlo) — esto es lo que permite descontarlo del
           // día correcto contra el listado de clientes_ruta.
-          fechasVisitado: visitadoEsteDia && !clienteExistente.fechasVisitado.includes(r.fecha)
-            ? [...clienteExistente.fechasVisitado, r.fecha]
-            : clienteExistente.fechasVisitado,
+          fechasVisitado: visitadoEsteDia && !(clienteExistente.fechasVisitado || []).includes(r.fecha)
+            ? [...(clienteExistente.fechasVisitado || []), r.fecha]
+            : (clienteExistente.fechasVisitado || []),
         },
       };
     }
@@ -153,8 +153,8 @@ function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia
           ...clienteExistente,
           visitado: true, // tuvo una venta ese día en Avance del Día -> contó como visitado
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
-          fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
-          fechasVisitado: clienteExistente.fechasVisitado.includes(r.fecha) ? clienteExistente.fechasVisitado : [...clienteExistente.fechasVisitado, r.fecha],
+          fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
+          fechasVisitado: (clienteExistente.fechasVisitado || []).includes(r.fecha) ? (clienteExistente.fechasVisitado || []) : [...(clienteExistente.fechasVisitado || []), r.fecha],
         },
       },
     };
