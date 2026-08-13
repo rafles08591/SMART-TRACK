@@ -95,7 +95,7 @@ function fusionarVisitasSemana(historialActual, registrosNuevos) {
     const clienteNombre = String(r.cliente || "").trim();
     let clientesActualizados = entradaExistente.clientes;
     if (clienteNombre) {
-      const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
+      const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
       const visitadoEsteDia = !!(String(r.inicio || "").trim() && String(r.final || "").trim());
       clientesActualizados = {
         ...entradaExistente.clientes,
@@ -103,6 +103,13 @@ function fusionarVisitasSemana(historialActual, registrosNuevos) {
           visitado: clienteExistente.visitado || visitadoEsteDia,
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
+          // Fechas exactas en las que SÍ tuvo horario de visita (a diferencia
+          // de fechasVistas, que incluye también los días que apareció en el
+          // reporte sin visitarlo) — esto es lo que permite descontarlo del
+          // día correcto contra el listado de clientes_ruta.
+          fechasVisitado: visitadoEsteDia && !clienteExistente.fechasVisitado.includes(r.fecha)
+            ? [...clienteExistente.fechasVisitado, r.fecha]
+            : clienteExistente.fechasVisitado,
         },
       };
     }
@@ -136,8 +143,8 @@ function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia
     if (!clienteNombre || !r.fecha || !r.vendedor) return;
     const semanaInicio = lunesDeSemana(r.fecha);
     const clave = `${r.vendedor}|${semanaInicio}`;
-    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {} };
-    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [] };
+    const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {}, fechasMesaControl: [] };
+    const clienteExistente = entradaExistente.clientes[clienteNombre] || { visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
     resultado[clave] = {
       ...entradaExistente,
       clientes: {
@@ -147,6 +154,7 @@ function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia
           visitado: true, // tuvo una venta ese día en Avance del Día -> contó como visitado
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: clienteExistente.fechasVistas.includes(r.fecha) ? clienteExistente.fechasVistas : [...clienteExistente.fechasVistas, r.fecha],
+          fechasVisitado: clienteExistente.fechasVisitado.includes(r.fecha) ? clienteExistente.fechasVisitado : [...clienteExistente.fechasVisitado, r.fecha],
         },
       },
     };
