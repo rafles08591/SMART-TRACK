@@ -29,6 +29,39 @@ import Login from "./components/Login";
 import VendorView from "./components/VendorView";
 import StaffView from "./components/StaffView";
 
+/* ---------------------------------------------------------------
+   PARCHE DEFENSIVO — "NotFoundError: Failed to execute 'removeChild'
+   on 'Node'". Es un bug conocido de React (no de este código): pasa
+   cuando algo AJENO a React altera el árbol del DOM por debajo de él
+   (típicamente extensiones del navegador tipo traductor, o el
+   navegador integrado de WhatsApp/Facebook en Android) — cuando React
+   luego intenta quitar/mover un nodo que ya no está donde lo dejó,
+   truena y tumba toda la pantalla en blanco.
+   Aquí se parchan removeChild/insertBefore para que, en vez de
+   tronar, simplemente no hagan nada si el nodo ya no es hijo de ese
+   padre — evita la pantalla en blanco sin tapar otros errores reales.
+------------------------------------------------------------------ */
+if (typeof window !== "undefined" && !window.__ruParcheDom) {
+  window.__ruParcheDom = true;
+  const removeChildOriginal = Node.prototype.removeChild;
+  Node.prototype.removeChild = function (child) {
+    if (child.parentNode !== this) {
+      console.warn("Se evitó un error de removeChild (el nodo ya no era hijo de este padre).");
+      return child;
+    }
+    return removeChildOriginal.call(this, child);
+  };
+  const insertBeforeOriginal = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function (newNode, referenceNode) {
+    if (referenceNode && referenceNode.parentNode !== this) {
+      console.warn("Se evitó un error de insertBefore (el nodo de referencia ya no era hijo de este padre).");
+      return newNode;
+    }
+    return insertBeforeOriginal.call(this, newNode, referenceNode);
+  };
+}
+
+
 // Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
 // horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
 // el día siguiente por default al subir una carga.
