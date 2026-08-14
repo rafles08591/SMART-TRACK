@@ -29,8 +29,15 @@ import SinVisitaView from "./SinVisitaView";
 // adelante, solo hay que sumarla aquí.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onLogout, peorVendedorNombre, bottom3Nombres }) {
+export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
+
+  // Registro de uso: mismo mecanismo que en StaffView.
+  useEffect(() => {
+    if (!onRegistrarEvento || !vendedor) return;
+    onRegistrarEvento({ usuario: vendedor.name, rol: "vendedor", puesto: null, tipoEvento: "tab_view", pestana: tab });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, vendedor?.name]);
 
   // Observaciones de facturación sin responder para esta ruta — hace
   // parpadear en naranja la pestaña FACTURAS hasta que la ruta responde.
@@ -87,7 +94,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         setTab={setTab}
         tabs={OBJETIVO_TABS.filter((t) => {
           if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
-          return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos", "tepic"].includes(t.key);
+          return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "creditos", "tepic", "actividad"].includes(t.key);
         })}
         estadoTabs={{
           rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
