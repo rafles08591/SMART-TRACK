@@ -32,6 +32,7 @@ export const OBJETIVO_TABS = [
   { key: "unidades", label: "UNIDADES", unit: "special" },
   { key: "nomina", label: "NOMINA", unit: "special" },
   { key: "sin_visita", label: "SIN VISITA", unit: "special" },
+  { key: "actividad", label: "ACTIVIDAD", unit: "special" },
   { key: "km", label: "KM", unit: "special" },
   { key: "tepic", label: "TEPIC", unit: "special" },
   { key: "rutas", label: "RUTAS", unit: "special" },
