@@ -34,14 +34,24 @@ import CargasView from "./CargasView";
 import FacturasView from "./FacturasView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
+import ActividadView from "./ActividadView";
 
-export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onRefresh, refrescando, onLogout }) {
+export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
   const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
   const [newName, setNewName] = useState("");
+
+  // Registro de uso: cada vez que cambia la pestaña de indicador (DÍA,
+  // UNIDADES, NOMINA, etc.), se anota quién la vio y cuándo — no bloquea
+  // nada si falla, es solo estadística para el reporte de ACTIVIDAD.
+  useEffect(() => {
+    if (!onRegistrarEvento) return;
+    onRegistrarEvento({ usuario: staffUsername, rol: "staff", puesto, tipoEvento: "tab_view", pestana: objTab });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objTab]);
 
   // Observaciones de facturación sin responder (cualquier ruta) — para que
   // Supervisor-1/Gerente vean si algo necesita atención.
@@ -240,7 +250,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad")
                 : undefined
             }
             estadoTabs={estadoTabsActividades}
@@ -441,6 +451,14 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <NominaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
           ) : objTab === "sin_visita" ? (
             <SinVisitaView data={data} rol="staff" puesto={puesto} rutaPropia={null} />
+          ) : objTab === "actividad" ? (
+            puesto === "gerente" ? (
+              <ActividadView />
+            ) : (
+              <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+                Este módulo es exclusivo del Gerente.
+              </div>
+            )
           ) : objTab === "tepic" ? (
             <div>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 4 }}>CLO TEPIC</div>
