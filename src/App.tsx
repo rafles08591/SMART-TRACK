@@ -65,6 +65,24 @@ if (typeof window !== "undefined" && !window.__ruParcheDom) {
 // Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
 // horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
 // el día siguiente por default al subir una carga.
+// Registra eventos de uso (login / cambio de pestaña) en su propia tabla
+// de Supabase — NO en el documento JSON grande, para no repetir el
+// problema de tamaño que ya tuvimos. Nunca debe tronar la app si falla
+// (por eso el catch silencioso): es solo estadística, no algo crítico.
+async function registrarEventoUso({ usuario, rol, puesto, tipoEvento, pestana }) {
+  try {
+    await supabase.from("eventos_uso").insert({
+      usuario: usuario || null,
+      rol: rol || null,
+      puesto: puesto || null,
+      tipo_evento: tipoEvento,
+      pestana: pestana || null,
+    });
+  } catch (err) {
+    console.warn("No se pudo registrar el evento de uso:", err);
+  }
+}
+
 function sumarDiasISO(fechaISO, dias) {
   const [y, m, d] = fechaISO.split("-").map(Number);
   const fecha = new Date(Date.UTC(y, m - 1, d));
@@ -2697,6 +2715,7 @@ export default function App() {
             setRole(user.role);
             setPuesto(user.puesto || null);
             setStaffUsername(user.username);
+            registrarEventoUso({ usuario: user.username, rol: user.role, puesto: user.puesto || null, tipoEvento: "login" });
             if (user.role === "vendedor") {
               const v = vendedores.find((v) => v.name.trim().toLowerCase() === user.username.trim().toLowerCase());
               setCurrentVendorId(v ? v.id : null);
@@ -2716,6 +2735,7 @@ export default function App() {
           stats={stats}
           puesto={puesto}
           staffUsername={staffUsername}
+          onRegistrarEvento={registrarEventoUso}
           onFile={handleOtcSemanalFile}
           fileInputRef={fileInputRef}
           onDownloadTemplate={downloadOtcSemanalTemplate}
@@ -2789,6 +2809,7 @@ export default function App() {
           persistConfigUnidades={persistConfigUnidades}
           onRefresh={refrescarManual}
           refrescando={refrescando}
+          onRegistrarEvento={registrarEventoUso}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
           peorVendedorNombre={stats.peorVendedorNombre}
           bottom3Nombres={stats.bottom3Nombres}
