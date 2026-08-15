@@ -2,13 +2,28 @@
 /* =====================================================================
    RelojChecadorView — módulo independiente de SMART-TRACK
    ---------------------------------------------------------------------
-   Reporte de entrada/salida al CLO tomado del checador biométrico.
-   Admin y Gerente suben el archivo .xls/.xlsx que exporta el reloj
-   checador (columnas: Num, Department, Name, ID, Date/Time, Verifycode,
-   Clock-in/out, Device ID, Device Name, UserExtFmt). El reporte no trae
-   de forma confiable cuál marca es entrada y cuál salida (todas suelen
-   venir como "C/In"), así que por cada empleado y día se toma la marca
-   MÁS TEMPRANA como entrada y la MÁS TARDÍA como salida.
+   Dos pestañas:
+
+   1) MARCAS DEL DÍA — reporte de entrada/salida al CLO tomado del
+      checador biométrico. Admin y Gerente suben el archivo .xls/.xlsx
+      que exporta el reloj checador (columnas: Num, Department, Name,
+      ID, Date/Time, Verifycode, Clock-in/out, Device ID, Device Name,
+      UserExtFmt). El reporte no trae de forma confiable cuál marca es
+      entrada y cuál salida (todas suelen venir como "C/In"), así que
+      por cada empleado y día se toma la marca MÁS TEMPRANA como
+      entrada y la MÁS TARDÍA como salida.
+
+   2) BONO DE PUNTUALIDAD — por bloques de semana (lunes a sábado):
+      se gana el bono de $400 si TODOS los 6 días tuvieron entrada a
+      las 7:12 a.m. o antes; un solo día tarde (7:13+) o sin registro
+      lo pierde completo. El bono que se PAGA una semana corresponde
+      al checador de la semana ANTERIOR (ej. lo que se paga la semana
+      del 10-15 de agosto es el checador de la semana del 3-8), por
+      eso el selector arranca por default en la semana pasada, no en
+      la actual.
+      - Gerente, Supervisor-1 y Admin ven TODAS las rutas.
+      - Cada vendedor ve solo su propia ruta.
+      - Supervisor-2 no ve esta pestaña (solo "Marcas del día").
 
    El "Num" del checador es un número interno del equipo biométrico, no
    el código de ruta — hay que traducirlo. El mapeo se guarda aquí mismo
@@ -36,11 +51,15 @@
        for all using (true) with check (true);
 
    Cómo se conecta:
-     <RelojChecadorView puedeSubir={esGerenteOAdmin} rutaPropia={rutaPropiaONull} />
+     <RelojChecadorView
+       puedeSubir={esGerenteOAdmin}
+       rutaPropia={rutaPropiaONull}
+       puedeVerBono={esGerenteOSupervisor1OAdmin}
+     />
 ===================================================================== */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Clock, Upload, Download, Calendar, AlertTriangle, RefreshCw } from "lucide-react";
+import { Clock, Upload, Download, Calendar, AlertTriangle, RefreshCw, Award, CheckCircle2 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { NOMBRES } from "../constants";
@@ -58,9 +77,6 @@ const T = {
   badSoft: "rgba(255,107,107,0.12)",
 };
 
-// Número interno del checador biométrico -> ruta (o "GERENTE"). J201 y
-// J203 son vendedores de pueblo y no se les da seguimiento aquí, por eso
-// no aparecen en este mapeo.
 const MAPEO_NUMERO_RUTA = {
   "101": "RUTA J207",
   "40": "RUTA J202",
@@ -68,13 +84,24 @@ const MAPEO_NUMERO_RUTA = {
   "132": "RUTA J205",
   "67": "GERENTE",
   "126": "RUTA J206",
+  "57": "SUPERVISOR-1",
 };
+// Para el "Bono de puntualidad" (todas las rutas) se incluyen las rutas de
+// venta y además Supervisor-1 — a él también se le evalúa el bono. Gerente
+// no entra a esta lista (se sigue viendo en "Marcas del día", pero no se
+// le mide el bono de puntualidad).
+const RUTAS_CHECADOR = [...new Set(Object.values(MAPEO_NUMERO_RUTA))].filter((r) => r.startsWith("RUTA ") || r === "SUPERVISOR-1");
+
+const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // 7:13 a.m. en adelante = tarde
+const BONO_PUNTUALIDAD_MONTO = 400;
+const NOMBRES_DIA_PUNTUALIDAD = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 function hoyISO() {
   return new Date().toISOString().slice(0, 10);
 }
 function nombreRutaBonito(ruta) {
-  if (ruta === "GERENTE") return "Gerente";
+  if (ruta === "GERENTE") return NOMBRES["GERENTE"] ? `Gerente · ${NOMBRES["GERENTE"]}` : "Gerente";
+  if (ruta === "SUPERVISOR-1") return NOMBRES["SUPERVISOR-1"] ? `Supervisor 1 · ${NOMBRES["SUPERVISOR-1"]}` : "Supervisor 1";
   const nombre = NOMBRES[ruta];
   return nombre ? `${ruta.replace("RUTA ", "")} · ${nombre}` : ruta;
 }
@@ -82,10 +109,56 @@ function formatoHora(hora) {
   if (!hora) return "—";
   return hora.slice(0, 5);
 }
+function sumarDiasISOLocal(fechaISO, dias) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  fecha.setUTCDate(fecha.getUTCDate() + dias);
+  return fecha.toISOString().slice(0, 10);
+}
+function lunesDeSemanaLocal(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  const dia = fecha.getUTCDay();
+  const offset = dia === 0 ? -6 : 1 - dia;
+  fecha.setUTCDate(fecha.getUTCDate() + offset);
+  return fecha.toISOString().slice(0, 10);
+}
+function formatoRangoSemana(lunesISO) {
+  const sabado = sumarDiasISOLocal(lunesISO, 5);
+  const opts = { day: "numeric", month: "long", timeZone: "UTC" };
+  const [y1, m1, d1] = lunesISO.split("-").map(Number);
+  const [y2, m2, d2] = sabado.split("-").map(Number);
+  const f1 = new Date(Date.UTC(y1, m1 - 1, d1)).toLocaleDateString("es-MX", opts);
+  const f2 = new Date(Date.UTC(y2, m2 - 1, d2)).toLocaleDateString("es-MX", opts);
+  return `${f1} al ${f2}`;
+}
 
-export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
+async function evaluarPuntualidadSemana(rutaCompleta, semanaInicio) {
+  const { data, error } = await supabase
+    .from("checador_marcas")
+    .select("fecha, hora_entrada")
+    .eq("ruta", rutaCompleta)
+    .gte("fecha", semanaInicio)
+    .lte("fecha", sumarDiasISOLocal(semanaInicio, 5));
+  if (error) throw error;
+  const marcasPorFecha = {};
+  (data || []).forEach((m) => { marcasPorFecha[m.fecha] = m; });
+  const dias = NOMBRES_DIA_PUNTUALIDAD.map((nombre, i) => {
+    const fecha = sumarDiasISOLocal(semanaInicio, i);
+    const marca = marcasPorFecha[fecha];
+    if (!marca || !marca.hora_entrada) return { fecha, nombre, ok: false, motivo: "sin_registro" };
+    const ok = marca.hora_entrada <= HORA_LIMITE_PUNTUALIDAD;
+    return { fecha, nombre, ok, motivo: ok ? null : "tarde", horaEntrada: marca.hora_entrada };
+  });
+  const diasProblema = dias.filter((d) => !d.ok);
+  return { gano: diasProblema.length === 0, dias, diasProblema };
+}
+
+export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono }) {
+  const [vista, setVista] = useState("marcas"); // "marcas" | "puntualidad"
+
   const [fecha, setFecha] = useState(hoyISO());
-  const [marcas, setMarcas] = useState(null); // null = cargando
+  const [marcas, setMarcas] = useState(null);
   const [error, setError] = useState("");
   const [subiendo, setSubiendo] = useState(false);
   const [resultadoSubida, setResultadoSubida] = useState("");
@@ -108,7 +181,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
     }
   }
 
-  useEffect(() => { cargar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [fecha]);
+  useEffect(() => { if (vista === "marcas") cargar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [fecha, vista]);
 
   function procesarArchivo(e) {
     const file = e.target.files?.[0];
@@ -124,8 +197,6 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
         const hoja = libro.Sheets[libro.SheetNames[0]];
         const filas = XLSX.utils.sheet_to_json(hoja, { defval: "" });
 
-        // Agrupa por (número de empleado, fecha) y toma la marca más
-        // temprana como entrada y la más tardía como salida.
         const grupos = {};
         let sinReconocer = new Set();
         filas.forEach((f) => {
@@ -170,7 +241,6 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
           mensaje += ` Números sin mapear (no se guardaron): ${Array.from(sinReconocer).join(", ")}.`;
         }
         setResultadoSubida(mensaje);
-        // Si la fecha subida es la que se está viendo, refresca la tabla.
         if (registros.some((r) => r.fecha === fecha)) cargar();
       } catch (err) {
         console.error("Error procesando checador:", err);
@@ -202,6 +272,47 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
     XLSX.writeFile(libro, `reloj_checador_${fecha}.xlsx`);
   }
 
+  const semanaActual = lunesDeSemanaLocal(hoyISO());
+  const semanaPasadaDefault = sumarDiasISOLocal(semanaActual, -7);
+  const [semanaPuntualidad, setSemanaPuntualidad] = useState(semanaPasadaDefault);
+  const [resultadosPuntualidad, setResultadosPuntualidad] = useState(null);
+  const [cargandoPuntualidad, setCargandoPuntualidad] = useState(false);
+  const [errorPuntualidad, setErrorPuntualidad] = useState("");
+
+  const rutasAEvaluar = useMemo(() => {
+    if (rutaPropia) return [`RUTA ${rutaPropia}`];
+    if (puedeVerBono) return RUTAS_CHECADOR;
+    return [];
+  }, [rutaPropia, puedeVerBono]);
+
+  useEffect(() => {
+    if (vista !== "puntualidad" || rutasAEvaluar.length === 0) return;
+    let activo = true;
+    setCargandoPuntualidad(true);
+    setErrorPuntualidad("");
+    Promise.all(rutasAEvaluar.map((r) => evaluarPuntualidadSemana(r, semanaPuntualidad).then((res) => [r, res])))
+      .then((entradas) => {
+        if (!activo) return;
+        const mapa = {};
+        entradas.forEach(([r, res]) => { mapa[r] = res; });
+        setResultadosPuntualidad(mapa);
+      })
+      .catch((err) => {
+        console.error("Error evaluando puntualidad:", err);
+        if (activo) setErrorPuntualidad("No se pudo consultar el checador para esta semana.");
+      })
+      .finally(() => { if (activo) setCargandoPuntualidad(false); });
+    return () => { activo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vista, semanaPuntualidad, rutaPropia, puedeVerBono]);
+
+  const rutasOrdenadas = useMemo(() => {
+    if (!resultadosPuntualidad) return [];
+    return rutasAEvaluar
+      .map((r) => ({ ruta: r, resultado: resultadosPuntualidad[r] }))
+      .sort((a, b) => Number(a.resultado?.gano) - Number(b.resultado?.gano));
+  }, [resultadosPuntualidad, rutasAEvaluar]);
+
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <style>{`
@@ -209,74 +320,149 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia }) {
         .rc-select, .rc-input { background:${T.bg}; border:1px solid ${T.border}; color:${T.ink}; border-radius:8px; padding:7px 10px; font-size:12.5px; }
         .rc-btn { background:${T.primary}; color:#1A1300; font-weight:700; border:none; border-radius:10px; padding:9px 15px; cursor:pointer; font-size:13px; display:inline-flex; align-items:center; gap:6px; }
         .rc-btn-ghost { background:transparent; border:1px solid ${T.border}; color:${T.ink}; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:12px; display:inline-flex; align-items:center; gap:5px; }
+        .rc-tab { background:transparent; border:1px solid ${T.border}; color:${T.ink}; border-radius:10px; padding:9px 14px; cursor:pointer; font-size:13px; font-weight:700; flex:1; }
+        .rc-tab.activo { background:${T.primary}; color:#1A1300; border-color:${T.primary}; }
       `}</style>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Clock size={20} color={T.primary} />
-          <span style={{ fontSize: 18, fontWeight: 800 }}>RELOJ CHECADOR</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Calendar size={14} color={T.muted} />
-          <input type="date" className="rc-input" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-          <button className="rc-btn-ghost" onClick={cargar}><RefreshCw size={12} /> Actualizar</button>
-          {marcasVisibles.length > 0 && (
-            <button className="rc-btn-ghost" onClick={descargarExcel}><Download size={12} /> Excel</button>
-          )}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+        <Clock size={20} color={T.primary} />
+        <span style={{ fontSize: 18, fontWeight: 800 }}>RELOJ CHECADOR</span>
       </div>
 
-      {puedeSubir && (
-        <div className="rc-card" style={{ padding: 16, marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Subir archivo del checador</div>
-          <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10 }}>
-            Sube el .xls/.xlsx tal cual lo exporta el checador. Cada fila se agrupa por empleado y día — la marca más temprana queda como entrada y la más tardía como salida.
-          </div>
-          <button className="rc-btn" disabled={subiendo} onClick={() => fileInputRef.current?.click()}>
-            <Upload size={14} /> {subiendo ? "Procesando…" : "Elegir archivo"}
+      {(puedeVerBono || rutaPropia) && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button className={`rc-tab ${vista === "marcas" ? "activo" : ""}`} onClick={() => setVista("marcas")}>Marcas del día</button>
+          <button className={`rc-tab ${vista === "puntualidad" ? "activo" : ""}`} onClick={() => setVista("puntualidad")}>
+            <Award size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} /> Bono de puntualidad
           </button>
-          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={procesarArchivo} />
-          {resultadoSubida && <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>{resultadoSubida}</div>}
         </div>
       )}
 
-      {error && (
-        <div className="rc-card" style={{ padding: 14, marginBottom: 16, color: T.bad, fontSize: 12.5 }}>{error}</div>
-      )}
-
-      {marcas === null && !error ? (
-        <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
-          Cargando…
-        </div>
-      ) : marcasVisibles.length === 0 ? (
-        <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-          <AlertTriangle size={20} />
-          No hay marcas del checador para {rutaPropia ? "tu ruta" : "esta fecha"} ({fecha}).
-        </div>
-      ) : (
-        <div className="rc-card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead>
-                <tr style={{ background: T.cardSoft, textAlign: "left" }}>
-                  {["Ruta", "Nombre", "Entrada", "Salida"].map((h) => (
-                    <th key={h} style={{ padding: "10px 12px", color: T.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {marcasVisibles.map((m) => (
-                  <tr key={m.numero_empleado} style={{ borderTop: `1px solid ${T.border}` }}>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, whiteSpace: "nowrap" }}>{nombreRutaBonito(m.ruta)}</td>
-                    <td style={{ padding: "10px 12px" }}>{m.nombre}</td>
-                    <td className="nm-mono" style={{ padding: "10px 12px" }}>{formatoHora(m.hora_entrada)}</td>
-                    <td className="nm-mono" style={{ padding: "10px 12px" }}>{formatoHora(m.hora_salida)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {vista === "marcas" ? (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+            <Calendar size={14} color={T.muted} />
+            <input type="date" className="rc-input" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+            <button className="rc-btn-ghost" onClick={cargar}><RefreshCw size={12} /> Actualizar</button>
+            {marcasVisibles.length > 0 && (
+              <button className="rc-btn-ghost" onClick={descargarExcel}><Download size={12} /> Excel</button>
+            )}
           </div>
-        </div>
+
+          {puedeSubir && (
+            <div className="rc-card" style={{ padding: 16, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Subir archivo del checador</div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10 }}>
+                Sube el .xls/.xlsx tal cual lo exporta el checador. Cada fila se agrupa por empleado y día — la marca más temprana queda como entrada y la más tardía como salida.
+              </div>
+              <button className="rc-btn" disabled={subiendo} onClick={() => fileInputRef.current?.click()}>
+                <Upload size={14} /> {subiendo ? "Procesando…" : "Elegir archivo"}
+              </button>
+              <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={procesarArchivo} />
+              {resultadoSubida && <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>{resultadoSubida}</div>}
+            </div>
+          )}
+
+          {error && (
+            <div className="rc-card" style={{ padding: 14, marginBottom: 16, color: T.bad, fontSize: 12.5 }}>{error}</div>
+          )}
+
+          {marcas === null && !error ? (
+            <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
+              Cargando…
+            </div>
+          ) : marcasVisibles.length === 0 ? (
+            <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <AlertTriangle size={20} />
+              No hay marcas del checador para {rutaPropia ? "tu ruta" : "esta fecha"} ({fecha}).
+            </div>
+          ) : (
+            <div className="rc-card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ background: T.cardSoft, textAlign: "left" }}>
+                      {["Ruta", "Nombre", "Entrada", "Salida"].map((h) => (
+                        <th key={h} style={{ padding: "10px 12px", color: T.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {marcasVisibles.map((m) => (
+                      <tr key={m.numero_empleado} style={{ borderTop: `1px solid ${T.border}` }}>
+                        <td style={{ padding: "10px 12px", fontWeight: 700, whiteSpace: "nowrap" }}>{nombreRutaBonito(m.ruta)}</td>
+                        <td style={{ padding: "10px 12px" }}>{m.nombre}</td>
+                        <td className="nm-mono" style={{ padding: "10px 12px" }}>{formatoHora(m.hora_entrada)}</td>
+                        <td className="nm-mono" style={{ padding: "10px 12px" }}>{formatoHora(m.hora_salida)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+            <div style={{ fontSize: 11.5, color: T.muted }}>
+              Se gana ${BONO_PUNTUALIDAD_MONTO} si los 6 días (lunes a sábado) tuvieron entrada a las 7:12 a.m. o antes.
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Calendar size={14} color={T.muted} />
+              <input
+                type="date" className="rc-input"
+                value={semanaPuntualidad}
+                onChange={(e) => setSemanaPuntualidad(lunesDeSemanaLocal(e.target.value))}
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: 12.5, color: T.primary, fontWeight: 700, marginBottom: 14 }}>
+            Semana del {formatoRangoSemana(semanaPuntualidad)}
+            {semanaPuntualidad === semanaPasadaDefault && <span style={{ color: T.muted, fontWeight: 400 }}> — la que se paga esta semana</span>}
+          </div>
+
+          {errorPuntualidad && (
+            <div className="rc-card" style={{ padding: 14, marginBottom: 16, color: T.bad, fontSize: 12.5 }}>{errorPuntualidad}</div>
+          )}
+
+          {cargandoPuntualidad || resultadosPuntualidad === null ? (
+            <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
+              Consultando el checador…
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {rutasOrdenadas.map(({ ruta, resultado }) => (
+                <div key={ruta} className="rc-card" style={{ padding: 16, borderColor: resultado?.gano ? T.ok : T.bad }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: resultado?.gano ? 0 : 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{nombreRutaBonito(ruta)}</div>
+                    {resultado?.gano ? (
+                      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 800, color: T.ok }}>
+                        <CheckCircle2 size={15} /> GANÓ ${BONO_PUNTUALIDAD_MONTO}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 12, fontWeight: 800, color: T.bad, background: T.badSoft, borderRadius: 999, padding: "3px 10px" }}>
+                        NO GANÓ
+                      </span>
+                    )}
+                  </div>
+                  {!resultado?.gano && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {resultado?.diasProblema.map((d) => (
+                        <div key={d.fecha} style={{ fontSize: 12, color: T.ink, background: T.cardSoft, borderRadius: 8, padding: "7px 10px" }}>
+                          <strong>{d.nombre} ({d.fecha}):</strong>{" "}
+                          {d.motivo === "sin_registro"
+                            ? "sin registro de entrada en el checador"
+                            : `llegó a las ${formatoHora(d.horaEntrada)} (después de las 7:12 a.m.)`}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
