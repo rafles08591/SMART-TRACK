@@ -59,7 +59,7 @@
 ===================================================================== */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Clock, Upload, Download, Calendar, AlertTriangle, RefreshCw, Award, CheckCircle2 } from "lucide-react";
+import { Clock, Upload, Download, Calendar, AlertTriangle, RefreshCw, Award, CheckCircle2, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { NOMBRES } from "../constants";
@@ -155,7 +155,7 @@ async function evaluarPuntualidadSemana(rutaCompleta, semanaInicio) {
 }
 
 export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono }) {
-  const [vista, setVista] = useState("marcas"); // "marcas" | "puntualidad"
+  const [vista, setVista] = useState("marcas"); // "marcas" | "puntualidad" | "resumen"
 
   const [fecha, setFecha] = useState(hoyISO());
   const [marcas, setMarcas] = useState(null);
@@ -202,6 +202,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
         filas.forEach((f) => {
           const num = String(f["Num"] || "").trim();
           const nombre = String(f["Department"] || f["Name"] || "").trim();
+          const identificador = String(f["Name"] || "").trim();
           const fechaHora = String(f["Date/Time"] || "").trim();
           if (!num || !fechaHora) return;
           const [fechaFila, horaFila] = fechaHora.split(" ");
@@ -209,7 +210,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           const ruta = MAPEO_NUMERO_RUTA[num] || null;
           if (!ruta) { sinReconocer.add(`${num} (${nombre})`); return; }
           const clave = `${num}|${fechaFila}`;
-          if (!grupos[clave]) grupos[clave] = { numero_empleado: num, nombre, ruta, fecha: fechaFila, horas: [] };
+          if (!grupos[clave]) grupos[clave] = { numero_empleado: num, nombre, identificador, ruta, fecha: fechaFila, horas: [] };
           grupos[clave].horas.push(horaFila);
         });
 
@@ -218,6 +219,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           return {
             numero_empleado: g.numero_empleado,
             nombre: g.nombre,
+            identificador: g.identificador,
             ruta: g.ruta,
             fecha: g.fecha,
             hora_entrada: horasOrdenadas[0],
@@ -313,6 +315,91 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
       .sort((a, b) => Number(a.resultado?.gano) - Number(b.resultado?.gano));
   }, [resultadosPuntualidad, rutasAEvaluar]);
 
+  /* ---------------- RESUMEN (tabla tipo Excel de incidencias) ---------------- */
+  const [filasResumen, setFilasResumen] = useState(null);
+  const [cargandoResumen, setCargandoResumen] = useState(false);
+  const [errorResumen, setErrorResumen] = useState("");
+  // Observaciones libres, capturadas a mano — solo viven en esta pantalla
+  // (no se guardan en Supabase); se incluyen en el Excel si se llenan
+  // antes de descargar.
+  const [observaciones, setObservaciones] = useState({}); // { numero_empleado: texto }
+
+  async function cargarResumen() {
+    setCargandoResumen(true);
+    setErrorResumen("");
+    setFilasResumen(null);
+    try {
+      const fechaHasta = sumarDiasISOLocal(semanaPuntualidad, 5);
+      const { data, error } = await supabase
+        .from("checador_marcas")
+        .select("numero_empleado, nombre, identificador, ruta, fecha, hora_entrada")
+        .in("ruta", RUTAS_CHECADOR)
+        .gte("fecha", semanaPuntualidad)
+        .lte("fecha", fechaHasta);
+      if (error) throw error;
+
+      const filas = Object.entries(MAPEO_NUMERO_RUTA)
+        .filter(([, ruta]) => RUTAS_CHECADOR.includes(ruta))
+        .map(([numeroEmpleado, ruta]) => {
+          const registrosEmpleado = (data || []).filter((r) => r.numero_empleado === numeroEmpleado);
+          const nombre = registrosEmpleado.find((r) => r.nombre)?.nombre || "";
+          const identificador = registrosEmpleado.find((r) => r.identificador)?.identificador || "";
+          const porDia = {};
+          registrosEmpleado.forEach((r) => { porDia[r.fecha] = r.hora_entrada; });
+          const dias = NOMBRES_DIA_PUNTUALIDAD.map((nombreDia, i) => {
+            const fecha = sumarDiasISOLocal(semanaPuntualidad, i);
+            return { fecha, nombreDia, hora: porDia[fecha] || null };
+          });
+          const diasProblema = dias.filter((d) => !d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD);
+          const aplicaBono = diasProblema.length === 0;
+          const puesto = ruta === "SUPERVISOR-1" ? "SUPERVISOR" : "VENTAS";
+          return { numeroEmpleado, ruta, puesto, nombre, identificador, dias, aplicaBono };
+        });
+      setFilasResumen(filas);
+    } catch (err) {
+      console.error("Error cargando resumen:", err);
+      setErrorResumen("No se pudo cargar el resumen.");
+    } finally {
+      setCargandoResumen(false);
+    }
+  }
+
+  useEffect(() => {
+    if (vista === "resumen") cargarResumen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vista, semanaPuntualidad]);
+
+  function formatoHoraLarga(hora) {
+    if (!hora) return "—";
+    const [h, m] = hora.split(":");
+    const hNum = Number(h);
+    const ampm = hNum >= 12 ? "p. m." : "a. m.";
+    const h12 = hNum % 12 === 0 ? 12 : hNum % 12;
+    return `${String(h12).padStart(2, "0")}:${m} ${ampm}`;
+  }
+
+  function descargarResumenExcel() {
+    if (!filasResumen) return;
+    const encabezadoDias = filasResumen[0]?.dias.map((d) => `${d.fecha.slice(8, 10)}-${d.fecha.slice(5, 7)} ${d.nombreDia}`) || [];
+    const filasExcel = filasResumen.map((f) => {
+      const fila = {
+        PUESTO: f.puesto,
+        RUTA: f.ruta.replace("RUTA ", ""),
+        RELOJ: f.numeroEmpleado,
+        RFC: f.identificador,
+        NOMBRE: f.nombre,
+      };
+      f.dias.forEach((d, i) => { fila[encabezadoDias[i]] = formatoHoraLarga(d.hora); });
+      fila["APLICA BONO"] = f.aplicaBono ? BONO_PUNTUALIDAD_MONTO : "";
+      fila["OBSERVACIONES"] = observaciones[f.numeroEmpleado] || "";
+      return fila;
+    });
+    const hoja = XLSX.utils.json_to_sheet(filasExcel);
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Incidencias semanales");
+    XLSX.writeFile(libro, `incidencias_semanales_${semanaPuntualidad}.xlsx`);
+  }
+
   return (
     <div style={{ maxWidth: 800, margin: "0 auto" }}>
       <style>{`
@@ -335,6 +422,11 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           <button className={`rc-tab ${vista === "puntualidad" ? "activo" : ""}`} onClick={() => setVista("puntualidad")}>
             <Award size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} /> Bono de puntualidad
           </button>
+          {puedeVerBono && (
+            <button className={`rc-tab ${vista === "resumen" ? "activo" : ""}`} onClick={() => setVista("resumen")}>
+              <FileSpreadsheet size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} /> Resumen
+            </button>
+          )}
         </div>
       )}
 
@@ -402,7 +494,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
             </div>
           )}
         </>
-      ) : (
+      ) : vista === "puntualidad" ? (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
             <div style={{ fontSize: 11.5, color: T.muted }}>
@@ -460,6 +552,86 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>INCIDENCIAS SEMANALES</div>
+              <div style={{ fontSize: 12, color: T.muted }}>Del {formatoRangoSemana(semanaPuntualidad)}{filasResumen ? ` · Conteo: ${filasResumen.length}` : ""}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Calendar size={14} color={T.muted} />
+              <input
+                type="date" className="rc-input"
+                value={semanaPuntualidad}
+                onChange={(e) => setSemanaPuntualidad(lunesDeSemanaLocal(e.target.value))}
+              />
+              <button className="rc-btn-ghost" onClick={cargarResumen}><RefreshCw size={12} /> Actualizar</button>
+              {filasResumen && filasResumen.length > 0 && (
+                <button className="rc-btn" onClick={descargarResumenExcel}><Download size={12} /> Excel</button>
+              )}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 14 }}>
+            Las observaciones se escriben aquí abajo y se incluyen en el Excel al descargarlo — no se guardan al salir de esta pantalla.
+          </div>
+
+          {errorResumen && (
+            <div className="rc-card" style={{ padding: 14, marginBottom: 16, color: T.bad, fontSize: 12.5 }}>{errorResumen}</div>
+          )}
+
+          {cargandoResumen || filasResumen === null ? (
+            <div className="rc-card" style={{ padding: 30, textAlign: "center", color: T.muted, fontSize: 13 }}>
+              Cargando…
+            </div>
+          ) : (
+            <div className="rc-card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: T.cardSoft, textAlign: "left" }}>
+                      {["Puesto", "Ruta", "Reloj", "RFC", "Nombre", ...NOMBRES_DIA_PUNTUALIDAD, "Aplica bono", "Observaciones"].map((h) => (
+                        <th key={h} style={{ padding: "8px 10px", color: T.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filasResumen.map((f) => (
+                      <tr key={f.numeroEmpleado} style={{ borderTop: `1px solid ${T.border}` }}>
+                        <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.puesto}</td>
+                        <td style={{ padding: "8px 10px", fontWeight: 700, whiteSpace: "nowrap" }}>{f.ruta.replace("RUTA ", "")}</td>
+                        <td className="nm-mono" style={{ padding: "8px 10px" }}>{f.numeroEmpleado}</td>
+                        <td className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.identificador || "—"}</td>
+                        <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.nombre || "—"}</td>
+                        {f.dias.map((d) => (
+                          <td key={d.fecha} className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap", color: !d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD ? T.bad : T.ink }}>
+                            {formatoHora(d.hora)}
+                          </td>
+                        ))}
+                        <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                          {f.aplicaBono ? (
+                            <span style={{ fontWeight: 800, color: T.ok }}>${BONO_PUNTUALIDAD_MONTO}</span>
+                          ) : (
+                            <span style={{ color: T.muted }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "6px 8px", minWidth: 160 }}>
+                          <input
+                            type="text"
+                            value={observaciones[f.numeroEmpleado] || ""}
+                            onChange={(e) => setObservaciones((o) => ({ ...o, [f.numeroEmpleado]: e.target.value }))}
+                            placeholder="—"
+                            style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.ink, padding: "5px 8px", fontSize: 11.5 }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
