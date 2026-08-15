@@ -62,6 +62,15 @@ if (typeof window !== "undefined" && !window.__ruParcheDom) {
 }
 
 
+// (Se quitó aquí un parche de removeChild/insertBefore que se había puesto
+// para un error raro de "NotFoundError" — resultó que causaba un problema
+// peor: cuando React necesitaba reemplazar bloques grandes de pantalla
+// (como al cambiar de pestaña en FACTURAS/RELOJ CHECADOR), el parche a
+// veces le impedía a React quitar el contenido viejo correctamente, y
+// terminaba viéndose el contenido viejo y el nuevo pegados uno debajo del
+// otro. Mejor dejar que React maneje el DOM sin interferencias.
+
+
 // Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
 // horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
 // el día siguiente por default al subir una carga.
@@ -172,29 +181,34 @@ function podarVisitasSemanaAntiguas(visitasSemana, semanasAConservar = 8) {
 // que YA existe (guardado bajo su código gracias a Mesa de Control), se
 // busca primero si ya hay alguien con ese mismo nombre normalizado antes
 // de crear una llave nueva.
+// A diferencia de Mesa de Control, en Avance del Día la columna "cliente"
+// en realidad es el CÓDIGO del cliente, no su nombre (así lo confirma
+// extraerLineasFacturables para este mismo reporte: "En este reporte
+// Cliente YA es el código — no hay columna de nombre"). Por eso el cruce
+// aquí es por código normalizado, igual que en Mesa de Control — antes se
+// comparaba como si fuera un nombre y casi nunca coincidía contra
+// clientes_ruta, dejando sin descontar casi todo lo que dependía
+// exclusivamente de Avance del Día (el sábado, sobre todo, que no tiene
+// Mesa de Control ese día).
 function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia) {
   const resultado = { ...(historialActual || {}) };
   registrosAvanceDia.forEach((r) => {
-    const clienteNombre = String(r.cliente || "").trim();
-    if (!clienteNombre || !r.fecha || !r.vendedor) return;
+    const codigoCliente = String(r.cliente || "").trim();
+    if (!codigoCliente || !r.fecha || !r.vendedor) return;
+    const codigoNorm = normalizarCodigo(codigoCliente);
     const semanaInicio = lunesDeSemana(r.fecha);
     const clave = `${r.vendedor}|${semanaInicio}`;
     const entradaExistente = resultado[clave] || { ruta: r.vendedor, semanaInicio, clientes: {}, fechasMesaControl: [] };
 
-    const nombreNorm = clienteNombre.toUpperCase().trim();
-    const claveEncontrada = Object.keys(entradaExistente.clientes).find(
-      (k) => (entradaExistente.clientes[k].nombre || "").toUpperCase().trim() === nombreNorm
-    );
-    const claveCliente = claveEncontrada || clienteNombre;
-
-    const clienteExistente = entradaExistente.clientes[claveCliente] || { codigo: null, nombre: clienteNombre, visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
+    const claveCliente = codigoNorm || codigoCliente;
+    const clienteExistente = entradaExistente.clientes[claveCliente] || { codigo: codigoNorm || null, nombre: "", visitado: false, ultimaFecha: r.fecha, fechasVistas: [], fechasVisitado: [] };
     resultado[clave] = {
       ...entradaExistente,
       clientes: {
         ...entradaExistente.clientes,
         [claveCliente]: {
           ...clienteExistente,
-          nombre: clienteExistente.nombre || clienteNombre,
+          codigo: codigoNorm || clienteExistente.codigo || null,
           visitado: true, // tuvo una venta ese día en Avance del Día -> contó como visitado
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
