@@ -538,13 +538,29 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
 
   useEffect(() => {
     cargarMensajes();
-    const canal = supabase
-      .channel("facturas_observaciones_admin_mensajes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "facturas_observaciones" }, () => {
-        cargarMensajes();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(canal); };
+    // Si quedó un canal huérfano de un montaje anterior (por ejemplo, si
+    // el componente se volvió a montar antes de que terminara de
+    // limpiarse el anterior), reusar el mismo nombre de canal truena con
+    // "cannot add postgres_changes callbacks... after subscribe()" y tumba
+    // toda la pantalla — por eso primero se cierra cualquier canal viejo
+    // con ese mismo nombre antes de abrir uno nuevo, y todo el intento
+    // queda protegido: si aun así falla, solo se pierde el tiempo real de
+    // mensajes (se puede seguir usando "Refrescar" a mano), no toda la app.
+    let canal = null;
+    try {
+      supabase.getChannels()
+        .filter((c) => c.topic === "realtime:facturas_observaciones_admin_mensajes")
+        .forEach((c) => supabase.removeChannel(c));
+      canal = supabase
+        .channel("facturas_observaciones_admin_mensajes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "facturas_observaciones" }, () => {
+          cargarMensajes();
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn("No se pudo activar tiempo real de mensajes:", err);
+    }
+    return () => { if (canal) supabase.removeChannel(canal); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -620,15 +636,28 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
 
   useEffect(() => {
     let temporizador = null;
-    const canal = supabase
-      .channel("ventas_facturas_admin")
-      .on("postgres_changes", { event: "*", schema: "public", table: "ventas_facturas" }, () => {
-        revisarNuevasVentasGlobal();
-        if (temporizador) clearTimeout(temporizador);
-        temporizador = setTimeout(() => cargar(), 600);
-      })
-      .subscribe();
-    return () => { if (temporizador) clearTimeout(temporizador); supabase.removeChannel(canal); };
+    let canal = null;
+    // Este canal se vuelve a crear cada vez que cambian los filtros (tab,
+    // fechas, etc.) — si el anterior no alcanzó a cerrarse del todo antes
+    // de que se abra el nuevo con el mismo nombre, truena igual que el de
+    // mensajes. Se cierra cualquier canal viejo con este nombre primero, y
+    // todo el intento queda protegido para no tumbar la pantalla si falla.
+    try {
+      supabase.getChannels()
+        .filter((c) => c.topic === "realtime:ventas_facturas_admin")
+        .forEach((c) => supabase.removeChannel(c));
+      canal = supabase
+        .channel("ventas_facturas_admin")
+        .on("postgres_changes", { event: "*", schema: "public", table: "ventas_facturas" }, () => {
+          revisarNuevasVentasGlobal();
+          if (temporizador) clearTimeout(temporizador);
+          temporizador = setTimeout(() => cargar(), 600);
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn("No se pudo activar tiempo real de ventas:", err);
+    }
+    return () => { if (temporizador) clearTimeout(temporizador); if (canal) supabase.removeChannel(canal); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, filtroEstado, fechaDesde, fechaHasta]);
 
