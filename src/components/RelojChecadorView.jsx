@@ -15,7 +15,10 @@
 
    2) BONO DE PUNTUALIDAD — por bloques de semana (lunes a sábado):
       se gana el bono de $400 si TODOS los 6 días tuvieron entrada a
-      las 7:12 a.m. o antes; un solo día tarde (7:13+) o sin registro
+      las 7:10 a.m. o antes (a la gente se le informa esta hora); un solo
+      día tarde o sin registro lo pierde completo. El sistema en realidad
+      da un poco más de margen (hasta las 7:12 a.m.) como colchón interno,
+      pero eso no se le comunica a nadie a propósito.
       lo pierde completo. El bono que se PAGA una semana corresponde
       al checador de la semana ANTERIOR (ej. lo que se paga la semana
       del 10-15 de agosto es el checador de la semana del 3-8), por
@@ -92,7 +95,8 @@ const MAPEO_NUMERO_RUTA = {
 // le mide el bono de puntualidad).
 const RUTAS_CHECADOR = [...new Set(Object.values(MAPEO_NUMERO_RUTA))].filter((r) => r.startsWith("RUTA ") || r === "SUPERVISOR-1");
 
-const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // 7:13 a.m. en adelante = tarde
+const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // hora real que se evalúa contra el checador
+const HORA_LIMITE_MOSTRADA = "7:10 a.m.";   // hora que se le dice a la gente (a propósito más estricta que la real, como margen)
 const BONO_PUNTUALIDAD_MONTO = 400;
 const NOMBRES_DIA_PUNTUALIDAD = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -498,7 +502,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
             <div style={{ fontSize: 11.5, color: T.muted }}>
-              Se gana ${BONO_PUNTUALIDAD_MONTO} si los 6 días (lunes a sábado) tuvieron entrada a las 7:12 a.m. o antes.
+              Se gana ${BONO_PUNTUALIDAD_MONTO} si los 6 días (lunes a sábado) tuvieron entrada a las ${HORA_LIMITE_MOSTRADA} o antes.
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Calendar size={14} color={T.muted} />
@@ -545,7 +549,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
                           <strong>{d.nombre} ({d.fecha}):</strong>{" "}
                           {d.motivo === "sin_registro"
                             ? "sin registro de entrada en el checador"
-                            : `llegó a las ${formatoHora(d.horaEntrada)} (después de las 7:12 a.m.)`}
+                            : `llegó a las ${formatoHora(d.horaEntrada)} (después de las ${HORA_LIMITE_MOSTRADA})`}
                         </div>
                       ))}
                     </div>
