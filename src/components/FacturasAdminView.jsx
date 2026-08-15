@@ -538,21 +538,16 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
 
   useEffect(() => {
     cargarMensajes();
-    // Si quedó un canal huérfano de un montaje anterior (por ejemplo, si
-    // el componente se volvió a montar antes de que terminara de
-    // limpiarse el anterior), reusar el mismo nombre de canal truena con
-    // "cannot add postgres_changes callbacks... after subscribe()" y tumba
-    // toda la pantalla — por eso primero se cierra cualquier canal viejo
-    // con ese mismo nombre antes de abrir uno nuevo, y todo el intento
-    // queda protegido: si aun así falla, solo se pierde el tiempo real de
-    // mensajes (se puede seguir usando "Refrescar" a mano), no toda la app.
+    // removeChannel() es asíncrono (regresa una promesa) — cerrar el canal
+    // viejo y abrir uno nuevo CON EL MISMO NOMBRE en el mismo tick no
+    // garantiza que el viejo ya haya terminado de cerrarse, y eso es
+    // justo lo que tronaba con "cannot add postgres_changes callbacks...
+    // after subscribe()". La forma a prueba de fallos es que cada montaje
+    // use un nombre de canal único (nunca puede chocar con uno viejo).
     let canal = null;
     try {
-      supabase.getChannels()
-        .filter((c) => c.topic === "realtime:facturas_observaciones_admin_mensajes")
-        .forEach((c) => supabase.removeChannel(c));
       canal = supabase
-        .channel("facturas_observaciones_admin_mensajes")
+        .channel(`facturas_observaciones_admin_mensajes_${Date.now()}_${Math.random().toString(36).slice(2)}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "facturas_observaciones" }, () => {
           cargarMensajes();
         })
@@ -637,17 +632,14 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
   useEffect(() => {
     let temporizador = null;
     let canal = null;
-    // Este canal se vuelve a crear cada vez que cambian los filtros (tab,
-    // fechas, etc.) — si el anterior no alcanzó a cerrarse del todo antes
-    // de que se abra el nuevo con el mismo nombre, truena igual que el de
-    // mensajes. Se cierra cualquier canal viejo con este nombre primero, y
-    // todo el intento queda protegido para no tumbar la pantalla si falla.
+    // Mismo motivo que el canal de mensajes: nombre único por montaje en
+    // vez de intentar cerrar y reabrir con el mismo nombre (removeChannel
+    // es asíncrono y esa carrera es justo lo que tronaba la pantalla).
+    // Este además se recrea con cada cambio de filtro, así que es el más
+    // propenso de los dos.
     try {
-      supabase.getChannels()
-        .filter((c) => c.topic === "realtime:ventas_facturas_admin")
-        .forEach((c) => supabase.removeChannel(c));
       canal = supabase
-        .channel("ventas_facturas_admin")
+        .channel(`ventas_facturas_admin_${Date.now()}_${Math.random().toString(36).slice(2)}`)
         .on("postgres_changes", { event: "*", schema: "public", table: "ventas_facturas" }, () => {
           revisarNuevasVentasGlobal();
           if (temporizador) clearTimeout(temporizador);
