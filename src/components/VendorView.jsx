@@ -134,7 +134,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
       ) : tab === "sin_visita" ? (
         <SinVisitaView data={data} rol="vendedor" puesto={null} rutaPropia={rutaCodigo} persistFresco={persistFresco} />
       ) : tab === "reloj_checador" ? (
-        <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} />
+        <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} puedeVerBono={false} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
