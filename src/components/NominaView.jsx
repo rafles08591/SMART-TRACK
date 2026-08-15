@@ -249,8 +249,9 @@ const UMBRAL_GPS_APERTURA = 91;    // % mínimo de clientes que deben abrirse po
 const BONO_DESEMPENO_MAXIMO = 400; // bono disponible por visitas efectivas, antes de "nómina abandonada"
 const META_OTC_MINIMA = 800;       // la comisión de OTC no tiene tope; esto es solo el piso esperado
 const VALOR_PENALIZACION_MOROSIDAD = 2; // $ por paquete de un cliente que no pagó a tiempo
-const BONO_PUNTUALIDAD_DEFAULT = 400;   // bono semanal fijo por puntualidad y asistencia; se calcula automático contra Reloj Checador (entrada <= 7:10 a.m. los 6 días); el Gerente puede corregirlo a mano si hay una justificación.
-const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // 7:13 a.m. en adelante = tarde
+const BONO_PUNTUALIDAD_DEFAULT = 400;   // bono semanal fijo por puntualidad y asistencia; se calcula automático contra Reloj Checador (entrada <= HORA_LIMITE_PUNTUALIDAD los 6 días); el Gerente puede corregirlo a mano si hay una justificación.
+const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // hora real que se evalúa contra el checador
+const HORA_LIMITE_MOSTRADA = "07:10:00";    // hora que se le dice a la gente (a propósito más estricta que la real, como margen)
 const NOMBRES_DIA_PUNTUALIDAD = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 function sumarDiasISOLocal(fechaISO, dias) {
@@ -270,7 +271,7 @@ function lunesDeSemanaLocal(fechaISO) {
 
 // Revisa, día por día (lunes a sábado), la hora de entrada registrada en
 // el Reloj Checador para esa ruta esa semana. El bono de puntualidad se
-// gana completo SOLO si los 6 días tuvieron entrada a las 7:10 a.m. o
+// gana completo SOLO si los 6 días tuvieron entrada a la hora límite o
 // antes — un solo día tarde (7:11+) o sin registro pierde el bono
 // completo, y se listan los días exactos con el motivo.
 async function evaluarPuntualidadSemana(rutaCorta, semanaInicio) {
@@ -346,18 +347,23 @@ function calcularOportunidades(f) {
 // Reloj Checador, por eso no vive dentro de calcularOportunidades). Si
 // hubo días con problema, explica cada uno (tarde a qué hora, o sin
 // registro ese día).
+function horaLimiteBonita() {
+  const [h, m] = HORA_LIMITE_MOSTRADA.split(":");
+  return `${Number(h)}:${m} a.m.`;
+}
 function oportunidadPuntualidad(resultadoChecador) {
   if (!resultadoChecador || resultadoChecador.diasProblema.length === 0) return null;
+  const horaLimite = horaLimiteBonita();
   const detalleDias = resultadoChecador.diasProblema
     .map((d) => d.motivo === "sin_registro"
       ? `${d.nombre} (${d.fecha}): sin registro de entrada en el checador`
-      : `${d.nombre} (${d.fecha}): llegó a las ${d.horaEntrada.slice(0, 5)} (después de las 7:10 a.m.)`)
+      : `${d.nombre} (${d.fecha}): llegó a las ${d.horaEntrada.slice(0, 5)} (después de las ${horaLimite})`)
     .join(" · ");
   return {
     titulo: "Bono de puntualidad y asistencia no ganado",
     monto: -BONO_PUNTUALIDAD_DEFAULT,
-    detalle: `Se pierde el bono completo de ${money(BONO_PUNTUALIDAD_DEFAULT)} porque hubo ${resultadoChecador.diasProblema.length} día(s) sin cumplir el checador (se necesita entrada a las 7:10 a.m. o antes, los 6 días): ${detalleDias}.`,
-    accion: "Llega antes de las 7:10 a.m. y marca entrada en el checador todos los días (lunes a sábado) para ganar este bono completo la próxima semana.",
+    detalle: `Se pierde el bono completo de ${money(BONO_PUNTUALIDAD_DEFAULT)} porque hubo ${resultadoChecador.diasProblema.length} día(s) sin cumplir el checador (se necesita entrada a las ${horaLimite} o antes, los 6 días): ${detalleDias}.`,
+    accion: `Llega antes de las ${horaLimite} y marca entrada en el checador todos los días (lunes a sábado) para ganar este bono completo la próxima semana.`,
   };
 }
 
@@ -456,6 +462,12 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
   const perdioBonoPuntualidad = bonoPuntualidad < BONO_PUNTUALIDAD_DEFAULT;
   const nominaAPagarAjustada = (fila.nominaAPagar ?? 0) + bonoPuntualidad;
   const nominaTotalAjustada = (fila.nominaTotal ?? 0) + bonoPuntualidad;
+  // La nómina perdida que trae el Excel original NO sabe nada del bono de
+  // puntualidad (se calcula aparte, contra el checador) — hay que sumarle
+  // esa pérdida aquí para que el encabezado no diga "$0 — no perdiste
+  // nada" mientras la tarjeta de oportunidad de abajo muestra -$400.
+  const perdidaBonoPuntualidad = BONO_PUNTUALIDAD_DEFAULT - bonoPuntualidad;
+  const nominaPerdidaAjustada = (fila.nominaPerdida ?? 0) - perdidaBonoPuntualidad;
 
   return (
     <div>
@@ -474,13 +486,13 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
 
       {/* Cabecera: nómina perdida + aprovechamiento */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        <div className="nm-card" style={{ padding: 16, borderLeft: `3px solid ${fila.nominaPerdida < 0 ? T.bad : T.ok}` }}>
+        <div className="nm-card" style={{ padding: 16, borderLeft: `3px solid ${nominaPerdidaAjustada < 0 ? T.bad : T.ok}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
-            {fila.nominaPerdida < 0 ? <TrendingDown size={14} color={T.bad} /> : <CheckCircle2 size={14} color={T.ok} />}
+            {nominaPerdidaAjustada < 0 ? <TrendingDown size={14} color={T.bad} /> : <CheckCircle2 size={14} color={T.ok} />}
             <span>Nómina perdida esta semana</span>
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: fila.nominaPerdida < 0 ? T.bad : T.ok }}>
-            {fila.nominaPerdida < 0 ? money(fila.nominaPerdida) : "$0 — no perdiste nada"}
+          <div style={{ fontSize: 24, fontWeight: 800, color: nominaPerdidaAjustada < 0 ? T.bad : T.ok }}>
+            {nominaPerdidaAjustada < 0 ? money(nominaPerdidaAjustada) : "$0 — no perdiste nada"}
           </div>
         </div>
         <div className="nm-card" style={{ padding: 16, borderLeft: `3px solid ${colorAprov}` }}>
@@ -617,12 +629,45 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
    Resumen de todas las rutas (Supervisor-1 y Gerente)
 ------------------------------------------------------------------ */
 function VistaResumen({ semana, onVerRuta }) {
+  // Igual que en el detalle por ruta: si la fila ya trae una corrección
+  // manual (bonoPuntualidad != null), se respeta esa; si no, se consulta
+  // el checador para esa ruta+semana. Se piden todas de un jalón al
+  // cambiar de semana.
+  const [bonosPuntualidad, setBonosPuntualidad] = useState({}); // { ruta: montoGanado }
+  useEffect(() => {
+    if (!semana) { setBonosPuntualidad({}); return; }
+    let activo = true;
+    Promise.all(
+      (semana.filas || []).map((f) => {
+        if (f.bonoPuntualidad != null) return Promise.resolve([f.ruta, f.bonoPuntualidad]);
+        if (!semana.semanaInicio) return Promise.resolve([f.ruta, BONO_PUNTUALIDAD_DEFAULT]);
+        return evaluarPuntualidadSemana(f.ruta, semana.semanaInicio)
+          .then((r) => [f.ruta, r.bono])
+          .catch(() => [f.ruta, BONO_PUNTUALIDAD_DEFAULT]);
+      })
+    ).then((entradas) => {
+      if (!activo) return;
+      const mapa = {};
+      entradas.forEach(([ruta, bono]) => { mapa[ruta] = bono; });
+      setBonosPuntualidad(mapa);
+    });
+    return () => { activo = false; };
+  }, [semana]);
+
+  const filasAjustadas = useMemo(() => {
+    return (semana?.filas || []).map((f) => {
+      const bono = bonosPuntualidad[f.ruta] ?? BONO_PUNTUALIDAD_DEFAULT;
+      const perdidaBono = BONO_PUNTUALIDAD_DEFAULT - bono;
+      return { ...f, bonoPuntualidadEfectivo: bono, nominaPerdidaAjustada: (f.nominaPerdida ?? 0) - perdidaBono };
+    });
+  }, [semana, bonosPuntualidad]);
+
   const filasOrdenadas = useMemo(
-    () => [...(semana?.filas || [])].sort((a, b) => (a.nominaPerdida ?? 0) - (b.nominaPerdida ?? 0)),
-    [semana]
+    () => [...filasAjustadas].sort((a, b) => (a.nominaPerdidaAjustada ?? 0) - (b.nominaPerdidaAjustada ?? 0)),
+    [filasAjustadas]
   );
-  const totalPerdido = filasOrdenadas.reduce((s, f) => s + Math.min(0, f.nominaPerdida ?? 0), 0);
-  const rutasConPerdida = filasOrdenadas.filter((f) => (f.nominaPerdida ?? 0) < 0).length;
+  const totalPerdido = filasOrdenadas.reduce((s, f) => s + Math.min(0, f.nominaPerdidaAjustada ?? 0), 0);
+  const rutasConPerdida = filasOrdenadas.filter((f) => (f.nominaPerdidaAjustada ?? 0) < 0).length;
 
   if (!semana) {
     return (
@@ -653,7 +698,11 @@ function VistaResumen({ semana, onVerRuta }) {
             <tbody>
               {filasOrdenadas.map((f) => {
                 const ops = calcularOportunidades(f);
-                const principal = ops[0];
+                const oportunidadPunt = f.bonoPuntualidadEfectivo < BONO_PUNTUALIDAD_DEFAULT
+                  ? { titulo: "Bono de puntualidad y asistencia no ganado", monto: -(BONO_PUNTUALIDAD_DEFAULT - f.bonoPuntualidadEfectivo) }
+                  : null;
+                const todasOps = oportunidadPunt ? [...ops, oportunidadPunt].sort((a, b) => a.monto - b.monto) : ops;
+                const principal = todasOps[0];
                 const colorAprov = colorAprovechamiento(f.aprovechamientoTotal);
                 return (
                   <tr key={f.ruta} style={{ borderTop: `1px solid ${T.border}` }}>
@@ -668,8 +717,8 @@ function VistaResumen({ semana, onVerRuta }) {
                       </div>
                       <div style={{ marginTop: 4 }}><Barra valor={f.aprovechamientoTotal} color={colorAprov} /></div>
                     </td>
-                    <td style={{ padding: "10px 12px", fontWeight: 700, color: (f.nominaPerdida ?? 0) < 0 ? T.bad : T.ok, whiteSpace: "nowrap" }}>
-                      {(f.nominaPerdida ?? 0) < 0 ? money(f.nominaPerdida) : "$0"}
+                    <td style={{ padding: "10px 12px", fontWeight: 700, color: (f.nominaPerdidaAjustada ?? 0) < 0 ? T.bad : T.ok, whiteSpace: "nowrap" }}>
+                      {(f.nominaPerdidaAjustada ?? 0) < 0 ? money(f.nominaPerdidaAjustada) : "$0"}
                     </td>
                     <td style={{ padding: "10px 12px", color: T.muted, maxWidth: 260 }}>
                       {principal ? principal.titulo : "Sin oportunidades esta semana"}
@@ -810,7 +859,7 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
           {preview.filas.length > 0 && (
             <div style={{ overflowX: "auto", marginBottom: 14 }}>
               <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
-                El bono de puntualidad y asistencia ($400/semana) se calculará automático al ver cada ruta, cruzando el Reloj Checador de esa semana (entrada antes de las 7:10 a.m. los 6 días). Si necesitas corregirlo a mano por alguna justificación, se hace después, ya guardada la semana.
+                El bono de puntualidad y asistencia ($400/semana) se calculará automático al ver cada ruta, cruzando el Reloj Checador de esa semana (entrada antes de las {horaLimiteBonita()} los 6 días). Si necesitas corregirlo a mano por alguna justificación, se hace después, ya guardada la semana.
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
