@@ -461,7 +461,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </div>
             )
           ) : objTab === "reloj_checador" ? (
-            <RelojChecadorView puedeSubir={puesto === "gerente"} rutaPropia={null} />
+            <RelojChecadorView puedeSubir={puesto === "gerente"} rutaPropia={null} puedeVerBono={puesto === "gerente" || esSupervisor1} />
           ) : objTab === "tepic" ? (
             <div>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 4 }}>CLO TEPIC</div>
