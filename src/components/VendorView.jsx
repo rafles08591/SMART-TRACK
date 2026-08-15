@@ -23,6 +23,7 @@ import KmView from "./KmView";
 import FacturasView from "./FacturasView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
+import RelojChecadorView from "./RelojChecadorView";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
 // kilometraje, aparte de UNIDADES y TIEMPOS). Para agregar otra ruta más
@@ -74,7 +75,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -132,6 +133,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <NominaView data={data} persistFresco={persistFresco} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
       ) : tab === "sin_visita" ? (
         <SinVisitaView data={data} rol="vendedor" puesto={null} rutaPropia={rutaCodigo} persistFresco={persistFresco} />
+      ) : tab === "reloj_checador" ? (
+        <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
