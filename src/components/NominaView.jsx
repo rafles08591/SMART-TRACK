@@ -44,7 +44,7 @@ import { supabase } from "../supabaseClient";
 import {
   Wallet, TrendingDown, TrendingUp, AlertTriangle, CheckCircle2,
   Upload, ClipboardPaste, Download, Users, Target, Gauge, MapPin,
-  Info, Trash2, ChevronRight, ShieldCheck, Truck,
+  Info, Trash2, ChevronRight, ShieldCheck, Truck, RefreshCw,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------
@@ -923,6 +923,30 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
     }
   }
 
+  // Quita la corrección manual del bono de puntualidad de TODAS las rutas
+  // de una semana de un jalón (poniendo bonoPuntualidad en null), para que
+  // cada una se recalcule sola contra el Reloj Checador. Útil para semanas
+  // que se subieron antes de que existiera el cálculo automático — se
+  // habían quedado con el valor viejo fijo ($400) en vez de reflejar lo
+  // que de verdad marca el checador.
+  async function recalcularBonoPuntualidadSemana(semanaIdObjetivo) {
+    setGuardando(true); setErrorGuardado(null);
+    try {
+      await persistFresco((fresca) => ({
+        nominaSemanas: (fresca.nominaSemanas || []).map((s) =>
+          s.id !== semanaIdObjetivo ? s : {
+            ...s,
+            filas: s.filas.map((f) => ({ ...f, bonoPuntualidad: null })),
+          }
+        ),
+      }));
+    } catch (err) {
+      setErrorGuardado(err?.message || "No se pudo recalcular. Intenta de nuevo.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <style>{`
@@ -947,6 +971,15 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
               <select className="nm-input" style={{ width: "auto" }} value={semanaActual?.id || ""} onChange={(e) => setSemanaId(e.target.value)}>
                 {semanas.map((s) => <option key={s.id} value={s.id}>{s.etiqueta}</option>)}
               </select>
+            )}
+            {esGerente && semanaActual && (
+              <button
+                className="nm-btn-ghost"
+                title="Quita cualquier corrección manual de esta semana y recalcula el bono de puntualidad de todas las rutas contra el Reloj Checador"
+                onClick={() => recalcularBonoPuntualidadSemana(semanaActual.id)}
+              >
+                <RefreshCw size={13} /> Recalcular puntualidad
+              </button>
             )}
             <button className={`nm-btn-ghost ${vista === "resumen" ? "activo" : ""}`} onClick={() => setVista("resumen")}>Resumen</button>
             <button className={`nm-btn-ghost ${vista === "detalle" ? "activo" : ""}`} onClick={() => setVista("detalle")}>Ver por ruta</button>
