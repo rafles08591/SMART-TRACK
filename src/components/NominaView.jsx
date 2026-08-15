@@ -393,6 +393,20 @@ function colorAprovechamiento(v) {
   return T.bad;
 }
 
+// El "Aprovechamiento total" del Excel original no sabe nada del bono de
+// puntualidad (se calcula aparte, contra el checador) — se pondera aquí
+// como una rebanada más, del tamaño de su peso real en dinero dentro de
+// la nómina total. Así, perder el bono completo sí jala el porcentaje
+// hacia abajo, proporcional a cuánto representa ese dinero del total.
+function aprovechamientoAjustado(fila, bonoPuntualidad) {
+  const aprovechamientoOriginal = fila.aprovechamientoTotal ?? 0;
+  const nominaTotalOriginal = fila.nominaTotal ?? 0;
+  const pctPuntualidad = (bonoPuntualidad / BONO_PUNTUALIDAD_DEFAULT) * 100;
+  const pesoTotal = nominaTotalOriginal + BONO_PUNTUALIDAD_DEFAULT;
+  if (pesoTotal <= 0) return aprovechamientoOriginal;
+  return (aprovechamientoOriginal * nominaTotalOriginal + pctPuntualidad * BONO_PUNTUALIDAD_DEFAULT) / pesoTotal;
+}
+
 /* ---------------------------------------------------------------
    Piezas de UI reutilizables dentro del módulo
 ------------------------------------------------------------------ */
@@ -454,7 +468,6 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
   const oportunidadPunt = fila.bonoPuntualidad == null ? oportunidadPuntualidad(checadorResultado) : null;
   const oportunidades = oportunidadPunt ? [...oportunidadesBase, oportunidadPunt].sort((a, b) => a.monto - b.monto) : oportunidadesBase;
   const focos = calcularFocosAmarillos(fila);
-  const colorAprov = colorAprovechamiento(fila.aprovechamientoTotal);
   const sinPerdidas = oportunidades.length === 0;
   const bonoPuntualidad = fila.bonoPuntualidad != null
     ? fila.bonoPuntualidad
@@ -468,6 +481,8 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
   // nada" mientras la tarjeta de oportunidad de abajo muestra -$400.
   const perdidaBonoPuntualidad = BONO_PUNTUALIDAD_DEFAULT - bonoPuntualidad;
   const nominaPerdidaAjustada = (fila.nominaPerdida ?? 0) - perdidaBonoPuntualidad;
+  const aprovTotalAjustado = aprovechamientoAjustado(fila, bonoPuntualidad);
+  const colorAprov = colorAprovechamiento(aprovTotalAjustado);
 
   return (
     <div>
@@ -499,8 +514,8 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
           <div style={{ display: "flex", alignItems: "center", gap: 6, color: T.muted, fontSize: 11.5, marginBottom: 6 }}>
             <Gauge size={14} color={colorAprov} /><span>Aprovechamiento total</span>
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: colorAprov, marginBottom: 6 }}>{pct(fila.aprovechamientoTotal)}</div>
-          <Barra valor={fila.aprovechamientoTotal} color={colorAprov} />
+          <div style={{ fontSize: 24, fontWeight: 800, color: colorAprov, marginBottom: 6 }}>{pct(aprovTotalAjustado)}</div>
+          <Barra valor={aprovTotalAjustado} color={colorAprov} />
         </div>
       </div>
 
@@ -703,7 +718,8 @@ function VistaResumen({ semana, onVerRuta }) {
                   : null;
                 const todasOps = oportunidadPunt ? [...ops, oportunidadPunt].sort((a, b) => a.monto - b.monto) : ops;
                 const principal = todasOps[0];
-                const colorAprov = colorAprovechamiento(f.aprovechamientoTotal);
+                const aprovAjustado = aprovechamientoAjustado(f, f.bonoPuntualidadEfectivo);
+                const colorAprov = colorAprovechamiento(aprovAjustado);
                 return (
                   <tr key={f.ruta} style={{ borderTop: `1px solid ${T.border}` }}>
                     <td style={{ padding: "10px 12px", fontWeight: 700, whiteSpace: "nowrap" }}>{f.ruta}</td>
@@ -713,9 +729,9 @@ function VistaResumen({ semana, onVerRuta }) {
                     </td>
                     <td style={{ padding: "10px 12px", minWidth: 110 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className="nm-mono" style={{ color: colorAprov, fontWeight: 700 }}>{pct(f.aprovechamientoTotal)}</span>
+                        <span className="nm-mono" style={{ color: colorAprov, fontWeight: 700 }}>{pct(aprovAjustado)}</span>
                       </div>
-                      <div style={{ marginTop: 4 }}><Barra valor={f.aprovechamientoTotal} color={colorAprov} /></div>
+                      <div style={{ marginTop: 4 }}><Barra valor={aprovAjustado} color={colorAprov} /></div>
                     </td>
                     <td style={{ padding: "10px 12px", fontWeight: 700, color: (f.nominaPerdidaAjustada ?? 0) < 0 ? T.bad : T.ok, whiteSpace: "nowrap" }}>
                       {(f.nominaPerdidaAjustada ?? 0) < 0 ? money(f.nominaPerdidaAjustada) : "$0"}
