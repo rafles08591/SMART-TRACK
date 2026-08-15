@@ -949,7 +949,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       </div>
 
       {vistaPrincipal === "checador" && (
-        <RelojChecadorView puedeSubir={true} rutaPropia={null} />
+        <RelojChecadorView puedeSubir={true} rutaPropia={null} puedeVerBono={true} />
       )}
 
       {vistaPrincipal === "facturacion" && (
