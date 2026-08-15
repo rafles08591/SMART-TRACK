@@ -250,7 +250,7 @@ const BONO_DESEMPENO_MAXIMO = 400; // bono disponible por visitas efectivas, ant
 const META_OTC_MINIMA = 800;       // la comisión de OTC no tiene tope; esto es solo el piso esperado
 const VALOR_PENALIZACION_MOROSIDAD = 2; // $ por paquete de un cliente que no pagó a tiempo
 const BONO_PUNTUALIDAD_DEFAULT = 400;   // bono semanal fijo por puntualidad y asistencia; se calcula automático contra Reloj Checador (entrada <= 7:10 a.m. los 6 días); el Gerente puede corregirlo a mano si hay una justificación.
-const HORA_LIMITE_PUNTUALIDAD = "07:10:00"; // 7:11 a.m. en adelante = tarde
+const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // 7:13 a.m. en adelante = tarde
 const NOMBRES_DIA_PUNTUALIDAD = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 function sumarDiasISOLocal(fechaISO, dias) {
@@ -698,7 +698,11 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
   const [modoArchivo, setModoArchivo] = useState(false);
   const [texto, setTexto] = useState("");
   const [etiqueta, setEtiqueta] = useState("");
-  const [semanaInicio, setSemanaInicio] = useState(() => lunesDeSemanaLocal(new Date().toISOString().slice(0, 10)));
+  // Default = la semana PASADA (lunes-sábado), no la actual: la nómina que
+  // se paga en la semana en curso corresponde al checador de la semana
+  // anterior (ej. lo que se paga del 10 al 15 de agosto es el checador
+  // del 3 al 8).
+  const [semanaInicio, setSemanaInicio] = useState(() => sumarDiasISOLocal(lunesDeSemanaLocal(new Date().toISOString().slice(0, 10)), -7));
   const [preview, setPreview] = useState(null); // { filas, advertencias }
   const [errorArchivo, setErrorArchivo] = useState("");
   const inputArchivoRef = useRef(null);
@@ -767,7 +771,7 @@ function VistaCargar({ onGuardar, guardando, ultimaSemana }) {
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 12, color: T.muted, display: "block", marginBottom: 6 }}>Lunes de esta semana (para cruzar el bono de puntualidad contra el Reloj Checador)</label>
+          <label style={{ fontSize: 12, color: T.muted, display: "block", marginBottom: 6 }}>Lunes de la semana que se está pagando (para cruzar el bono de puntualidad contra el Reloj Checador — por default es la semana pasada, ya que lo que se paga hoy corresponde al checador de la semana anterior)</label>
           <input
             type="date" className="nm-input" style={{ width: "auto" }}
             value={semanaInicio} onChange={(e) => setSemanaInicio(e.target.value)}
