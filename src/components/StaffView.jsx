@@ -251,8 +251,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad")
-                : undefined
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km")
+                : OBJETIVO_TABS.filter((t) => t.key !== "km")
             }
             estadoTabs={estadoTabsActividades}
           />
@@ -508,6 +508,10 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
               onActivarCarga={onActivarCarga}
             />
+          ) : objTab === "km" ? (
+            <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+              KM es un registro individual de cada ruta — entra a la pestaña de la ruta específica que quieras revisar para verlo.
+            </div>
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
