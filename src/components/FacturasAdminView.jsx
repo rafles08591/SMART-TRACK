@@ -4,6 +4,7 @@ import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, Messag
 import { supabase } from "../supabaseClient";
 import { normalizarCodigo } from "../utils";
 import { RUTAS, NOMBRES } from "../constants";
+import RelojChecadorView from "./RelojChecadorView";
 
 function hoyISO() {
   return new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
@@ -35,25 +36,11 @@ const COLOR_ESTADO = {
   OBSERVACION: "#FF8C00",
 };
 
-// Filtro de arriba: solo 2 opciones. PENDIENTE agrupa ESPERA + OBSERVACION
-// (una observación NO saca la venta de la vista principal — solo facturar
-// lo hace). El estado real de cada tarjeta (los 3 valores) se sigue viendo
-// y editando en el selector de cada tarjeta.
 const COLOR_FILTRO = {
   PENDIENTE: "#9AA7BD",
   FACTURADO: "#3DDC97",
 };
 
-// Del monto total de una venta (que ya incluye IVA) y el total de cajetillas,
-// separa en dos bloques —cada uno con su propio IVA— de forma que los 4
-// números sumen exactamente el monto total:
-//   Distribución bruta = 2.78 × cajetillas
-//   IVA de distribución = 16% de la distribución bruta
-//   Distribución neta   = distribución bruta − su IVA
-//
-//   Subtotal producto   = monto − distribución bruta
-//   IVA de producto      = 16% del subtotal producto
-//   Precio del producto (sin IVA) = subtotal producto − su IVA
 function calcularDesglose(montoTotal, totalCajetillas) {
   const distribucionBruta = totalCajetillas * COSTO_DISTRIBUCION_UNITARIO;
   const ivaDistribucion = distribucionBruta * IVA_TASA;
@@ -66,30 +53,18 @@ function calcularDesglose(montoTotal, totalCajetillas) {
   return { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto };
 }
 
-// Solo quita el IVA del monto de la línea. NO resta la distribución.
-// Así el "costo unitario" incluye el costo de distribución y solo se limpia el IVA.
 function calcularDesgloseLinea(montoLinea, cajetillasLinea) {
   const precioSinIva = montoLinea / (1 + IVA_TASA);
   return precioSinIva;
 }
 
-// Costo unitario POR CAJETILLA, solo sin IVA (la distribución se mantiene dentro).
 function costoUnitarioNeto(montoLinea, cajetillasLinea) {
   if (!cajetillasLinea) return 0;
   return calcularDesgloseLinea(montoLinea, cajetillasLinea) / cajetillasLinea;
 }
 
-// Si el pago es en EFECTIVO y el total supera el límite fiscal ($2,000),
-// la venta se divide en varios "tickets". El reparto en sí YA NO se
-// calcula aquí: se asigna una sola vez (folio + parte + total de partes,
-// columnas ticket_folio/ticket_parte/ticket_de) desde App.tsx apenas llega
-// la venta, y queda fijo — esta pantalla solo LEE esos valores y agrupa
-// por ellos (ver ticketsParaMostrar más abajo). Así, aunque llegue una
-// venta nueva de ese mismo cliente/día, la numeración 1/2, 2/2... de lo
-// que ya estaba no se mueve.
 const LIMITE_TICKET_EFECTIVO = 2000;
 
-// Botón pequeño de copiar-al-portapapeles con feedback visual de 1.5s.
 function BotonCopiar({ texto, etiqueta }) {
   const [copiado, setCopiado] = useState(false);
   async function copiar(e) {
@@ -117,23 +92,6 @@ function BotonCopiar({ texto, etiqueta }) {
   );
 }
 
-/**
- * Pantalla exclusiva del usuario ADMIN. Solo muestra FACTURAS, con dos
- * pestañas: PRIORITARIO y NORMAL. Cada TARJETA agrupa TODAS las ventas de
- * UN cliente en UN día (todos los productos que compró), con el total,
- * el desglose por producto (código FA, nombre, cajetillas, precio) y el
- * desglose de distribución/IVA. Las tarjetas de clientes prioritarios con
- * ventas nuevas parpadean en amarillo hasta que se marcan como vistas.
- */
-// Panel de la pestaña MENSAJES: cada observación que ADMIN mandó, con la
-// respuesta de la ruta (texto y/o archivo adjunto) en cuanto llega. Las que
-// tienen respuesta sin revisar parpadean en naranja.
-// Panel de la pestaña CLIENTES: mismas funciones que tiene Gerente en la
-// pantalla de la ruta (FACTURAS → catálogo de clientes), pero para ADMIN
-// viendo TODAS las rutas de una vez — registrar cliente, editar, marcar
-// prioritario, forma de pago por default, "no factura hoy", cambiar de
-// ruta, y borrar. También autocompleta nombre/ruta desde clientes_ruta
-// igual que en la pantalla de la ruta.
 function ClientesAdminPanel({ listaRutas, nombresRutas }) {
   const [clientes, setClientes] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -501,7 +459,8 @@ function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
 }
 
 export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
-  const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes" | "catalogo"
+  const [vistaPrincipal, setVistaPrincipal] = useState("facturacion"); // "facturacion" | "checador"
+  const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes" | "catalogo" (dentro de FACTURACIÓN)
   const [tab, setTab] = useState("prioritario");
   const [filtroEstado, setFiltroEstado] = useState("PENDIENTE"); // "PENDIENTE" (ESPERA+OBSERVACION) | "FACTURADO"
   const [fechaDesde, setFechaDesde] = useState(hoyISO());
@@ -517,15 +476,12 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     } catch (e) { /* ignorar */ }
   }, []);
 
-  // ---- Nuevas ventas (prioritario / normal): se revisan SIEMPRE, sin
-  // importar en qué pestaña esté parado ADMIN — así PRIORITARIO y NORMAL
-  // pueden parpadear los dos aunque solo se esté viendo uno de ellos. ----
   const [nuevosPrioritarioClaves, setNuevosPrioritarioClaves] = useState(new Set());
   const [nuevosNormalClaves, setNuevosNormalClaves] = useState(new Set());
 
   async function revisarNuevasVentasGlobal() {
     const referencia = ultimaVistaRef.current;
-    if (!referencia) return; // primera vez que entra: no marca nada como "nuevo" todavía
+    if (!referencia) return;
     try {
       const { data, error: err } = await supabase
         .from("ventas_facturas")
@@ -545,9 +501,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     }
   }
 
-  // ---- Mensajes (observaciones ADMIN <-> ruta): se cargan siempre, sin
-  // importar en qué pestaña esté ADMIN parado, para que el aviso de
-  // "hay respuesta nueva" funcione aunque no esté viendo esa pestaña. ----
   const [mensajes, setMensajes] = useState([]);
   const [cargandoMensajes, setCargandoMensajes] = useState(true);
   const [nuevosMensajesIds, setNuevosMensajesIds] = useState(new Set());
@@ -602,9 +555,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     setNuevosMensajesIds(new Set());
   }
 
-  // La clave de agrupación incluye el TIPO (OTC vs producto normal): así,
-  // aunque sea el mismo cliente el mismo día, las ventas de OTC nunca se
-  // mezclan con las de productos normales — salen en tarjetas separadas.
   function claveVenta(f) {
     const tipo = f.articulo === "OTC" ? "OTC" : "PROD";
     return `${f.ruta}|${f.codigo_cliente}|${f.fecha}|${tipo}`;
@@ -618,9 +568,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         .from("ventas_facturas")
         .select("id, ruta, codigo_cliente, cliente, fecha, articulo, producto_nombre, paquetes, cajetillas, contado_monto, credito_monto, monto, forma_pago, estado, prioridad, creado_en, actualizado_en, ticket_folio, ticket_parte, ticket_de")
         .eq("prioridad", tab === "prioritario");
-      // OBSERVACIÓN ya NO oculta la venta de la vista principal — solo
-      // FACTURADO la saca de aquí. Mientras está en observación, sigue
-      // apareciendo (con su aviso naranja) hasta que se facture de verdad.
       query = filtroEstado === "FACTURADO"
         ? query.eq("estado", "FACTURADO")
         : query.in("estado", ["ESPERA", "OBSERVACION"]);
@@ -630,10 +577,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         .order("creado_en", { ascending: false });
       if (err) throw err;
 
-      // Auto-reparación: si hay filas sin folio de ticket asignado (datos
-      // de antes de este cambio, o alguna que se coló sin numerar), se
-      // asignan una sola vez y se vuelve a cargar — así el folio queda
-      // fijo desde ahí en adelante y ya no se vuelve a mover.
       const faltanFolios = (data || []).some((f) => f.ticket_folio == null);
       if (faltanFolios && asignarFoliosTickets) {
         await asignarFoliosTickets();
@@ -660,8 +603,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
 
-  // Respaldo por si el tiempo real fallara: refresca sola cada 30 minutos,
-  // sin importar en qué pestaña esté parado ADMIN.
   useEffect(() => {
     const intervalo = setInterval(() => {
       if (vista === "clientes") cargar();
@@ -672,16 +613,11 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, tab, filtroEstado, fechaDesde, fechaHasta]);
 
-  // Revisión global de "nuevas ventas" — corre siempre, sin importar la
-  // pestaña, para que PRIORITARIO y NORMAL puedan parpadear los dos.
   useEffect(() => {
     revisarNuevasVentasGlobal();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tiempo real: en vez de tratar de "insertar" la fila nueva a mano dentro
-  // del agrupado (complicado y propenso a error), simplemente se vuelve a
-  // pedir todo con un pequeño debounce — más simple y siempre consistente.
   useEffect(() => {
     let temporizador = null;
     const canal = supabase
@@ -709,9 +645,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       alert("Esta venta ya está facturada — no se puede cambiar la forma de pago. Si es un error, primero regrésala a ESPERA.");
       return;
     }
-    // Aplica SOLO a los productos de ESTE ticket (por su id real en la
-    // base de datos) — así, si la venta se dividió en varios tickets
-    // (1/2, 2/2...), cada uno se puede corregir sin jalar a los demás.
     const ids = ticket.productos.map((p) => p.id).filter(Boolean);
     if (ids.length === 0) return;
     setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago } : f)));
@@ -726,12 +659,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     }
   }
 
-  // Cambia el estado SOLO de los productos de ESTE ticket (por id) — cada
-  // tarjeta (1/2, 2/2, etc.) queda independiente: facturar una no jala a
-  // las demás. Si pasa a OBSERVACION, pide el mensaje y lo manda a
-  // facturas_observaciones (eso hace parpadear la pestaña FACTURAS del
-  // vendedor). La observación de esa venta solo se marca resuelta cuando
-  // YA NINGÚN producto (de ningún ticket) de esa venta sigue en OBSERVACION.
   async function cambiarEstado(ticket, nuevoEstado) {
     const venta = ticket.ventaOriginal;
     const ids = ticket.productos.map((p) => p.id).filter(Boolean);
@@ -739,7 +666,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
 
     if (nuevoEstado === "OBSERVACION") {
       const mensaje = window.prompt("¿Qué le falta o no cuadra en esta venta? Este mensaje se le manda a la ruta.");
-      if (!mensaje || !mensaje.trim()) return; // cancelado
+      if (!mensaje || !mensaje.trim()) return;
       const prefijo = ticket.parteLabel ? `[Ticket ${ticket.parteLabel}] ` : "";
       const { error: errObs } = await supabase.from("facturas_observaciones").insert({
         ruta: venta.ruta,
@@ -768,8 +695,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     }
 
     if (nuevoEstado !== "OBSERVACION") {
-      // Antes de cerrar la conversación de observación, confirma que
-      // ningún OTRO ticket de esta misma venta siga en OBSERVACION.
       let queryRestantes = supabase
         .from("ventas_facturas")
         .select("id", { count: "exact", head: true })
@@ -790,14 +715,9 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
           .eq("resuelta", false);
       }
     }
-    // Como cambió el estado, esta tarjeta ya no pertenece al filtro actual
-    // (PENDIENTE/FACTURADO) — se recarga para que desaparezca de la vista
-    // y aparezca en el filtro correspondiente.
     cargar();
   }
 
-  // Agrupa las filas (una por producto) en una tarjeta por cliente+día,
-  // sumando el total y las cajetillas, y arma el desglose de distribución/IVA.
   const ventasAgrupadas = useMemo(() => {
     const mapa = new Map();
     filas.forEach((f) => {
@@ -835,13 +755,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       grupo.totalCajetillas += Number(f.cajetillas) || 0;
       if (new Date(f.creado_en) < new Date(grupo.creadoEn)) grupo.creadoEn = f.creado_en;
     });
-    // Orden ESTABLE: por folio de ticket (asignado una sola vez, nunca
-    // cambia), no por fecha de creación. Si ordenara por fecha, en cuanto
-    // se factura una parte y esa fila deja de estar "pendiente", el
-    // cliente se reacomodaba solo usando la fecha de la fila que le
-    // quedaba — haciendo que "se fuera hasta abajo" de la cola justo
-    // cuando ibas a facturar la siguiente parte. Con el folio, la posición
-    // en la lista nunca se mueve sola.
     return [...mapa.values()].sort((a, b) => {
       const folioA = a.productos[0]?.ticketFolio;
       const folioB = b.productos[0]?.ticketFolio;
@@ -850,13 +763,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     });
   }, [filas]);
 
-  // Convierte cada venta agrupada en 1 o más "tickets" para mostrar: si es
-  // pago en EFECTIVO y el total pasa de $2,000, se reparte en varias
-  // tarjetas (cada una es su propio ticket), marcadas 1/2, 2/2, etc. Las
-  // acciones (cambiar estado/forma de pago) siguen aplicando a TODA la
-  // venta (por eso guardan la referencia a la venta original). Se puede
-  // alternar a "ver ticket total" (un solo bloque con todo, IVA incluido,
-  // y la distribución como una línea más al final).
   const [ventasEnModoTotal, setVentasEnModoTotal] = useState(new Set());
   function toggleModoTotal(clave) {
     setVentasEnModoTotal((s) => {
@@ -866,10 +772,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     });
   }
 
-  // Forma de pago / estado "representativos" de un ticket: como ahora cada
-  // ticket se actualiza de forma independiente, se toman del primer
-  // producto de ESE ticket (en la práctica todos los productos de un mismo
-  // ticket comparten el mismo valor, porque se actualizan juntos).
   function formaPagoDeProductos(productos) {
     return productos[0]?.formaPago || "EFECTIVO";
   }
@@ -916,10 +818,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         return;
       }
 
-      // Agrupa por la parte de ticket YA ASIGNADA (persistente en la base
-      // de datos) — ya NO se recalcula el reparto aquí. Así, aunque llegue
-      // una venta nueva del mismo cliente/día, la numeración 1/2, 2/2... de
-      // lo que ya estaba no se mueve.
       const porParte = new Map();
       venta.productos.forEach((p) => {
         const parte = p.ticketParte || 1;
@@ -1007,6 +905,34 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         </div>
       </div>
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button
+          className={vistaPrincipal === "facturacion" ? "btn" : "btn-ghost"}
+          style={{ flex: 1, position: "relative" }}
+          onClick={() => setVistaPrincipal("facturacion")}
+        >
+          FACTURACIÓN
+          {(hayNuevasPrioritarias || hayNuevasNormal || nuevosMensajesIds.size > 0) && vistaPrincipal !== "facturacion" && (
+            <span style={{ marginLeft: 6, background: "#F2B134", color: "#1A1300", borderRadius: 10, fontSize: 10, fontWeight: 800, padding: "1px 7px" }}>
+              {nuevosPrioritarioClaves.size + nuevosNormalClaves.size + nuevosMensajesIds.size}
+            </span>
+          )}
+        </button>
+        <button
+          className={vistaPrincipal === "checador" ? "btn" : "btn-ghost"}
+          style={{ flex: 1 }}
+          onClick={() => setVistaPrincipal("checador")}
+        >
+          RELOJ CHECADOR
+        </button>
+      </div>
+
+      {vistaPrincipal === "checador" && (
+        <RelojChecadorView puedeSubir={true} rutaPropia={null} />
+      )}
+
+      {vistaPrincipal === "facturacion" && (
+      <>
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <button
           className={`${vista === "clientes" && tab === "prioritario" ? "btn" : "btn-ghost"} ${hayNuevasPrioritarias ? "tab-parpadeo-prioritario" : ""}`}
@@ -1127,7 +1053,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                 className="card"
                 style={{ padding: 16, border: esNueva ? `2px solid ${esPrioritaria ? "#FFD700" : "#5AA9E6"}` : undefined }}
               >
-                {/* Encabezado */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1203,9 +1128,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 )}
 
-                {/* Módulo: PARA CAPTURAR · SIN IVA — costo unitario por cajetilla
-                    (solo se quita el IVA; la distribución se mantiene dentro del costo).
-                    Copiado independiente de cada código FA y de cada monto. */}
                 <div style={{ marginBottom: 14 }}>
                   <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA</div>
                   <div style={{ overflowX: "auto" }}>
@@ -1242,7 +1164,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 </div>
 
-                {/* 2) Distribución — solo el neto (sin IVA), un renglón. */}
                 {!venta.esOtc && (
                   <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1264,12 +1185,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 )}
 
-                {/* 3 y 4) Total de cajetillas y total del ticket. El total real
-                    del ticket (el que corresponde al ticket físico/fiscal)
-                    le SUMA la distribución encima del monto de los productos
-                    — así lo confirmó el ticket real: $5,521.59 (productos) +
-                    $166.80 (distribución) = $5,688.40. Para OTC no cambia
-                    nada, porque ahí la distribución siempre es $0. */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                   <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1287,7 +1202,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 </div>
 
-                {/* 5) Comprobación — productos + distribución = total del ticket */}
                 {!venta.esOtc && (
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
                     <div style={{ fontSize: 10.5, color: "#5b6478" }}>
@@ -1300,6 +1214,8 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
             );
           })}
         </div>
+      )}
+      </>
       )}
       </>
       )}
