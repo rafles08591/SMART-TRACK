@@ -947,6 +947,26 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
     }
   }
 
+  // Corrige/asigna el "lunes de la semana" de una semana YA guardada (por
+  // ejemplo, una que se subió antes de que existiera este campo, o donde
+  // se puso mal). Sin esta fecha correcta, no hay forma de saber contra
+  // qué días del Reloj Checador comparar, así que el bono no se puede
+  // calcular — se queda en $400 por default aunque se le dé "recalcular".
+  async function actualizarSemanaInicioNomina(semanaIdObjetivo, nuevaFecha) {
+    setGuardando(true); setErrorGuardado(null);
+    try {
+      await persistFresco((fresca) => ({
+        nominaSemanas: (fresca.nominaSemanas || []).map((s) =>
+          s.id !== semanaIdObjetivo ? s : { ...s, semanaInicio: nuevaFecha }
+        ),
+      }));
+    } catch (err) {
+      setErrorGuardado(err?.message || "No se pudo guardar la fecha. Intenta de nuevo.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <style>{`
@@ -973,13 +993,22 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
               </select>
             )}
             {esGerente && semanaActual && (
-              <button
-                className="nm-btn-ghost"
-                title="Quita cualquier corrección manual de esta semana y recalcula el bono de puntualidad de todas las rutas contra el Reloj Checador"
-                onClick={() => recalcularBonoPuntualidadSemana(semanaActual.id)}
-              >
-                <RefreshCw size={13} /> Recalcular puntualidad
-              </button>
+              <>
+                <div title="Lunes de la semana que se está pagando — necesario para calcular el bono de puntualidad contra el Reloj Checador">
+                  <input
+                    type="date" className="nm-input" style={{ width: "auto" }}
+                    value={semanaActual.semanaInicio || ""}
+                    onChange={(e) => actualizarSemanaInicioNomina(semanaActual.id, e.target.value)}
+                  />
+                </div>
+                <button
+                  className="nm-btn-ghost"
+                  title="Quita cualquier corrección manual de esta semana y recalcula el bono de puntualidad de todas las rutas contra el Reloj Checador"
+                  onClick={() => recalcularBonoPuntualidadSemana(semanaActual.id)}
+                >
+                  <RefreshCw size={13} /> Recalcular puntualidad
+                </button>
+              </>
             )}
             <button className={`nm-btn-ghost ${vista === "resumen" ? "activo" : ""}`} onClick={() => setVista("resumen")}>Resumen</button>
             <button className={`nm-btn-ghost ${vista === "detalle" ? "activo" : ""}`} onClick={() => setVista("detalle")}>Ver por ruta</button>
@@ -987,6 +1016,12 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
           </div>
         )}
       </div>
+
+      {esGerente && semanaActual && !semanaActual.semanaInicio && vista !== "cargar" && (
+        <div style={{ background: T.warnSoft, color: T.warn, padding: "10px 14px", borderRadius: 10, marginBottom: 16, fontSize: 12.5 }}>
+          A esta semana le falta la fecha de "lunes de la semana" — sin ella no se puede calcular el bono de puntualidad contra el Reloj Checador (se muestra $400 por default). Ponla en el selector de fecha de arriba y luego dale "Recalcular puntualidad".
+        </div>
+      )}
 
       {errorGuardado && (
         <div style={{ background: T.badSoft, color: T.bad, padding: "10px 14px", borderRadius: 10, marginBottom: 16, fontSize: 12.5 }}>
