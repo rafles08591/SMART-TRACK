@@ -47,6 +47,7 @@ export const OBJETIVO_TABS = [
   { key: "creditos", label: "CRÉDITOS", unit: "special" },
   { key: "cargas", label: "CARGAS", unit: "special" },
   { key: "pwst", label: "PWST", unit: "special" },
+  { key: "mi_fondo", label: "MI FONDO", unit: "special" },
 ];
 
 export const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
