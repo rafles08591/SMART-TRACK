@@ -17,53 +17,194 @@ export function RoadProgress({ pct }) {
   );
 }
 
-export function KpiCard({ icon, label, value, accent }) {
+/* ===================== KpiCard FUTURISTA ===================== */
+export function KpiCard({ icon, label, value, accent = "#22d3ee", subtext }) {
+  const isGood = accent === "#3DDC97" || accent === "#34d399" || (typeof accent === "string" && (accent.includes("34d399") || accent.includes("3DDC97")));
+  const isBad = accent === "#FF6B6B" || accent === "#f87171" || (typeof accent === "string" && (accent.includes("FF6B6B") || accent.includes("f87171")));
+
+  let borderColor = "rgba(34, 211, 238, 0.25)";
+  let glow = "rgba(34, 211, 238, 0.12)";
+  let valueColor = "#e0f2fe";
+
+  if (isGood) {
+    borderColor = "rgba(52, 211, 153, 0.4)";
+    glow = "rgba(52, 211, 153, 0.18)";
+    valueColor = "#6ee7b7";
+  } else if (isBad) {
+    borderColor = "rgba(248, 113, 113, 0.4)";
+    glow = "rgba(248, 113, 113, 0.15)";
+    valueColor = "#fca5a5";
+  } else if (accent === "#F2B134" || (typeof accent === "string" && (accent.includes("F2B134") || accent.includes("fbbf24")))) {
+    borderColor = "rgba(251, 191, 36, 0.4)";
+    glow = "rgba(251, 191, 36, 0.15)";
+    valueColor = "#fde68a";
+  }
+
   return (
-    <div className="card" style={{ padding: 16, flex: "1 1 140px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#9AA7BD", fontSize: 12, marginBottom: 6 }}>
-        {icon}<span>{label}</span>
+    <div
+      style={{
+        flex: "1 1 160px",
+        minWidth: 150,
+        maxWidth: 220,
+        padding: "16px 18px",
+        borderRadius: 14,
+        background: "rgba(15, 23, 42, 0.55)",
+        backdropFilter: "blur(16px)",
+        WebkitBackdropFilter: "blur(16px)",
+        border: `1px solid ${borderColor}`,
+        boxShadow: `0 4px 20px rgba(0,0,0,0.35), 0 0 18px ${glow}`,
+        transition: "all 0.25s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.boxShadow = `0 8px 28px rgba(0,0,0,0.45), 0 0 28px ${glow}`;
+        e.currentTarget.style.transform = "translateY(-2px)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.boxShadow = `0 4px 20px rgba(0,0,0,0.35), 0 0 18px ${glow}`;
+        e.currentTarget.style.transform = "translateY(0)";
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          marginBottom: 10,
+          color: "#94a3b8",
+          fontSize: 12,
+          fontWeight: 500,
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+        }}
+      >
+        {icon && <span style={{ opacity: 0.85 }}>{icon}</span>}
+        {label}
       </div>
-      <div className="mono display" style={{ fontSize: 22, color: accent || "#E8EDF5" }}>{value}</div>
+
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 700,
+          color: valueColor,
+          letterSpacing: "-0.03em",
+          lineHeight: 1.15,
+        }}
+      >
+        {value}
+      </div>
+
+      {subtext && (
+        <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
+          {subtext}
+        </div>
+      )}
     </div>
   );
 }
 
-// Ranking "REPARTIDOR AHOGADO": ordena a todos por efectividad del día
-// (peor primero) y, para los últimos 3 lugares, dibuja una ilustración de
-// agua con aletas de tiburón acechando — todo en SVG, sin necesitar subir
-// ninguna imagen.
+/* ===================== ObjetivoTabs FUTURISTA ===================== */
+const COLOR_MAP = {
+  dia: { border: "rgba(251, 191, 36, 0.55)", glow: "rgba(251, 191, 36, 0.25)", text: "#fde68a" },
+  max: { border: "rgba(34, 211, 238, 0.45)", glow: "rgba(34, 211, 238, 0.18)", text: "#a5f3fc" },
+  open: { border: "rgba(34, 211, 238, 0.45)", glow: "rgba(34, 211, 238, 0.18)", text: "#a5f3fc" },
+  champions: { border: "rgba(251, 191, 36, 0.5)", glow: "rgba(251, 191, 36, 0.2)", text: "#fde68a" },
+  unidades: { border: "rgba(52, 211, 153, 0.5)", glow: "rgba(52, 211, 153, 0.2)", text: "#6ee7b7" },
+  mesa: { border: "rgba(34, 211, 238, 0.4)", glow: "rgba(34, 211, 238, 0.15)", text: "#a5f3fc" },
+  cuponera: { border: "rgba(34, 211, 238, 0.4)", glow: "rgba(34, 211, 238, 0.15)", text: "#a5f3fc" },
+  tiempos: { border: "rgba(34, 211, 238, 0.4)", glow: "rgba(34, 211, 238, 0.15)", text: "#a5f3fc" },
+  actividades_dia: { border: "rgba(248, 113, 113, 0.45)", glow: "rgba(248, 113, 113, 0.15)", text: "#fca5a5" },
+  actividades_semana: { border: "rgba(248, 113, 113, 0.4)", glow: "rgba(248, 113, 113, 0.12)", text: "#fca5a5" },
+  actividades_mes: { border: "rgba(248, 113, 113, 0.4)", glow: "rgba(248, 113, 113, 0.12)", text: "#fca5a5" },
+  rally_otc: { border: "rgba(52, 211, 153, 0.55)", glow: "rgba(52, 211, 153, 0.22)", text: "#6ee7b7" },
+  avisos: { border: "rgba(251, 191, 36, 0.55)", glow: "rgba(251, 191, 36, 0.22)", text: "#fde68a" },
+  facturas: { border: "rgba(34, 211, 238, 0.4)", glow: "rgba(34, 211, 238, 0.15)", text: "#a5f3fc" },
+  creditos: { border: "rgba(52, 211, 153, 0.5)", glow: "rgba(52, 211, 153, 0.2)", text: "#6ee7b7" },
+  default: { border: "rgba(148, 163, 184, 0.25)", glow: "rgba(148, 163, 184, 0.08)", text: "#cbd5e1" },
+};
 
-export function ObjetivoTabs({ tab, setTab, tabs, estadoTabs }) {
+export function ObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
   const lista = tabs || OBJETIVO_TABS;
+
   return (
-    <div style={{ display: "flex", gap: 8, margin: "14px 0", flexWrap: "wrap" }}>
-      <style>{`
-        @keyframes parpadeoRojoTab { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.55); } 50% { box-shadow: 0 0 0 5px rgba(255,107,107,0); } }
-        @keyframes parpadeoNaranjaIntensoTab {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(255,140,0,0.85); background-color: rgba(255,140,0,0.12); }
-          50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.45); }
-        }
-        @keyframes parpadeoRojoIntensoTab {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0.9); background-color: rgba(255,0,0,0.18); }
-          50% { box-shadow: 0 0 0 10px rgba(255,0,0,0); background-color: rgba(255,0,0,0.55); }
-        }
-        @keyframes parpadeoVerdeTab {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(61,220,151,0.85); background-color: rgba(61,220,151,0.12); }
-          50% { box-shadow: 0 0 0 8px rgba(61,220,151,0); background-color: rgba(61,220,151,0.45); }
-        }
-        .tab-pendiente { border: 1px solid #FF6B6B !important; color: #FF6B6B !important; animation: parpadeoRojoTab 1.4s ease-in-out infinite; }
-        .tab-completo { border: 1px solid #3DDC97 !important; color: #3DDC97 !important; }
-        .tab-aviso-nuevo { border: 2px solid #FF8C00 !important; color: #FF8C00 !important; font-weight: 800 !important; animation: parpadeoNaranjaIntensoTab 0.9s ease-in-out infinite; }
-        .tab-pendiente-urgente { border: 2px solid #FF0000 !important; color: #FF0000 !important; font-weight: 800 !important; animation: parpadeoRojoIntensoTab 0.7s ease-in-out infinite; }
-        .tab-parpadeo-verde { border: 2px solid #3DDC97 !important; color: #3DDC97 !important; font-weight: 800 !important; animation: parpadeoVerdeTab 1s ease-in-out infinite; }
-      `}</style>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 22 }}>
       {lista.map((t) => {
-        const estado = estadoTabs && estadoTabs[t.key];
-        const claseExtra = estado === "pendiente" ? "tab-pendiente" : estado === "completo" ? "tab-completo" : estado === "aviso_nuevo" ? "tab-aviso-nuevo" : estado === "pendiente_urgente" ? "tab-pendiente-urgente" : estado === "parpadeo_verde" ? "tab-parpadeo-verde" : "";
+        const isActive = tab === t.key;
+        const estado = estadoTabs[t.key];
+        const colors = COLOR_MAP[t.key] || COLOR_MAP.default;
+
+        let extraBorder = colors.border;
+        let extraGlow = colors.glow;
+        let extraText = colors.text;
+
+        if (estado === "pendiente" || estado === "pendiente_urgente") {
+          extraBorder = "rgba(248, 113, 113, 0.65)";
+          extraGlow = "rgba(248, 113, 113, 0.25)";
+          extraText = "#fca5a5";
+        } else if (estado === "completo") {
+          extraBorder = "rgba(52, 211, 153, 0.55)";
+          extraGlow = "rgba(52, 211, 153, 0.2)";
+          extraText = "#6ee7b7";
+        } else if (estado === "aviso_nuevo" || estado === "parpadeo_verde") {
+          extraBorder = "rgba(52, 211, 153, 0.6)";
+          extraGlow = "rgba(52, 211, 153, 0.28)";
+          extraText = "#6ee7b7";
+        }
+
         return (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`${tab === t.key ? "btn" : "btn-ghost"} ${claseExtra}`} style={{ fontSize: 13, flex: 1 }}>
-            {t.label}
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            style={{
+              position: "relative",
+              padding: "11px 18px",
+              borderRadius: 12,
+              fontSize: 13,
+              fontWeight: 600,
+              letterSpacing: "0.03em",
+              cursor: "pointer",
+              transition: "all 0.22s ease",
+              background: isActive
+                ? `linear-gradient(135deg, ${extraGlow}, rgba(15, 23, 42, 0.6))`
+                : "rgba(15, 23, 42, 0.45)",
+              border: `1px solid ${isActive ? extraBorder : "rgba(148, 163, 184, 0.15)"}`,
+              color: isActive ? extraText : "#94a3b8",
+              boxShadow: isActive
+                ? `0 0 22px ${extraGlow}, inset 0 1px 0 rgba(255,255,255,0.06)`
+                : "none",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+            }}
+            onMouseEnter={(e) => {
+              if (!isActive) {
+                e.currentTarget.style.borderColor = extraBorder;
+                e.currentTarget.style.color = extraText;
+                e.currentTarget.style.boxShadow = `0 0 16px ${extraGlow}`;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isActive) {
+                e.currentTarget.style.borderColor = "rgba(148, 163, 184, 0.15)";
+                e.currentTarget.style.color = "#94a3b8";
+                e.currentTarget.style.boxShadow = "none";
+              }
+            }}
+          >
+            {t.label || t.key.toUpperCase()}
+
+            {(estado === "pendiente" || estado === "pendiente_urgente" || estado === "aviso_nuevo") && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 7,
+                  right: 7,
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: estado === "aviso_nuevo" ? "#34d399" : "#f87171",
+                  boxShadow: `0 0 8px ${estado === "aviso_nuevo" ? "#34d399" : "#f87171"}`,
+                }}
+              />
+            )}
           </button>
         );
       })}
@@ -97,18 +238,15 @@ export function MarcasBreakdown({ titulo, marcas, data }) {
   );
 }
 
-
 export function PegarTextoBox({ onProcesar, placeholder }) {
   const [abierto, setAbierto] = useState(false);
   const [texto, setTexto] = useState("");
-
   function procesar() {
     if (!texto.trim()) return;
     onProcesar(texto);
     setTexto("");
     setAbierto(false);
   }
-
   return (
     <div style={{ marginBottom: 12 }}>
       <button
@@ -136,8 +274,6 @@ export function PegarTextoBox({ onProcesar, placeholder }) {
   );
 }
 
-
-
 export function BotonGuardarImagen({ captura, nombreArchivo, etiqueta = "Guardar imagen" }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
@@ -161,23 +297,16 @@ export function BotonGuardarImagen({ captura, nombreArchivo, etiqueta = "Guardar
   );
 }
 
-// Caja colapsable "Pegar texto" — alternativa a subir un archivo: se copia
-// directo desde la página de origen (Ctrl+C) y se pega aquí (Ctrl+V), sin
-// tener que descargar ni buscar ningún archivo. Reutilizable en cualquier
-// pestaña de carga de datos.
-
 export function ModalTablaCompleta({ titulo, onClose, children }) {
   const contenedorRef = useRef(null);
   const contenidoRef = useRef(null);
   const [escala, setEscala] = useState(1);
   const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
-
   useEffect(() => {
     function recalcular() {
       const contenedor = contenedorRef.current;
       const contenido = contenidoRef.current;
       if (!contenedor || !contenido) return;
-      // Se mide el contenido a tamaño natural (sin escalar) para calcular el factor correcto.
       contenido.style.transform = "none";
       const anchoDisponible = contenedor.clientWidth - 16;
       const anchoNatural = contenido.scrollWidth;
@@ -195,7 +324,6 @@ export function ModalTablaCompleta({ titulo, onClose, children }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [children]);
-
   return (
     <div
       style={{
@@ -220,5 +348,3 @@ export function ModalTablaCompleta({ titulo, onClose, children }) {
     </div>
   );
 }
-
-
