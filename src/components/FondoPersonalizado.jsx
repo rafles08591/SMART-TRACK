@@ -77,7 +77,15 @@ export function useFondoPersonalizado(identidad) {
 // degradado oscuro encima para que el texto siga siendo legible sobre
 // cualquier foto.
 export function FondoDeFondo({ url }) {
-  if (!url) return null;
+  // IMPORTANTE: este div SIEMPRE se renderiza (nunca "return null"), aunque
+  // no haya foto todavía. Si apareciera/desapareciera del DOM según si ya
+  // cargó la URL, React tendría que INSERTAR un nodo nuevo al principio de
+  // la lista de hermanos justo cuando llega la foto — y eso, combinado con
+  // el parche defensivo de removeChild/insertBefore que tiene App.tsx (para
+  // el bug del navegador de WhatsApp), puede fallar en silencio y dejar el
+  // resto de la pantalla (el menú) en un estado roto. Manteniendo el div
+  // siempre presente y solo cambiando su estilo, nunca se inserta ni se
+  // quita nada del DOM — solo se actualiza una propiedad, sin riesgo.
   return (
     <div
       aria-hidden="true"
@@ -86,7 +94,7 @@ export function FondoDeFondo({ url }) {
         inset: 0,
         zIndex: 0,
         pointerEvents: "none",
-        backgroundImage: `linear-gradient(rgba(11,18,32,0.55), rgba(11,18,32,0.72)), url("${url}")`,
+        backgroundImage: url ? `linear-gradient(rgba(11,18,32,0.55), rgba(11,18,32,0.72)), url("${url}")` : "none",
         backgroundSize: "cover",
         backgroundPosition: "center",
       }}
