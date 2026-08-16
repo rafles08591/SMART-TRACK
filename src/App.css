@@ -182,3 +182,145 @@
     border-right-color: var(--border);
   }
 }
+/* ============================================
+   SMART-TRACK · Panel Staff Futurista
+   ============================================ */
+
+:root {
+  --bg-deep: #070b14;
+  --bg-card: rgba(15, 23, 42, 0.55);
+  --border-glass: rgba(148, 163, 184, 0.12);
+  --glow-cyan: #22d3ee;
+  --glow-gold: #fbbf24;
+  --glow-emerald: #34d399;
+  --glow-coral: #f87171;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+}
+
+body, #root {
+  background: 
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139, 92, 246, 0.06), transparent),
+    var(--bg-deep) !important;
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ========== CARDS ========== */
+.card {
+  background: var(--bg-card) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-glass) !important;
+  border-radius: 16px !important;
+  box-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: all 0.25s ease;
+}
+
+.card:hover {
+  border-color: rgba(34, 211, 238, 0.25) !important;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(34, 211, 238, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* ========== BOTONES PRINCIPALES ========== */
+.btn {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.15), rgba(34, 211, 238, 0.05)) !important;
+  border: 1px solid rgba(34, 211, 238, 0.35) !important;
+  color: #e0f2fe !important;
+  border-radius: 12px !important;
+  font-weight: 500 !important;
+  padding: 9px 18px !important;
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.08);
+  transition: all 0.2s ease !important;
+  backdrop-filter: blur(8px);
+}
+
+.btn:hover {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.25), rgba(34, 211, 238, 0.1)) !important;
+  border-color: rgba(34, 211, 238, 0.6) !important;
+  box-shadow: 0 0 28px rgba(34, 211, 238, 0.2);
+  transform: translateY(-1px);
+}
+
+/* ========== BOTONES GHOST ========== */
+.btn-ghost {
+  background: rgba(15, 23, 42, 0.4) !important;
+  border: 1px solid rgba(148, 163, 184, 0.15) !important;
+  color: var(--text-secondary) !important;
+  border-radius: 12px !important;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease !important;
+}
+
+.btn-ghost:hover {
+  background: rgba(34, 211, 238, 0.08) !important;
+  border-color: rgba(34, 211, 238, 0.3) !important;
+  color: #e0f2fe !important;
+}
+
+/* ========== TIPOGRAFÍA ========== */
+.display {
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
+  color: var(--text-primary) !important;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace !important;
+  font-size: 0.9em;
+}
+
+/* ========== INPUTS / SELECT / TEXTAREA ========== */
+input, select, textarea {
+  background: rgba(15, 23, 42, 0.7) !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  color: var(--text-primary) !important;
+  border-radius: 10px !important;
+  padding: 9px 12px !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none !important;
+  border-color: rgba(34, 211, 238, 0.5) !important;
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12) !important;
+}
+
+/* ========== SCROLLBAR ========== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.35);
+}
+
+/* ========== TABLA ========== */
+table {
+  border-collapse: separate !important;
+  border-spacing: 0;
+}
+th {
+  color: var(--text-muted) !important;
+  font-weight: 500 !important;
+  font-size: 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+td {
+  border-top: 1px solid rgba(30, 42, 66, 0.6) !important;
+}
