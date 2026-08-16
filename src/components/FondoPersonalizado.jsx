@@ -89,12 +89,14 @@ export function FondoDeFondo({ url }) {
   // algo de más atrás (como el fondo oscuro de toda la app), el
   // contenedor que lo usa (en StaffView/VendorView) debe tener
   // position:relative Y un z-index propio — así "atrapa" esta capa
-  // dentro de sí mismo en vez de dejarla escapar.
+  // dentro de sí mismo en vez de dejarla escapar. Con eso resuelto, se usa
+  // position:fixed (no absolute) para que la foto se quede fija al hacer
+  // scroll en vez de moverse con el contenido.
   return (
     <div
       aria-hidden="true"
       style={{
-        position: "absolute",
+        position: "fixed",
         inset: 0,
         zIndex: -1,
         pointerEvents: "none",
