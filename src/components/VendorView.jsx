@@ -84,7 +84,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
   const chartKey = unit === "units" ? "paquetes" : "monto";
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px", position: "relative" }}>
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px", position: "relative", zIndex: 0 }}>
       <FondoDeFondo url={fondoUrl} />
       <TopBar
         title={vendedor.name}
