@@ -234,7 +234,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   }
 
   return (
-    <div style={{ maxWidth: 820, margin: "0 auto", padding: "24px 18px 60px", position: "relative", zIndex: 1 }}>
+    <div style={{ maxWidth: 820, margin: "0 auto", padding: "24px 18px 60px" }}>
       <FondoDeFondo url={fondoUrl} />
       <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} onRefresh={onRefresh} refrescando={refrescando} />
 
