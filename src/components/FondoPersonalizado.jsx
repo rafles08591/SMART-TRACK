@@ -77,20 +77,21 @@ export function useFondoPersonalizado(identidad) {
 // degradado oscuro encima para que el texto siga siendo legible sobre
 // cualquier foto.
 export function FondoDeFondo({ url }) {
-  // IMPORTANTE: este div SIEMPRE se renderiza (nunca "return null"), aunque
-  // no haya foto todavía. Si apareciera/desapareciera del DOM según si ya
-  // cargó la URL, React tendría que INSERTAR un nodo nuevo al principio de
-  // la lista de hermanos justo cuando llega la foto — y eso, combinado con
-  // el parche defensivo de removeChild/insertBefore que tiene App.tsx (para
-  // el bug del navegador de WhatsApp), puede fallar en silencio y dejar el
-  // resto de la pantalla (el menú) en un estado roto. Manteniendo el div
-  // siempre presente y solo cambiando su estilo, nunca se inserta ni se
-  // quita nada del DOM — solo se actualiza una propiedad, sin riesgo.
+  // Siempre se renderiza (nunca "return null") para que el nodo del DOM no
+  // aparezca/desaparezca — ver nota completa en useFondoPersonalizado.
+  //
+  // Usa position:absolute (no fixed) a propósito: position:fixed combinado
+  // con una imagen de fondo real crea, en Safari de iPhone, una "capa" de
+  // composición aparte que a veces se pinta por encima de todo lo demás
+  // sin importar el z-index — un bug viejo y conocido de iOS. Con absolute
+  // (anclado al contenedor con position:relative, no a la ventana), ese
+  // problema no aparece; a cambio, la foto se desplaza junto con el
+  // contenido en vez de quedarse fija al hacer scroll.
   return (
     <div
       aria-hidden="true"
       style={{
-        position: "fixed",
+        position: "absolute",
         inset: 0,
         zIndex: 0,
         pointerEvents: "none",
