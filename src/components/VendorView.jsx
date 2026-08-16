@@ -24,6 +24,7 @@ import FacturasView from "./FacturasView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
 import RelojChecadorView from "./RelojChecadorView";
+import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
 // kilometraje, aparte de UNIDADES y TIEMPOS). Para agregar otra ruta más
@@ -64,6 +65,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
     return () => { activo = false; clearInterval(intervalo); };
   }, [vendedor?.name]);
 
+  const [fondoUrl, setFondoUrl] = useFondoPersonalizado(vendedor?.name);
+
   if (!vendedor) return (
     <div style={{ padding: 24 }}>
       <div style={{ marginBottom: 10 }}>No se encontró tu ruta en la lista de vendedores activos.</div>
@@ -75,13 +78,14 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
   const chartKey = unit === "units" ? "paquetes" : "monto";
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px" }}>
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px", position: "relative", zIndex: 1 }}>
+      <FondoDeFondo url={fondoUrl} />
       <TopBar
         title={vendedor.name}
         subtitle={`${nombre ? nombre + " · " : ""}Periodo ${periodo.inicio} → ${periodo.fin} · ${restantes} días hábiles restantes (Lun-Sáb)`}
@@ -135,6 +139,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <SinVisitaView data={data} rol="vendedor" puesto={null} rutaPropia={rutaCodigo} persistFresco={persistFresco} />
       ) : tab === "reloj_checador" ? (
         <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} puedeVerBono={false} />
+      ) : tab === "mi_fondo" ? (
+        <PanelFondoPersonalizado identidad={vendedor.name} url={fondoUrl} setUrl={setFondoUrl} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
