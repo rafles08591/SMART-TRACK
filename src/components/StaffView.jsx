@@ -898,118 +898,78 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
 
       {tab === "cargar" && (
         <div className="card" style={{ padding: 18 }}>
-          <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>OTC SEMANAL (COMISIONES)</div>
-          <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-            Sube el reporte de OTC de la semana, con columnas <b>Vendedor, Fecha Venta, TOTAL $</b> (acepta .xlsx, .csv o .txt).
-            El avance es la suma de <b>TOTAL $</b> por ruta. Se mide en dinero y sirve para calcular la comisión de OTC de vendedores, supervisor y gerente.
-            Cada carga reemplaza por completo la semana anterior (un archivo reemplaza al anterior).
-          </p>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="btn" onClick={() => fileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir OTC semanal
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>AVANCE DEL DÍA</div>
+            <button className="btn" onClick={() => avanceDiaFileInputRef.current?.click()}>
+              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
             </button>
-            <button className="btn-ghost" onClick={onDownloadTemplate}>Descargar plantilla</button>
-          </div>
-          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onFile} />
-          <PegarTextoBox onProcesar={onOtcSemanalTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
-          {status && (
-            <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: status.startsWith("OTC semanal cargado") ? "#3DDC97" : "#FF6B6B" }}>
-              {status.startsWith("OTC semanal cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {status}
-            </div>
-          )}
-          <div style={{ marginTop: 18, fontSize: 12, color: "#9AA7BD" }}>
-            Registros actuales: {(data.otcSemanal || []).length}
-          </div>
-
-          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>CARGA ACUMULADA DEL PERIODO (REPORTE DEL SISTEMA)</div>
-            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-              Alimenta <b>OPEN, CHAMPIONS y MAX</b> (no la pestaña DÍA, que usa sus propios archivos independientes más abajo).
-              Sube el reporte tal cual lo exporta el sistema, con columnas <b>Vendedor, Fecha, Articulo, Paquetes, Total $</b> (acepta .xlsx, .csv o .txt separado por tabs).
-              Se detecta la ruta del texto de Vendedor y la marca según el código de artículo: ICE MIX = FA01085, BLOSS MIX = FA01114, SUMM MIX = FA01115, FARONET = FA04016/FA04017/FA15010/FA15009.
-              <b> Este historial se guarda y se va acumulando día a día</b> — cada carga solo reemplaza las fechas que traiga ese archivo; el resto de los días ya guardados no se toca.
-              Puedes seleccionar <b>hasta 2 archivos a la vez</b> (por ejemplo si el reporte viene partido en dos por su tamaño); ambos se combinan antes de calcular el avance.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => ventasPeriodoFileInputRef.current?.click()}>
-                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir avance del periodo
-              </button>
-              <button className="btn-ghost" onClick={onBorrarTodoVentasPeriodo}>
-                <Trash2 size={14} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Borrar todo
-              </button>
-            </div>
-            <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
-            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado)." />
-            {ventasPeriodoStatus && (
-              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: ventasPeriodoStatus.startsWith("Periodo actualizado") ? "#3DDC97" : "#FF6B6B" }}>
-                {ventasPeriodoStatus.startsWith("Periodo actualizado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {ventasPeriodoStatus}
-              </div>
-            )}
-          </div>
-
-          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>AVANCE DEL DÍA (REPORTE DEL SISTEMA)</div>
-            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-              Sube el reporte tal cual lo exporta el sistema, con columnas <b>Vendedor, Fecha, Cliente, Articulo, Paquetes, Total $</b> (acepta .xlsx, .csv o .txt separado por tabs).
-              Se detecta la ruta del texto de Vendedor (ej. "J201 - ...") y la marca según el código de artículo:
-              ICE MIX = FA01085, BLOSS MIX = FA01114, SUMM MIX = FA01115, FARONET = FA04016/FA04017/FA15010/FA15009.
-              Visitas efectivas = clientes distintos ese día (un cliente repetido varias veces cuenta una sola vez).
-              Esta carga es exclusiva de la pestaña DÍA: no modifica ni se mezcla con los datos de OPEN, CHAMPIONS ni MAX.
-              Cada carga reemplaza por completo el avance del día anterior.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => avanceDiaFileInputRef.current?.click()}>
-                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir avance del día
-              </button>
-            </div>
             <input ref={avanceDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onAvanceDiaFile} />
             <PegarTextoBox onProcesar={onAvanceDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Cliente, Articulo, Paquetes y Total $ (incluye el encabezado)." />
             {avanceDiaStatus && (
-              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                {avanceDiaStatus.startsWith("Avance cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {avanceDiaStatus}
-              </div>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
+                {avanceDiaStatus.startsWith("Avance cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {avanceDiaStatus}
+              </span>
             )}
           </div>
 
-          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>OTC DEL DÍA (REPORTE EXCLUSIVO)</div>
-            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-              Sube el reporte de OTC tal cual lo exporta el sistema, con columnas <b>Vendedor, Fecha Venta, TOTAL $</b> (acepta .xlsx, .csv o .txt).
-              El avance de OTC es la suma de <b>TOTAL $</b> por ruta, sin importar cuántos artículos distintos traiga cada una.
-              Esta carga también es exclusiva de la pestaña DÍA y no toca OPEN, CHAMPIONS ni MAX. Cada carga reemplaza el OTC del día anterior.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => otcDiaFileInputRef.current?.click()}>
-                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir OTC del día
-              </button>
-            </div>
+          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC DEL DÍA</div>
+            <button className="btn" onClick={() => otcDiaFileInputRef.current?.click()}>
+              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
+            </button>
             <input ref={otcDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onOtcDiaFile} />
             <PegarTextoBox onProcesar={onOtcDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
             {otcDiaStatus && (
-              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: otcDiaStatus.startsWith("OTC cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                {otcDiaStatus.startsWith("OTC cargado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {otcDiaStatus}
-              </div>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: otcDiaStatus.startsWith("OTC cargado") ? "#3DDC97" : "#FF6B6B" }}>
+                {otcDiaStatus.startsWith("OTC cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {otcDiaStatus}
+              </span>
             )}
           </div>
 
-          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>PEDIDOS DEL DÍA (REPORTE EXCLUSIVO)</div>
-            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-              Sube el reporte de pedidos tal cual lo exporta el sistema, con columnas <b>Fecha, Vendedor, Cliente/Nombre, Status, Motivo Rechazo, Total Pedido, Total Paquetes pedido, Total Entregado y Total Paquetes entregado</b> (acepta .xlsx, .csv o .txt).
-              Alimenta, en <b>Mesa de Control</b>, cuántos pedidos hubo por ruta, cuántos se entregaron, cuántos quedaron pendientes / rechazados en reparto / cambio a contado, el motivo de cada rechazo, y los paquetes pedidos contra los entregados.
-              Esta carga es exclusiva de ese resumen — no toca OPEN, CHAMPIONS, MAX ni el avance del día. Cada carga reemplaza por completo la anterior.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => pedidosDiaFileInputRef.current?.click()}>
-                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir pedidos del día
-              </button>
-            </div>
+          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>AVANCE DEL PERIODO</div>
+            <button className="btn" onClick={() => ventasPeriodoFileInputRef.current?.click()}>
+              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
+            </button>
+            <button className="btn-ghost" onClick={onBorrarTodoVentasPeriodo}>
+              <Trash2 size={14} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Borrar todo
+            </button>
+            <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
+            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado)." />
+            {ventasPeriodoStatus && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: ventasPeriodoStatus.startsWith("Periodo actualizado") ? "#3DDC97" : "#FF6B6B" }}>
+                {ventasPeriodoStatus.startsWith("Periodo actualizado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {ventasPeriodoStatus}
+              </span>
+            )}
+          </div>
+
+          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC SEMANAL</div>
+            <button className="btn" onClick={() => fileInputRef.current?.click()}>
+              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
+            </button>
+            <button className="btn-ghost" onClick={onDownloadTemplate}>Plantilla</button>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onFile} />
+            <PegarTextoBox onProcesar={onOtcSemanalTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
+            <span style={{ fontSize: 11.5, color: "#9AA7BD" }}>{(data.otcSemanal || []).length} registros</span>
+            {status && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: status.startsWith("OTC semanal cargado") ? "#3DDC97" : "#FF6B6B" }}>
+                {status.startsWith("OTC semanal cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {status}
+              </span>
+            )}
+          </div>
+
+          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>PEDIDOS DEL DÍA</div>
+            <button className="btn" onClick={() => pedidosDiaFileInputRef.current?.click()}>
+              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
+            </button>
             <input ref={pedidosDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onPedidosDiaFile} />
             <PegarTextoBox onProcesar={onPedidosDiaTexto} placeholder="Pega aquí las filas del reporte de pedidos (incluye el encabezado)." />
             {pedidosDiaStatus && (
-              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: pedidosDiaStatus.startsWith("Pedidos cargados") ? "#3DDC97" : "#FF6B6B" }}>
-                {pedidosDiaStatus.startsWith("Pedidos cargados") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {pedidosDiaStatus}
-              </div>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: pedidosDiaStatus.startsWith("Pedidos cargados") ? "#3DDC97" : "#FF6B6B" }}>
+                {pedidosDiaStatus.startsWith("Pedidos cargados") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {pedidosDiaStatus}
+              </span>
             )}
           </div>
         </div>
