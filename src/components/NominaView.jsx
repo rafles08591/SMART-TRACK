@@ -252,6 +252,12 @@ const VALOR_PENALIZACION_MOROSIDAD = 2; // $ por paquete de un cliente que no pa
 const BONO_PUNTUALIDAD_DEFAULT = 400;   // bono semanal fijo por puntualidad y asistencia; se calcula automático contra Reloj Checador (entrada <= HORA_LIMITE_PUNTUALIDAD los 6 días); el Gerente puede corregirlo a mano si hay una justificación.
 const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // hora real que se evalúa contra el checador
 const HORA_LIMITE_MOSTRADA = "07:10:00";    // hora que se le dice a la gente (a propósito más estricta que la real, como margen)
+// J201 y J203 son vendedores de pueblo — no están mapeados en el Reloj
+// Checador (no se les da seguimiento con ese equipo), así que el bono de
+// puntualidad se les da completo por default, sin evaluarlos contra el
+// checador (nunca tendrían registros, y saldrían siempre en $0 si se
+// intentara).
+const RUTAS_SIN_CHECADOR = ["J201", "J203"];
 const NOMBRES_DIA_PUNTUALIDAD = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 function sumarDiasISOLocal(fechaISO, dias) {
@@ -442,7 +448,7 @@ function DetalleRuta({ fila, editable, onCambiarBonoPuntualidad, semanaInicio })
   const [errorChecador, setErrorChecador] = useState("");
 
   useEffect(() => {
-    if (!fila || fila.bonoPuntualidad != null || !semanaInicio) { setChecadorResultado(null); return; }
+    if (!fila || fila.bonoPuntualidad != null || !semanaInicio || RUTAS_SIN_CHECADOR.includes(fila.ruta)) { setChecadorResultado(null); return; }
     let activo = true;
     setCargandoChecador(true);
     setErrorChecador("");
@@ -655,6 +661,7 @@ function VistaResumen({ semana, onVerRuta }) {
     Promise.all(
       (semana.filas || []).map((f) => {
         if (f.bonoPuntualidad != null) return Promise.resolve([f.ruta, f.bonoPuntualidad]);
+        if (RUTAS_SIN_CHECADOR.includes(f.ruta)) return Promise.resolve([f.ruta, BONO_PUNTUALIDAD_DEFAULT]);
         if (!semana.semanaInicio) return Promise.resolve([f.ruta, BONO_PUNTUALIDAD_DEFAULT]);
         return evaluarPuntualidadSemana(f.ruta, semana.semanaInicio)
           .then((r) => [f.ruta, r.bono])
