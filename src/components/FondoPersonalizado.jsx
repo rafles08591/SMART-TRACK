@@ -78,22 +78,25 @@ export function useFondoPersonalizado(identidad) {
 // cualquier foto.
 export function FondoDeFondo({ url }) {
   // Siempre se renderiza (nunca "return null") para que el nodo del DOM no
-  // aparezca/desaparezca — ver nota completa en useFondoPersonalizado.
+  // aparezca/desaparezca.
   //
-  // Usa position:absolute (no fixed) a propósito: position:fixed combinado
-  // con una imagen de fondo real crea, en Safari de iPhone, una "capa" de
-  // composición aparte que a veces se pinta por encima de todo lo demás
-  // sin importar el z-index — un bug viejo y conocido de iOS. Con absolute
-  // (anclado al contenedor con position:relative, no a la ventana), ese
-  // problema no aparece; a cambio, la foto se desplaza junto con el
-  // contenido en vez de quedarse fija al hacer scroll.
+  // z-index NEGATIVO a propósito (no 0): un elemento con position:absolute
+  // o fixed, aunque tenga z-index:0, SIEMPRE se pinta por encima de los
+  // elementos normales de la página (los que no tienen ninguna posición
+  // especial, como los botones del menú) — así funciona el orden de
+  // pintado de CSS, sin importar el orden en el HTML. Con z-index negativo
+  // sí queda realmente detrás. Para que ese negativo no se salga y tape
+  // algo de más atrás (como el fondo oscuro de toda la app), el
+  // contenedor que lo usa (en StaffView/VendorView) debe tener
+  // position:relative Y un z-index propio — así "atrapa" esta capa
+  // dentro de sí mismo en vez de dejarla escapar.
   return (
     <div
       aria-hidden="true"
       style={{
         position: "absolute",
         inset: 0,
-        zIndex: 0,
+        zIndex: -1,
         pointerEvents: "none",
         backgroundImage: url ? `linear-gradient(rgba(11,18,32,0.55), rgba(11,18,32,0.72)), url("${url}")` : "none",
         backgroundSize: "cover",
