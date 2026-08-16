@@ -89,7 +89,6 @@ export function FondoDeFondo({ url }) {
         backgroundImage: `linear-gradient(rgba(11,18,32,0.55), rgba(11,18,32,0.72)), url("${url}")`,
         backgroundSize: "cover",
         backgroundPosition: "center",
-        backgroundAttachment: "fixed",
       }}
     />
   );
