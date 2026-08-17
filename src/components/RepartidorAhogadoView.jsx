@@ -5,6 +5,12 @@ import { money, unidades, fechaHoyISO } from "../utils";
 import { BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 
+// Sube tu imagen al bucket de Supabase Storage que uses para este tipo de
+// assets (por ejemplo el mismo "promociones") y pega aquí la URL pública.
+// Así el archivo del componente no se llena de SVG/base64.
+const IMAGEN_REPARTIDOR_AHOGADO =
+  "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/IMG_0534.jpeg";
+
 export default function RepartidorAhogadoView({ stats }) {
   const captura = useCapturaImagen();
   const ranking = stats.porVendedor
@@ -60,7 +66,7 @@ export default function RepartidorAhogadoView({ stats }) {
             <div style={{ textAlign: "center", fontSize: 12, color: "#FF6B6B", fontWeight: 700, marginBottom: 8 }}>
               ÚLTIMOS 3 LUGARES · EN LA MIRA
             </div>
-            <IlustracionAguaTiburones nombres={ultimos3.map((n) => `${n}${NOMBRES[n] ? " · " + NOMBRES[n] : ""}`)} />
+            <IlustracionTiburones nombres={ultimos3.map((n) => `${n}${NOMBRES[n] ? " · " + NOMBRES[n] : ""}`)} />
           </div>
         )}
       </div>
@@ -68,91 +74,52 @@ export default function RepartidorAhogadoView({ stats }) {
   );
 }
 
-// Ilustración SVG: agua ondulada con 3 aletas de tiburón acechando, y un
-// repartidor "hundiéndose" en medio — puramente decorativo, sin imágenes externas.
-function IlustracionAguaTiburones({ nombres }) {
+// Ilustración: la imagen que subiste a Supabase Storage, con los nombres de
+// los últimos 3 lugares superpuestos y centrados sobre ella, como si
+// flotaran bajo el agua — bien notorios, con glow y contraste fuerte.
+function IlustracionTiburones({ nombres }) {
   return (
-    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "linear-gradient(180deg, #1a5270 0%, #0d3b52 30%, #06202e 65%, #020c12 100%)" }}>
-      <svg viewBox="0 0 400 260" style={{ width: "100%", display: "block" }} xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="rayo1" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#bfe6ff" stopOpacity="0.22" />
-            <stop offset="100%" stopColor="#bfe6ff" stopOpacity="0" />
-          </linearGradient>
-          <radialGradient id="superficie" cx="50%" cy="0%" r="80%">
-            <stop offset="0%" stopColor="#4fa3c7" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#4fa3c7" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-
-        {/* Luz de superficie y rayos de sol atravesando el agua */}
-        <rect x="0" y="0" width="400" height="90" fill="url(#superficie)" />
-        <polygon points="60,0 110,0 40,260 -30,260" fill="url(#rayo1)" />
-        <polygon points="180,0 220,0 260,260 200,260" fill="url(#rayo1)" />
-        <polygon points="300,0 340,0 400,220 340,260" fill="url(#rayo1)" />
-
-        {/* Burbujas subiendo */}
-        <g fill="#bfe6ff" opacity="0.5">
-          <circle cx="205" cy="60" r="3" />
-          <circle cx="214" cy="80" r="2.2" />
-          <circle cx="198" cy="95" r="4" />
-          <circle cx="221" cy="105" r="2" />
-          <circle cx="192" cy="120" r="2.6" />
-        </g>
-
-        {/* Repartidor hundiéndose: cuerpo completo, brazos hacia arriba, cabeza hacia atrás */}
-        <g transform="translate(205,128)">
-          <circle cx="0" cy="-32" r="10" fill="#F2B134" />
-          <path d="M -3 -24 Q 0 -8 -2 10 Q -3 28 2 42" stroke="#F2B134" strokeWidth="7" fill="none" strokeLinecap="round" />
-          <path d="M -4 -18 L -26 -34" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
-          <path d="M 3 -18 L 25 -32" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
-          <path d="M -2 30 L -16 52" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
-          <path d="M 2 32 L 14 54" stroke="#F2B134" strokeWidth="6" fill="none" strokeLinecap="round" />
-        </g>
-
-        {/* Tiburones completos acechando desde distintos ángulos */}
-        <g fill="#16232c" stroke="#0a141a" strokeWidth="1">
-          {/* Tiburón 1: viene de la izquierda */}
-          <g transform="translate(60,150) scale(1.05)">
-            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
-            <path d="M46,-2 L58,-24 L66,0 Z" />
-            <path d="M30,16 L20,30 L44,19 Z" />
-            <path d="M126,3 L138,-6 L130,10 Z" />
-          </g>
-          {/* Tiburón 2: viene de la derecha, más cerca */}
-          <g transform="translate(360,145) scale(-1.25,1.25)">
-            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
-            <path d="M46,-2 L58,-24 L66,0 Z" />
-            <path d="M30,16 L20,30 L44,19 Z" />
-            <path d="M126,3 L138,-6 L130,10 Z" />
-          </g>
-          {/* Tiburón 3: viene de abajo */}
-          <g transform="translate(230,225) scale(0.95) rotate(-18)">
-            <path d="M0,10 C18,-6 55,-8 92,4 C110,10 122,9 132,0 C124,14 108,20 90,17 C70,30 28,30 4,20 C-2,17 -3,13 0,10 Z" />
-            <path d="M46,-2 L58,-24 L66,0 Z" />
-            <path d="M30,16 L20,30 L44,19 Z" />
-            <path d="M126,3 L138,-6 L130,10 Z" />
-          </g>
-        </g>
-
-        {/* Fondo marino: rocas y algas */}
-        <g fill="#04141c">
-          <ellipse cx="40" cy="255" rx="50" ry="14" />
-          <ellipse cx="150" cy="258" rx="65" ry="16" />
-          <ellipse cx="290" cy="256" rx="70" ry="15" />
-          <ellipse cx="370" cy="258" rx="40" ry="12" />
-        </g>
-        <g stroke="#0d3b2e" strokeWidth="4" fill="none" strokeLinecap="round" opacity="0.8">
-          <path d="M100,258 Q95,230 105,205 Q112,190 102,170" />
-          <path d="M320,258 Q328,225 315,200 Q308,185 320,165" />
-        </g>
-
-        {/* Superficie del agua */}
-        <path d="M0 40 Q 25 28 50 40 T 100 40 T 150 40 T 200 40 T 250 40 T 300 40 T 350 40 T 400 40 V 0 H 0 Z" fill="#2c7ba0" opacity="0.35" />
-      </svg>
-      <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, padding: "0 14px 16px", marginTop: -18, position: "relative" }}>
+    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "#020c12" }}>
+      <img
+        src={IMAGEN_REPARTIDOR_AHOGADO}
+        alt="Repartidor ahogado — últimos lugares"
+        style={{ width: "100%", display: "block", objectFit: "cover" }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          bottom: "6%",
+          transform: "translateX(-50%)",
+          width: "92%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
         {nombres.map((n, i) => (
-          <div key={i} style={{ background: "rgba(255,107,107,0.18)", border: "1px solid #FF6B6B", borderRadius: 8, padding: "6px 10px", fontSize: 11, color: "#FF6B6B", fontWeight: 700, textAlign: "center" }}>
+          <div
+            key={i}
+            style={{
+              background: "linear-gradient(180deg, rgba(255,60,60,0.35), rgba(90,10,10,0.55))",
+              backdropFilter: "blur(2px)",
+              border: "2px solid #FF3B3B",
+              borderRadius: 999,
+              padding: "8px 20px",
+              fontSize: 15,
+              fontWeight: 900,
+              letterSpacing: 0.3,
+              color: "#FFFFFF",
+              textAlign: "center",
+              textShadow: "0 0 8px rgba(255,59,59,0.9), 0 2px 4px rgba(0,0,0,0.8)",
+              boxShadow: "0 0 18px rgba(255,59,59,0.65), inset 0 0 10px rgba(255,120,120,0.35)",
+              whiteSpace: "nowrap",
+              maxWidth: "100%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
             {n}
           </div>
         ))}
@@ -160,4 +127,3 @@ function IlustracionAguaTiburones({ nombres }) {
     </div>
   );
 }
-
