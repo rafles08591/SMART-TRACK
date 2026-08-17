@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
-import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock } from "lucide-react";
+import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2 } from "lucide-react";
 import { RUTAS, NOMBRES } from "../constants";
 import { fechaHoyISO } from "../utils";
 
@@ -31,7 +31,7 @@ function formatoFechaConDia(fechaISO) {
    los vendedores. El Gerente sube el archivo (queda guardado, sin
    activar) y decide cuándo activarlo.
 ------------------------------------------------------------------ */
-export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, onActivarCarga }) {
+export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, onActivarCarga, onEliminarCarga }) {
   const cargasPorFecha = data.cargasPorFecha || {};
   const cargaActivaFecha = data.cargaActivaFecha || null;
   const cargaActiva = cargaActivaFecha ? (cargasPorFecha[cargaActivaFecha] || null) : null;
@@ -123,10 +123,27 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                         {c.items.length} artículos · subida el {c.fechaSubida} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
                       </div>
                     </div>
-                    {esGerente && !activa && (
-                      <button className="btn-ghost" onClick={() => onActivarCarga(fecha)}>
-                        <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar esta carga
-                      </button>
+                    {esGerente && (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {!activa && (
+                          <button className="btn-ghost" onClick={() => onActivarCarga(fecha)}>
+                            <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar esta carga
+                          </button>
+                        )}
+                        <button
+                          className="btn-ghost"
+                          onClick={() => {
+                            const confirmado = window.confirm(
+                              `¿Eliminar la carga del ${formatoFechaConDia(fecha)} (${c.items.length} artículos)?${activa ? "\n\nEsta carga está ACTIVA — al eliminarla, dejará de haber una carga activa." : ""}\n\nEsta acción no se puede deshacer.`
+                            );
+                            if (confirmado) onEliminarCarga(fecha);
+                          }}
+                          style={{ color: "#FF6B6B", borderColor: "#FF6B6B33" }}
+                          title="Eliminar esta carga"
+                        >
+                          <Trash2 size={13} style={{ verticalAlign: "-2px" }} />
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
