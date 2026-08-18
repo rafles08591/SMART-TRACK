@@ -66,6 +66,8 @@ import { Clock, Upload, Download, Calendar, AlertTriangle, RefreshCw, Award, Che
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { NOMBRES } from "../constants";
+import { BotonGuardarImagen } from "./ui";
+import { useCapturaImagen } from "./hooks";
 
 const T = {
   bg: "#0B1220",
@@ -94,6 +96,13 @@ const MAPEO_NUMERO_RUTA = {
 // no entra a esta lista (se sigue viendo en "Marcas del día", pero no se
 // le mide el bono de puntualidad).
 const RUTAS_CHECADOR = [...new Set(Object.values(MAPEO_NUMERO_RUTA))].filter((r) => r.startsWith("RUTA ") || r === "SUPERVISOR-1");
+// J201 y J203 (vendedores de pueblo) no tienen número de checador asignado
+// a propósito, pero igual deben aparecer en el resumen semanal como filas
+// en blanco, para poder capturarles observaciones a mano.
+const RUTAS_SIN_CHECADOR = ["RUTA J201", "RUTA J203"];
+// Orden fijo para la tabla de "Incidencias semanales": J201 a J207 primero,
+// y Supervisor-1 al final.
+const RUTAS_ORDEN_RESUMEN = ["RUTA J201", "RUTA J202", "RUTA J203", "RUTA J204", "RUTA J205", "RUTA J206", "RUTA J207", "SUPERVISOR-1"];
 
 const HORA_LIMITE_PUNTUALIDAD = "07:12:00"; // hora real que se evalúa contra el checador
 const HORA_LIMITE_MOSTRADA = "7:10 a.m.";   // hora que se le dice a la gente (a propósito más estricta que la real, como margen)
@@ -327,6 +336,10 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
   // (no se guardan en Supabase); se incluyen en el Excel si se llenan
   // antes de descargar.
   const [observaciones, setObservaciones] = useState({}); // { numero_empleado: texto }
+  // Captura de imagen de la tabla completa (con observaciones) para
+  // guardarla/enviarla además del Excel — misma utilidad que ya se usa
+  // en otras vistas del sistema.
+  const capturaResumen = useCapturaImagen();
 
   async function cargarResumen() {
     setCargandoResumen(true);
@@ -342,7 +355,11 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
         .lte("fecha", fechaHasta);
       if (error) throw error;
 
-      const filas = Object.entries(MAPEO_NUMERO_RUTA)
+      const diasVacios = () => NOMBRES_DIA_PUNTUALIDAD.map((nombreDia, i) => ({
+        fecha: sumarDiasISOLocal(semanaPuntualidad, i), nombreDia, hora: null,
+      }));
+
+      const filasConChecador = Object.entries(MAPEO_NUMERO_RUTA)
         .filter(([, ruta]) => RUTAS_CHECADOR.includes(ruta))
         .map(([numeroEmpleado, ruta]) => {
           const registrosEmpleado = (data || []).filter((r) => r.numero_empleado === numeroEmpleado);
@@ -357,8 +374,27 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           const diasProblema = dias.filter((d) => !d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD);
           const aplicaBono = diasProblema.length === 0;
           const puesto = ruta === "SUPERVISOR-1" ? "SUPERVISOR" : "VENTAS";
-          return { numeroEmpleado, ruta, puesto, nombre, identificador, dias, aplicaBono };
+          return { numeroEmpleado, ruta, puesto, nombre, identificador, dias, aplicaBono, sinChecador: false };
         });
+
+      // Filas en blanco para J201 y J203: sin reloj/RFC/horas, pero con
+      // espacio para observaciones igual que las demás.
+      const filasSinChecador = RUTAS_SIN_CHECADOR.map((ruta) => ({
+        numeroEmpleado: `sin-checador-${ruta}`,
+        ruta,
+        puesto: "VENTAS",
+        nombre: NOMBRES[ruta] || "",
+        identificador: "",
+        dias: diasVacios(),
+        aplicaBono: false,
+        sinChecador: true,
+      }));
+
+      const orden = (ruta) => {
+        const i = RUTAS_ORDEN_RESUMEN.indexOf(ruta);
+        return i === -1 ? RUTAS_ORDEN_RESUMEN.length : i;
+      };
+      const filas = [...filasConChecador, ...filasSinChecador].sort((a, b) => orden(a.ruta) - orden(b.ruta));
       setFilasResumen(filas);
     } catch (err) {
       console.error("Error cargando resumen:", err);
@@ -389,7 +425,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
       const fila = {
         PUESTO: f.puesto,
         RUTA: f.ruta.replace("RUTA ", ""),
-        RELOJ: f.numeroEmpleado,
+        RELOJ: f.sinChecador ? "" : f.numeroEmpleado,
         RFC: f.identificador,
         NOMBRE: f.nombre,
       };
@@ -575,7 +611,10 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
               />
               <button className="rc-btn-ghost" onClick={cargarResumen}><RefreshCw size={12} /> Actualizar</button>
               {filasResumen && filasResumen.length > 0 && (
-                <button className="rc-btn" onClick={descargarResumenExcel}><Download size={12} /> Excel</button>
+                <>
+                  <button className="rc-btn" onClick={descargarResumenExcel}><Download size={12} /> Excel</button>
+                  <BotonGuardarImagen captura={capturaResumen} nombreArchivo={`incidencias_semanales_${semanaPuntualidad}.png`} />
+                </>
               )}
             </div>
           </div>
@@ -592,7 +631,11 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
               Cargando…
             </div>
           ) : (
-            <div className="rc-card" style={{ padding: 0, overflow: "hidden" }}>
+            <div ref={capturaResumen.capturaRef} className="rc-card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ padding: "14px 16px", borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>INCIDENCIAS SEMANALES</div>
+                <div style={{ fontSize: 12, color: T.muted }}>Del {formatoRangoSemana(semanaPuntualidad)} · Conteo: {filasResumen.length}</div>
+              </div>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
                   <thead>
@@ -604,19 +647,21 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
                   </thead>
                   <tbody>
                     {filasResumen.map((f) => (
-                      <tr key={f.numeroEmpleado} style={{ borderTop: `1px solid ${T.border}` }}>
+                      <tr key={f.numeroEmpleado} style={{ borderTop: `1px solid ${T.border}`, background: f.sinChecador ? T.cardSoft : "transparent" }}>
                         <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.puesto}</td>
                         <td style={{ padding: "8px 10px", fontWeight: 700, whiteSpace: "nowrap" }}>{f.ruta.replace("RUTA ", "")}</td>
-                        <td className="nm-mono" style={{ padding: "8px 10px" }}>{f.numeroEmpleado}</td>
-                        <td className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.identificador || "—"}</td>
+                        <td className="nm-mono" style={{ padding: "8px 10px", color: f.sinChecador ? T.muted : T.ink }}>{f.sinChecador ? "—" : f.numeroEmpleado}</td>
+                        <td className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap", color: f.sinChecador ? T.muted : T.ink }}>{f.identificador || "—"}</td>
                         <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.nombre || "—"}</td>
                         {f.dias.map((d) => (
-                          <td key={d.fecha} className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap", color: !d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD ? T.bad : T.ink }}>
-                            {formatoHora(d.hora)}
+                          <td key={d.fecha} className="nm-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap", color: f.sinChecador ? T.muted : (!d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD ? T.bad : T.ink) }}>
+                            {f.sinChecador ? "—" : formatoHora(d.hora)}
                           </td>
                         ))}
                         <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                          {f.aplicaBono ? (
+                          {f.sinChecador ? (
+                            <span style={{ color: T.muted }}>—</span>
+                          ) : f.aplicaBono ? (
                             <span style={{ fontWeight: 800, color: T.ok }}>${BONO_PUNTUALIDAD_MONTO}</span>
                           ) : (
                             <span style={{ color: T.muted }}>—</span>
