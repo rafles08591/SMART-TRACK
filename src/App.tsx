@@ -99,6 +99,30 @@ function sumarDiasISO(fechaISO, dias) {
   return fecha.toISOString().slice(0, 10);
 }
 
+const DIAS_SEMANA_KEYS_TODOS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+
+// "2026-08-21" -> "viernes". Se usa para saber a qué casilla fija
+// (lunes..sábado) corresponde una fecha, ya que las cargas ahora se
+// identifican por día de la semana y no por fecha calendario.
+function diaSemanaKeyDe(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  return DIAS_SEMANA_KEYS_TODOS[fecha.getUTCDay()];
+}
+
+// Día hábil siguiente a hoy (mañana), saltando domingo -> lunes, ya que
+// las rutas no trabajan domingo. Devuelve tanto la clave del día como la
+// fecha real, para poder mostrarla como referencia informativa.
+function siguienteDiaHabil() {
+  let fecha = sumarDiasISO(fechaHoyISO(), 1);
+  let dia = diaSemanaKeyDe(fecha);
+  if (dia === "domingo") {
+    fecha = sumarDiasISO(fecha, 1);
+    dia = diaSemanaKeyDe(fecha);
+  }
+  return { dia, fecha };
+}
+
 // normalizarCodigo ya viene importada de "./utils" (se usa aquí para
 // cruzar el código de cliente de Mesa de Control contra clientes_ruta).
 
@@ -480,17 +504,20 @@ export default function App() {
     return tarea;
   }
 
-  // Las cargas ahora viven por fecha objetivo (data.cargasPorFecha[fecha]),
-  // no como un objeto único: el Gerente puede tener varias guardadas
-  // (hoy, mañana, pasado...) y solo UNA está "activa" para los vendedores
-  // (data.cargaActivaFecha). `persistCargas` opera siempre sobre la fecha
+  // Las cargas ahora viven por DÍA DE LA SEMANA (data.cargasPorDia[dia],
+  // dia ∈ "lunes".."sabado"), no por fecha calendario: son 6 cupos fijos
+  // que se van reutilizando semana tras semana (hoy jueves subo la del
+  // viernes; la próxima semana, jueves otra vez, vuelvo a subir/activar
+  // esa misma casilla "viernes"). El Gerente puede tener varias guardadas
+  // a la vez, pero solo UNA está "activa" para los vendedores
+  // (data.cargaActivoDia). `persistCargas` opera siempre sobre el día
   // que se le indique, partiendo del documento más reciente en Supabase.
-  async function persistCargas(fecha, calcularNuevoCargas) {
-    if (!fecha) return;
+  async function persistCargas(dia, calcularNuevoCargas) {
+    if (!dia) return;
     await persistParcialFresco((fresca) => {
-      const actual = fresca.cargasPorFecha || {};
-      const cargaExistente = actual[fecha] || { fecha, fechaSubida: fecha, bloqueado: false, items: [], enviosPorRuta: {} };
-      return { cargasPorFecha: { ...actual, [fecha]: calcularNuevoCargas(cargaExistente) } };
+      const actual = fresca.cargasPorDia || {};
+      const cargaExistente = actual[dia] || { dia, fechaReferencia: null, fechaSubida: null, bloqueado: false, items: [], enviosPorRuta: {} };
+      return { cargasPorDia: { ...actual, [dia]: calcularNuevoCargas(cargaExistente) } };
     });
   }
 
@@ -1228,14 +1255,16 @@ export default function App() {
     return { items, error: null };
   }
 
-  function handleCargasFile(e, fechaObjetivo) {
+  function handleCargasFile(e, diaObjetivo) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    // Por default, un archivo subido hoy es para el día siguiente (lunes
-    // sube -> es para martes, etc.), pero el Gerente puede elegir otra
-    // fecha en el selector antes de subir.
-    const fechaFinal = fechaObjetivo || sumarDiasISO(fechaHoyISO(), 1);
+    // Por default, un archivo subido hoy es para el día hábil siguiente
+    // (jueves sube -> es para viernes, etc.), pero el Gerente puede elegir
+    // otro día de la semana en el selector antes de subir. La carga se
+    // identifica por DÍA (lunes..sábado), no por fecha calendario — así se
+    // reutiliza automáticamente semana tras semana.
+    const diaFinal = diaObjetivo || siguienteDiaHabil().dia;
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -1269,18 +1298,20 @@ export default function App() {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        // Se guarda bajo su fecha objetivo, SIN activarla todavía — queda
-        // pendiente hasta que el Gerente la active manualmente cuando
-        // corresponda. Si ya había una carga guardada para esa misma
-        // fecha, se reemplaza por completo (partiendo siempre del
-        // documento más reciente en Supabase).
+        // Se guarda bajo su casilla de día de la semana, SIN activarla
+        // todavía — queda pendiente hasta que el Gerente la active
+        // manualmente cuando corresponda. Si ya había una carga guardada
+        // para ese mismo día (de esta semana o de una anterior), se
+        // reemplaza por completo — es justo el punto: la casilla de cada
+        // día se recicla semana tras semana, partiendo siempre del
+        // documento más reciente en Supabase.
         await persistParcialFresco((fresca) => ({
-          cargasPorFecha: {
-            ...(fresca.cargasPorFecha || {}),
-            [fechaFinal]: { fecha: fechaFinal, fechaSubida: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} },
+          cargasPorDia: {
+            ...(fresca.cargasPorDia || {}),
+            [diaFinal]: { dia: diaFinal, fechaReferencia: sumarDiasISO(fechaHoyISO(), 1), fechaSubida: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} },
           },
         }));
-        setCargasStatus(`Carga guardada para el ${fechaFinal}: ${resultado.items.length} artículos, hoja "${hojaUsada}". Actívala cuando corresponda.`);
+        setCargasStatus(`Carga guardada para el ${diaFinal}: ${resultado.items.length} artículos, hoja "${hojaUsada}". Actívala cuando corresponda.`);
       } catch (err) {
         console.error(err);
         setCargasStatus("No se pudo leer el archivo. Verifica el formato.");
@@ -1289,12 +1320,36 @@ export default function App() {
     reader.readAsBinaryString(file);
   }
 
-  // Hace que la carga guardada en `fecha` sea la que ven y editan los
+  // Hace que la carga guardada en `dia` sea la que ven y editan los
   // vendedores. Es una acción explícita del Gerente — no pasa sola aunque
-  // llegue la fecha, para poder manejar excepciones (fines de semana,
-  // días festivos, etc.) sin que el sistema se adelante solo.
-  async function activarCarga(fecha) {
-    await persistParcialFresco(() => ({ cargaActivaFecha: fecha }));
+  // llegue el día, para poder manejar excepciones (festivos, cambios de
+  // ruta, etc.) sin que el sistema se adelante solo. Activar SIEMPRE deja
+  // la carga lista para modificarse: se desbloquea (por si venía
+  // bloqueada de la semana pasada) y se limpian los envíos por ruta, para
+  // que cada ruta pueda proponer sus cantidades de esta semana desde cero.
+  async function activarCarga(dia) {
+    await persistParcialFresco((fresca) => {
+      const actual = fresca.cargasPorDia || {};
+      const cargaExistente = actual[dia];
+      if (!cargaExistente) return { cargaActivoDia: dia };
+      return {
+        cargaActivoDia: dia,
+        cargasPorDia: { ...actual, [dia]: { ...cargaExistente, bloqueado: false, enviosPorRuta: {} } },
+      };
+    });
+  }
+
+  // Quita por completo la carga guardada de ese día (no afecta a las
+  // demás casillas). Si era la que estaba activa, deja de haber una
+  // carga activa.
+  async function eliminarCarga(dia) {
+    await persistParcialFresco((fresca) => {
+      const actual = { ...(fresca.cargasPorDia || {}) };
+      delete actual[dia];
+      const cambios = { cargasPorDia: actual };
+      if (fresca.cargaActivoDia === dia) cambios.cargaActivoDia = null;
+      return cambios;
+    });
   }
 
   async function descargarCargasModificadas() {
@@ -1312,8 +1367,8 @@ export default function App() {
       alert("No se pudo confirmar que tengas la información más reciente (revisa tu conexión). Se descargará con lo que hay en pantalla — vuelve a intentarlo si acabas de recibir una propuesta nueva.");
       fresca = data;
     }
-    const fechaActiva = fresca.cargaActivaFecha;
-    const cargas = fechaActiva ? fresca.cargasPorFecha?.[fechaActiva] : null;
+    const diaActivo = fresca.cargaActivoDia;
+    const cargas = diaActivo ? fresca.cargasPorDia?.[diaActivo] : null;
     if (!cargas?.items?.length) {
       setCargasStatus("No hay una carga activa todavía.");
       alert("No hay una carga activa todavía. Actívala primero desde la lista de cargas guardadas.");
@@ -1337,10 +1392,10 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(filas);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Carga Modificada");
-    XLSX.writeFile(wb, `carga_modificada_${cargas.fecha || fechaHoyISO()}.xlsx`);
+    XLSX.writeFile(wb, `carga_modificada_${cargas.dia || fechaHoyISO()}.xlsx`);
     setCargasStatus(`Archivo generado con la información más reciente (${filas.length} filas). Se bloqueó la edición para los vendedores.`);
     // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
-    persistCargas(fechaActiva, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+    persistCargas(diaActivo, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
   }
 
   function downloadOtcSemanalTemplate() {
@@ -2790,6 +2845,7 @@ export default function App() {
           cargasStatus={cargasStatus}
           onDescargarCargas={descargarCargasModificadas}
           onActivarCarga={activarCarga}
+          onEliminarCarga={eliminarCarga}
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
