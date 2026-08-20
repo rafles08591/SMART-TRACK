@@ -37,6 +37,7 @@ import SinVisitaView from "./SinVisitaView";
 import ActividadView from "./ActividadView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
+import EscaleraStaffView from "./EscaleraStaffView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -455,6 +456,14 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <NominaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
           ) : objTab === "sin_visita" ? (
             <SinVisitaView data={data} rol="staff" puesto={puesto} rutaPropia={null} />
+          ) : objTab === "escalera" ? (
+            esSupervisor2 ? (
+              <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+                Este módulo es exclusivo de Supervisor-1 y Gerente.
+              </div>
+            ) : (
+              <EscaleraStaffView data={data} persistFresco={persistFresco} stats={stats} revisorNombre={revisorNombre} />
+            )
           ) : objTab === "actividad" ? (
             puesto === "gerente" ? (
               <ActividadView />
