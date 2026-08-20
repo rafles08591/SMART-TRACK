@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
 import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2 } from "lucide-react";
-import { RUTAS, NOMBRES } from "../constants";
+import { RUTAS, NOMBRES, DIAS_SEMANA_VISITAS } from "../constants";
 import { fechaHoyISO } from "../utils";
 
 // Suma días a una fecha "YYYY-MM-DD" sin problemas de zona horaria.
@@ -12,35 +12,61 @@ function sumarDiasISO(fechaISO, dias) {
   return fecha.toISOString().slice(0, 10);
 }
 
-// "2026-08-17" -> "Lunes 17 de agosto". Se usa en todos lados donde se
-// muestra la fecha de una carga, para que se identifique de un vistazo
-// qué día de la semana es sin tener que hacer la cuenta mental.
-function formatoFechaConDia(fechaISO) {
+const DIAS_SEMANA_KEYS_TODOS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
+
+// "2026-08-21" -> "viernes".
+function diaSemanaKeyDe(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  return DIAS_SEMANA_KEYS_TODOS[fecha.getUTCDay()];
+}
+
+// Día hábil siguiente a hoy (mañana), saltando domingo -> lunes.
+function siguienteDiaHabil() {
+  let fecha = sumarDiasISO(fechaHoyISO(), 1);
+  let dia = diaSemanaKeyDe(fecha);
+  if (dia === "domingo") {
+    fecha = sumarDiasISO(fecha, 1);
+    dia = diaSemanaKeyDe(fecha);
+  }
+  return { dia, fecha };
+}
+
+// "2026-08-21" -> "21 de agosto" — solo se usa como referencia informativa
+// (la identidad de la carga es el día de la semana, no esta fecha).
+function fechaCorta(fechaISO) {
   if (!fechaISO) return "";
   const [y, m, d] = fechaISO.split("-").map(Number);
   const fecha = new Date(Date.UTC(y, m - 1, d));
-  const texto = fecha.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+  return fecha.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone: "UTC" });
 }
 
+const DIA_LABEL = { lunes: "Lunes", martes: "Martes", miercoles: "Miércoles", jueves: "Jueves", viernes: "Viernes", sabado: "Sábado" };
+// Orden fijo en el que se muestran las 6 casillas — reutiliza la misma
+// lista de días que ya usa el resto de SMART-TRACK (DIAS_SEMANA_VISITAS).
+const DIAS_ORDEN = DIAS_SEMANA_VISITAS;
+
 /* -----------------------------------------------------------------
-   Cargas por día: el archivo que se sube hoy es, por default, para el
-   día siguiente (lunes sube -> es la carga del martes, etc.). Pueden
-   existir varias cargas guardadas a la vez (cargasPorFecha), pero solo
-   UNA está "activa" (cargaActivaFecha) — esa es la que ven y editan
-   los vendedores. El Gerente sube el archivo (queda guardado, sin
-   activar) y decide cuándo activarlo.
+   Cargas por DÍA DE LA SEMANA: hay 6 casillas fijas (lunes..sábado) que
+   se reciclan cada semana — hoy jueves subo/activo la de "viernes"; la
+   semana que entra, jueves otra vez, vuelvo a usar esa misma casilla
+   "viernes", sin que importe la fecha calendario real. Pueden existir
+   varias casillas guardadas a la vez (cargasPorDia), pero solo UNA está
+   "activa" (cargaActivoDia) — esa es la que ven y editan los vendedores.
+   Activar una casilla la deja automáticamente lista para modificar
+   (desbloqueada y sin envíos previos), por si venía bloqueada o con
+   envíos de una semana anterior.
 ------------------------------------------------------------------ */
 export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, onActivarCarga, onEliminarCarga }) {
-  const cargasPorFecha = data.cargasPorFecha || {};
-  const cargaActivaFecha = data.cargaActivaFecha || null;
-  const cargaActiva = cargaActivaFecha ? (cargasPorFecha[cargaActivaFecha] || null) : null;
+  const cargasPorDia = data.cargasPorDia || {};
+  const cargaActivoDia = data.cargaActivoDia || null;
+  const cargaActiva = cargaActivoDia ? (cargasPorDia[cargaActivoDia] || null) : null;
 
   const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
   const esGerente = rol === "staff" && puesto === "gerente";
   const yaEnviado = !!cargaActiva?.enviosPorRuta?.[vendedorActual];
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
-  const [fechaParaSubir, setFechaParaSubir] = useState(() => sumarDiasISO(fechaHoyISO(), 1));
+  const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
 
   // Edición 100% local (borrador): mientras se escribe, NO se guarda nada en
   // Supabase — así una sincronización en tiempo real de otro dispositivo
@@ -48,15 +74,15 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   // "Enviar" se manda todo de un jalón.
   const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
   const [borrador, setBorrador] = useState({});
-  useEffect(() => { setBorrador({}); }, [rutaActiva, cargaActivaFecha]);
+  useEffect(() => { setBorrador({}); }, [rutaActiva, cargaActivoDia]);
 
   function cambiarLocal(itemIndex, valor) {
     setBorrador((b) => ({ ...b, [itemIndex]: valor }));
   }
 
   async function enviarPara(nombreRuta) {
-    if (!cargaActivaFecha) return;
-    await persistCargas(cargaActivaFecha, (cargasFrescas) => {
+    if (!cargaActivoDia) return;
+    await persistCargas(cargaActivoDia, (cargasFrescas) => {
       const items = cargasFrescas.items.map((it, i) => {
         if (borrador[i] === undefined) return it;
         const valor = borrador[i];
@@ -68,10 +94,11 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   }
 
   function subirArchivo(e) {
-    onUpload(e, fechaParaSubir);
+    onUpload(e, diaParaSubir);
   }
 
-  const fechasGuardadas = Object.keys(cargasPorFecha).sort().reverse();
+  const diasGuardados = DIAS_ORDEN.filter((dia) => cargasPorDia[dia]);
+  const { dia: diaSugerido, fecha: fechaSugerida } = siguienteDiaHabil();
 
   return (
     <div>
@@ -82,51 +109,54 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
           {esGerente && (
             <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #1E2A42" }}>
               <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>SUBIR CARGA NUEVA</div>
+              <div style={{ fontSize: 10, color: "#9AA7BD", marginBottom: 6 }}>¿Para qué día de la semana es esta carga?</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {DIAS_ORDEN.map((dia) => (
+                  <button
+                    key={dia}
+                    onClick={() => setDiaParaSubir(dia)}
+                    className={diaParaSubir === dia ? "btn" : "btn-ghost"}
+                    style={{ fontSize: 12.5, padding: "6px 12px" }}
+                  >
+                    {DIA_LABEL[dia]}
+                  </button>
+                ))}
+              </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontSize: 10, color: "#9AA7BD", marginBottom: 3 }}>¿Para qué día es esta carga?</div>
-                  <input
-                    type="date"
-                    value={fechaParaSubir}
-                    onChange={(e) => setFechaParaSubir(e.target.value)}
-                    style={{ padding: "6px 8px", fontSize: 13, boxSizing: "border-box" }}
-                  />
-                  <div style={{ fontSize: 11, color: "#F2B134", marginTop: 3, fontWeight: 600 }}>{formatoFechaConDia(fechaParaSubir)}</div>
-                </div>
                 <button className="btn" onClick={() => cargasFileInputRef.current?.click()}>
                   <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir archivo de cargas
                 </button>
                 <input ref={cargasFileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={subirArchivo} />
               </div>
               <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>
-                Por default es para mañana ({sumarDiasISO(fechaHoyISO(), 1)}) — cámbiala si es para otro día. Se guarda sin activar; actívala abajo cuando corresponda.
+                Por default es para el día hábil siguiente ({DIA_LABEL[diaSugerido]}, aprox. {fechaCorta(fechaSugerida)}) — cámbialo arriba si es para otro día. Cada día de la semana tiene su propia casilla fija: si ya había una carga guardada para {DIA_LABEL[diaParaSubir]}, se reemplaza por la nueva. Se guarda sin activar; actívala abajo cuando corresponda.
               </div>
               {cargasStatus && <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 6 }}>{cargasStatus}</div>}
             </div>
           )}
 
           <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>CARGAS GUARDADAS</div>
-          {fechasGuardadas.length === 0 ? (
+          {diasGuardados.length === 0 ? (
             <div style={{ fontSize: 12, color: "#9AA7BD" }}>Todavía no hay ninguna carga guardada.</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: cargaActiva ? 16 : 0 }}>
-              {fechasGuardadas.map((fecha) => {
-                const c = cargasPorFecha[fecha];
-                const activa = fecha === cargaActivaFecha;
+              {diasGuardados.map((dia) => {
+                const c = cargasPorDia[dia];
+                const activa = dia === cargaActivoDia;
                 return (
-                  <div key={fecha} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, border: activa ? "1px solid #3DDC97" : undefined }}>
+                  <div key={dia} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, border: activa ? "1px solid #3DDC97" : undefined }}>
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>
-                        {formatoFechaConDia(fecha)} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
+                        {DIA_LABEL[dia]} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
                       </div>
                       <div style={{ fontSize: 11, color: "#9AA7BD" }}>
-                        {c.items.length} artículos · subida el {c.fechaSubida} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
+                        {c.items.length} artículos · subida el {c.fechaSubida}{c.fechaReferencia ? ` (para el ${fechaCorta(c.fechaReferencia)})` : ""} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
                       </div>
                     </div>
                     {esGerente && (
                       <div style={{ display: "flex", gap: 8 }}>
                         {!activa && (
-                          <button className="btn-ghost" onClick={() => onActivarCarga(fecha)}>
+                          <button className="btn-ghost" onClick={() => onActivarCarga(dia)}>
                             <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar esta carga
                           </button>
                         )}
@@ -134,9 +164,9 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                           className="btn-ghost"
                           onClick={() => {
                             const confirmado = window.confirm(
-                              `¿Eliminar la carga del ${formatoFechaConDia(fecha)} (${c.items.length} artículos)?${activa ? "\n\nEsta carga está ACTIVA — al eliminarla, dejará de haber una carga activa." : ""}\n\nEsta acción no se puede deshacer.`
+                              `¿Eliminar la carga de ${DIA_LABEL[dia]} (${c.items.length} artículos)?${activa ? "\n\nEsta carga está ACTIVA — al eliminarla, dejará de haber una carga activa." : ""}\n\nEsta acción no se puede deshacer.`
                             );
-                            if (confirmado) onEliminarCarga(fecha);
+                            if (confirmado) onEliminarCarga(dia);
                           }}
                           style={{ color: "#FF6B6B", borderColor: "#FF6B6B33" }}
                           title="Eliminar esta carga"
@@ -155,7 +185,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
                 <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-                  Editando carga activa · {formatoFechaConDia(cargaActiva.fecha)} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
+                  Editando carga activa · {DIA_LABEL[cargaActiva.dia]} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
                 </div>
                 {cargaActiva.items.length > 0 && (
                   <button className="btn-ghost" onClick={onDescargar}>
@@ -168,7 +198,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                   <div style={{ fontSize: 11, color: "#FF6B6B" }}>
                     Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades.
                   </div>
-                  <button className="btn-ghost" onClick={() => persistCargas(cargaActivaFecha, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: false }))}>
+                  <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: false }))}>
                     <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reactivar edición
                   </button>
                 </div>
@@ -202,7 +232,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                           </button>
                           {enviado && (
                             <button
-                              onClick={() => persistCargas(cargaActivaFecha, (cargasFrescas) => ({ ...cargasFrescas, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: false } }))}
+                              onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: false } }))}
                               title="Reactivar edición para esta ruta"
                               style={{ display: "flex", alignItems: "center", padding: "5px 8px", border: "none", borderLeft: "1px solid #3DDC97", background: "transparent", color: "#3DDC97", cursor: "pointer" }}
                             >
@@ -253,7 +283,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       ) : rol === "vendedor" ? (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#9AA7BD", marginBottom: 10 }}>
-            <Clock size={12} /> Carga del {formatoFechaConDia(cargaActiva.fecha)}
+            <Clock size={12} /> Carga del {DIA_LABEL[cargaActiva.dia]}
           </div>
           {cargaActiva.bloqueado && (
             <div className="card" style={{ padding: 12, marginBottom: 14, border: "1px solid #FF6B6B" }}>
@@ -280,7 +310,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       ) : (
         <div className="card" style={{ padding: 16 }}>
           <div style={{ fontSize: 13, color: "#9AA7BD" }}>
-            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde el {formatoFechaConDia(cargaActiva.fecha)}.
+            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde {DIA_LABEL[cargaActiva.dia]}.
             Cada vendedor ya puede entrar a su propia pestaña "CARGAS" para revisar y, si quiere, ajustar su cantidad propuesta.
           </div>
         </div>
@@ -323,7 +353,3 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCa
     </div>
   );
 }
-
-// Checklist de actividades (día/semana/mes). "Fija" reaparece siempre al
-// reiniciar el ciclo; "temporal" solo existe por este ciclo y se borra sola
-// al pasar el siguiente, a menos que se haya quedado pendiente.
