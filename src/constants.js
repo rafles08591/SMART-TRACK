@@ -23,6 +23,7 @@ export const NOMBRES = {
 
 export const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
+  { key: "escalera", label: "ESCALERA", unit: "special" },
   { key: "max", label: "MAX", unit: "units" },
   { key: "open", label: "OPEN", unit: "units" },
   { key: "champions", label: "CHAMPIONS", unit: "units" },
