@@ -25,6 +25,7 @@ import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
+import EscaleraView from "./EscaleraView";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
 // kilometraje, aparte de UNIDADES y TIEMPOS). Para agregar otra ruta más
@@ -78,7 +79,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -106,6 +107,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
           avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
           unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
           facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
+          escalera: !data.escaleraProgreso?.[rutaCodigo]?.orden ? "aviso_nuevo" : undefined,
         }}
       />
 
@@ -141,6 +143,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} puedeVerBono={false} />
       ) : tab === "mi_fondo" ? (
         <PanelFondoPersonalizado identidad={vendedor.name} url={fondoUrl} setUrl={setFondoUrl} />
+      ) : tab === "escalera" ? (
+        <EscaleraView data={data} persistFresco={persistFresco} vendedor={vendedor} rutaPropia={rutaCodigo} />
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
