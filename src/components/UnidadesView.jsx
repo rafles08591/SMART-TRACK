@@ -105,6 +105,12 @@ export function cloDeRuta(rutaId) {
 
 export const SEGURIDAD_UNIDADES_DEFAULT = { qr: true, gps: true, kmCamara: true, auditoria: true, probabilidadAuditoria: 20 };
 
+export const CLAVES_GASOLINA_DEFAULT = { porRuta: {}, porPlaca: {} };
+
+function normalizarPlaca(p) {
+  return String(p || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
 const CHECKS_FISICO = [
   { id: "carroceria", label: "Carrocería y pintura" },
   { id: "llantas", label: "Llantas y presión" },
@@ -388,6 +394,8 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const asignaciones = data.asignacionesUnidades || {};
   const revisiones = data.revisionesUnidades || [];
   const seguridad = data.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
+  const clavesGasolina = data.clavesGasolina || CLAVES_GASOLINA_DEFAULT;
+  const [vistaConductor, setVistaConductor] = useState("checklist"); // "checklist" | "claves"
   const [errorGuardado, setErrorGuardado] = useState(null);
 
   async function ejecutarPersistConfig(calcularCambios) {
@@ -419,6 +427,13 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
       const actuales = fresca.seguridadUnidades || SEGURIDAD_UNIDADES_DEFAULT;
       const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
       return { seguridadUnidades: nuevas };
+    });
+  }
+  function setClavesGasolina(actualizador) {
+    return ejecutarPersistConfig((fresca) => {
+      const actuales = fresca.clavesGasolina || CLAVES_GASOLINA_DEFAULT;
+      const nuevas = typeof actualizador === "function" ? actualizador(actuales) : actualizador;
+      return { clavesGasolina: nuevas };
     });
   }
 
@@ -480,11 +495,19 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     return (
       <div style={{ fontFamily: "'Inter', sans-serif", color: T.ink }}>
         <EstilosUnidades />
-        <VistaConductor
-          unidades={unidades} onRegistrar={registrarRevision} lastByUnidad={lastByUnidad}
-          usuarioSesion={identidad} usuarioRuta={rutaPropia} asignaciones={asignaciones}
-          seguridad={seguridad}
-        />
+        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+          <button className={`ru-btn ${vistaConductor === "checklist" ? "active" : ""}`} onClick={() => setVistaConductor("checklist")}>Revisión</button>
+          <button className={`ru-btn ${vistaConductor === "claves" ? "active" : ""}`} onClick={() => setVistaConductor("claves")}>Mis claves de gasolina</button>
+        </div>
+        {vistaConductor === "checklist" ? (
+          <VistaConductor
+            unidades={unidades} onRegistrar={registrarRevision} lastByUnidad={lastByUnidad}
+            usuarioSesion={identidad} usuarioRuta={rutaPropia} asignaciones={asignaciones}
+            seguridad={seguridad}
+          />
+        ) : (
+          <MisClavesGasolina ruta={rutaPropia} unidades={unidades} asignaciones={asignaciones} clavesGasolina={clavesGasolina} />
+        )}
       </div>
     );
   }
@@ -493,15 +516,20 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
     return (
       <div style={{ fontFamily: "'Inter', sans-serif", color: T.ink }}>
         <EstilosUnidades />
-        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
           <button className="ru-btn" onClick={() => setModoStaff("panel")}>Panel</button>
-          <button className="ru-btn active">Mi unidad</button>
+          <button className={`ru-btn ${vistaConductor === "checklist" ? "active" : ""}`} onClick={() => { setModoStaff("conductor"); setVistaConductor("checklist"); }}>Mi unidad</button>
+          <button className={`ru-btn ${vistaConductor === "claves" ? "active" : ""}`} onClick={() => setVistaConductor("claves")}>Mis claves de gasolina</button>
         </div>
-        <VistaConductor
-          unidades={unidades} onRegistrar={registrarRevision} lastByUnidad={lastByUnidad}
-          usuarioSesion={identidad} usuarioRuta={rutaPropiaStaff} asignaciones={asignaciones}
-          seguridad={seguridad}
-        />
+        {vistaConductor === "checklist" ? (
+          <VistaConductor
+            unidades={unidades} onRegistrar={registrarRevision} lastByUnidad={lastByUnidad}
+            usuarioSesion={identidad} usuarioRuta={rutaPropiaStaff} asignaciones={asignaciones}
+            seguridad={seguridad}
+          />
+        ) : (
+          <MisClavesGasolina ruta={rutaPropiaStaff} unidades={unidades} asignaciones={asignaciones} clavesGasolina={clavesGasolina} />
+        )}
       </div>
     );
   }
@@ -539,6 +567,8 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
         persistConfigUnidades={persistConfigUnidades}
         alcanceIrrestricto={alcanceIrrestricto}
         cloFiltro={cloFiltro}
+        clavesGasolina={clavesGasolina}
+        setClavesGasolina={setClavesGasolina}
         puedeReporteCombinado={esGerente || puesto === "supervisor2"}
       />
     </div>
@@ -1556,7 +1586,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   );
 }
 
-function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, puedeReporteCombinado }) {
+function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, clavesGasolina, setClavesGasolina, puedeReporteCombinado }) {
   const [gestion, setGestion] = useState("tablero");
   const mostrarGestion = esGerente;
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
@@ -1578,10 +1608,11 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
           </div>
         )}
         {mostrarGestion && (
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className={`ru-btn ${gestion === "tablero" ? "active" : ""}`} onClick={() => setGestion("tablero")}>Tablero</button>
             <button className={`ru-btn ${gestion === "asignar" ? "active" : ""}`} onClick={() => setGestion("asignar")}>Asignar unidades</button>
             <button className={`ru-btn ${gestion === "seguridad" ? "active" : ""}`} onClick={() => setGestion("seguridad")}>Seguridad</button>
+            <button className={`ru-btn ${gestion === "gasolina" ? "active" : ""}`} onClick={() => setGestion("gasolina")}>Gasolina</button>
             <button className={`ru-btn ${gestion === "limpieza" ? "active" : ""}`} onClick={() => setGestion("limpieza")}>Limpieza</button>
           </div>
         )}
@@ -1597,6 +1628,10 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
 
       {mostrarGestion && gestion === "seguridad" && (
         <PanelSeguridad esGerente={esGerente} seguridad={seguridad} setSeguridad={setSeguridad} />
+      )}
+
+      {mostrarGestion && gestion === "gasolina" && (
+        <GestionClavesGasolina clavesGasolina={clavesGasolina} setClavesGasolina={setClavesGasolina} unidades={unidades} />
       )}
 
       {mostrarGestion && gestion === "limpieza" && (
@@ -1879,6 +1914,285 @@ function PanelSeguridad({ esGerente, seguridad, setSeguridad }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function MisClavesGasolina({ ruta, unidades, asignaciones, clavesGasolina }) {
+  const clavePersonal = (clavesGasolina.porRuta || {})[ruta] || null;
+  const unidadId = asignaciones[ruta];
+  const unidad = unidades.find((u) => u.id === unidadId);
+  const clavePlaca = unidad ? (clavesGasolina.porPlaca || {})[normalizarPlaca(unidad.placas)] : null;
+
+  return (
+    <div style={{ maxWidth: 420, margin: "0 auto" }}>
+      <div className="ru-card" style={{ padding: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <Fuel size={16} color={T.primary} />
+          <span className="ru-h" style={{ fontWeight: 600, fontSize: 15 }}>Mis claves para cargar gasolina</span>
+        </div>
+
+        {!clavePersonal && !clavePlaca && (
+          <div style={{ fontSize: 12.5, color: T.muted }}>
+            Todavía no hay claves capturadas para tu ruta ({ruta}). Pide al Gerente que las cargue en la pestaña "Gasolina".
+          </div>
+        )}
+
+        {clavePersonal && (
+          <div style={{ marginBottom: unidad ? 18 : 0 }}>
+            <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>Datos de conductor</div>
+            <FilaClave label="N° Conductor" valor={clavePersonal.numeroConductor} />
+            <FilaClave label="Clave conductor" valor={clavePersonal.claveConductor} />
+          </div>
+        )}
+
+        {unidad ? (
+          clavePlaca ? (
+            <div>
+              <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Tarjeta de tu unidad · {unidad.placas}
+              </div>
+              <FilaClave label="NIP tarjeta" valor={clavePlaca.nipTarjeta} destacado />
+              {clavePlaca.centroCostos && <FilaClave label="Centro de costos" valor={clavePlaca.centroCostos} />}
+              {clavePlaca.razonSocial && <FilaClave label="Razón social" valor={clavePlaca.razonSocial} />}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12.5, color: T.muted }}>
+              No hay NIP de tarjeta capturado todavía para la unidad {unidad.placas}.
+            </div>
+          )
+        ) : (
+          <div style={{ fontSize: 12.5, color: T.muted }}>
+            No tienes una unidad asignada — pide al Gerente que te asigne una en "Asignar unidades" para poder ver el NIP de su tarjeta.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilaClave({ label, valor, destacado }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: `1px solid ${T.border}` }}>
+      <span style={{ fontSize: 13, color: T.muted }}>{label}</span>
+      <span className="ru-mono" style={{ fontSize: destacado ? 17 : 14, fontWeight: 600, color: destacado ? T.primary : T.ink }}>
+        {valor || "—"}
+      </span>
+    </div>
+  );
+}
+
+function GestionClavesGasolina({ clavesGasolina, setClavesGasolina, unidades }) {
+  const porRuta = clavesGasolina.porRuta || {};
+  const porPlaca = clavesGasolina.porPlaca || {};
+  const [statusRuta, setStatusRuta] = useState("");
+  const [statusPlaca, setStatusPlaca] = useState("");
+  const fileRutaRef = useRef(null);
+  const filePlacaRef = useRef(null);
+
+  function getVal(row, ...names) {
+    const keys = Object.keys(row);
+    for (const name of names) {
+      const key = keys.find((k) => k.trim().toLowerCase() === name.toLowerCase());
+      if (key !== undefined) return row[key];
+    }
+    return "";
+  }
+
+  function actualizarClaveRuta(rutaId, campo, valor) {
+    setClavesGasolina((prev) => ({
+      ...prev,
+      porRuta: { ...(prev.porRuta || {}), [rutaId]: { ...(prev.porRuta?.[rutaId] || {}), [campo]: valor } },
+    }));
+  }
+
+  function actualizarClavePlaca(placaKey, campo, valor) {
+    setClavesGasolina((prev) => ({
+      ...prev,
+      porPlaca: { ...(prev.porPlaca || {}), [placaKey]: { ...(prev.porPlaca?.[placaKey] || {}), [campo]: valor } },
+    }));
+  }
+
+  function eliminarClavePlaca(placaKey) {
+    setClavesGasolina((prev) => {
+      const next = { ...(prev.porPlaca || {}) };
+      delete next[placaKey];
+      return { ...prev, porPlaca: next };
+    });
+  }
+
+  function handleArchivoRutas(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        let n = 0;
+        setClavesGasolina((prev) => {
+          const nuevoPorRuta = { ...(prev.porRuta || {}) };
+          rows.forEach((row) => {
+            const rutaRaw = String(getVal(row, "RUTA", "Ruta") || "").trim().toUpperCase();
+            if (!rutaRaw) return;
+            const numeroConductor = String(getVal(row, "N° Conductor", "No Conductor", "Numero Conductor", "N Conductor") || "").trim();
+            const claveConductor = String(getVal(row, "Clave conductor", "Clave Conductor") || "").trim();
+            const nombreCompleto = String(getVal(row, "Nombre Completo", "Nombre") || "").trim();
+            nuevoPorRuta[rutaRaw] = { numeroConductor, claveConductor, nombreCompleto };
+            n++;
+          });
+          return { ...prev, porRuta: nuevoPorRuta };
+        });
+        setStatusRuta(`Se cargaron ${n} rutas.`);
+      } catch (err) {
+        setStatusRuta("No se pudo leer el archivo. ¿Es un .xlsx o .csv válido?");
+      }
+    };
+    reader.readAsBinaryString(file);
+  }
+
+  function handleArchivoPlacas(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "binary" });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        let n = 0;
+        setClavesGasolina((prev) => {
+          const nuevoPorPlaca = { ...(prev.porPlaca || {}) };
+          rows.forEach((row) => {
+            const placaRaw = String(getVal(row, "PLACA", "Placa") || "").trim();
+            const key = normalizarPlaca(placaRaw);
+            if (!key) return;
+            const nipTarjeta = String(getVal(row, "NIP TARJETA", "Nip Tarjeta", "NIP") || "").trim();
+            const centroCostos = String(getVal(row, "CENTRO COSTOS", "Centro Costos") || "").trim();
+            const razonSocial = String(getVal(row, "RAZON SOCIAL", "Razon Social") || "").trim();
+            const tarjeta = String(getVal(row, "# TARJETA", "Tarjeta", "No Tarjeta") || "").trim();
+            const anterior = nuevoPorPlaca[key] || {};
+            nuevoPorPlaca[key] = {
+              placa: placaRaw || anterior.placa,
+              nipTarjeta: nipTarjeta || anterior.nipTarjeta || "",
+              centroCostos: centroCostos || anterior.centroCostos || "",
+              razonSocial: razonSocial || anterior.razonSocial || "",
+              tarjeta: tarjeta || anterior.tarjeta || "",
+            };
+            n++;
+          });
+          return { ...prev, porPlaca: nuevoPorPlaca };
+        });
+        setStatusPlaca(`Se cargaron ${n} placas.`);
+      } catch (err) {
+        setStatusPlaca("No se pudo leer el archivo. ¿Es un .xlsx o .csv válido?");
+      }
+    };
+    reader.readAsBinaryString(file);
+  }
+
+  const rutasOrdenadas = RUTAS_UNIDADES.map((r) => r.id);
+  const placasTodas = useMemo(() => {
+    const deUnidades = unidades.map((u) => normalizarPlaca(u.placas));
+    const deClaves = Object.keys(porPlaca);
+    return [...new Set([...deUnidades, ...deClaves])].filter(Boolean).sort();
+  }, [unidades, porPlaca]);
+
+  return (
+    <div>
+      <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>Claves para cargar gasolina</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
+        Cada conductor solo ve su propia clave (según su ruta) y el NIP de la tarjeta de la unidad que tenga asignada — no la lista completa.
+      </div>
+
+      <div className="ru-card" style={{ padding: 16, marginBottom: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <span className="ru-h" style={{ fontWeight: 600, fontSize: 13.5 }}>Datos de conductor por ruta</span>
+          <div>
+            <input ref={fileRutaRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleArchivoRutas} />
+            <button className="ru-btn" onClick={() => fileRutaRef.current?.click()}>Cargar Excel (RUTA, N° Conductor, Clave conductor)</button>
+          </div>
+        </div>
+        {statusRuta && <div style={{ fontSize: 12, color: T.primary, marginBottom: 10 }}>{statusRuta}</div>}
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: T.bg, textAlign: "left" }}>
+                {["Ruta", "N° Conductor", "Clave conductor"].map((h) => (
+                  <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rutasOrdenadas.map((rutaId) => {
+                const c = porRuta[rutaId] || {};
+                return (
+                  <tr key={rutaId} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 500 }}>{rutaId}</td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input className="ru-input" style={{ width: 110 }} value={c.numeroConductor || ""} onChange={(e) => actualizarClaveRuta(rutaId, "numeroConductor", e.target.value)} />
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input className="ru-input" style={{ width: 110 }} value={c.claveConductor || ""} onChange={(e) => actualizarClaveRuta(rutaId, "claveConductor", e.target.value)} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="ru-card" style={{ padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <span className="ru-h" style={{ fontWeight: 600, fontSize: 13.5 }}>NIP de tarjeta por unidad (placa)</span>
+          <div>
+            <input ref={filePlacaRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleArchivoPlacas} />
+            <button className="ru-btn" onClick={() => filePlacaRef.current?.click()}>Cargar Excel (PLACA, NIP TARJETA...)</button>
+          </div>
+        </div>
+        {statusPlaca && <div style={{ fontSize: 12, color: T.primary, marginBottom: 10 }}>{statusPlaca}</div>}
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 }}>
+            <thead>
+              <tr style={{ background: T.bg, textAlign: "left" }}>
+                {["Placa", "NIP tarjeta", "Centro costos", "Razón social", ""].map((h) => (
+                  <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {placasTodas.map((placaKey) => {
+                const c = porPlaca[placaKey] || {};
+                const unidad = unidades.find((u) => normalizarPlaca(u.placas) === placaKey);
+                return (
+                  <tr key={placaKey} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td className="ru-mono" style={{ padding: "6px 10px", fontWeight: 500 }}>
+                      {c.placa || unidad?.placas || placaKey}
+                      {unidad ? <span style={{ color: T.muted, fontWeight: 400 }}> · {unidad.ruta}</span> : null}
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input className="ru-input" style={{ width: 90 }} value={c.nipTarjeta || ""} onChange={(e) => actualizarClavePlaca(placaKey, "nipTarjeta", e.target.value)} />
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input className="ru-input" style={{ width: 130 }} value={c.centroCostos || ""} onChange={(e) => actualizarClavePlaca(placaKey, "centroCostos", e.target.value)} />
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <input className="ru-input" style={{ width: 110 }} value={c.razonSocial || ""} onChange={(e) => actualizarClavePlaca(placaKey, "razonSocial", e.target.value)} />
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <button className="ru-btn" style={{ padding: "5px 8px", color: T.late }} onClick={() => eliminarClavePlaca(placaKey)} aria-label="Eliminar"><Trash2 size={13} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
