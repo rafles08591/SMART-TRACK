@@ -134,7 +134,7 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
               onClick={() => { setRutaSeleccionada(f.vendedor.name); setVista("ruta"); }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{f.vendedor.name}{NOMBRES[f.vendedor.name] ? ` · ${NOMBRES[f.vendedor.name]}` : ""}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>{f.vendedor.name}{NOMBRES[f.vendedor.name] ? ` · ${NOMBRES[f.vendedor.name]}` : ""}</div>
                 <span style={{ fontSize: 11, fontWeight: 700, color: colorEfectividad(f.efectividadPct), whiteSpace: "nowrap" }}>
                   {etiquetaEfectividad(f.efectividadPct)} · {Math.round(f.efectividadPct)}%
                 </span>
