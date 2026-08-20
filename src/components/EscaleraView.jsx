@@ -118,6 +118,12 @@ function EscaleraEstilos() {
     <style>{`
       @keyframes escGlowPulso { 0%,100% { box-shadow: 0 0 0px rgba(242,177,52,0); } 50% { box-shadow: 0 0 18px rgba(242,177,52,0.45); } }
       @keyframes escPasoGlow { 0%,100% { filter: drop-shadow(0 0 2px rgba(242,177,52,0.5)); } 50% { filter: drop-shadow(0 0 7px rgba(242,177,52,0.9)); } }
+      @keyframes escBarraFluor { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+      .esc-barra-viva {
+        background: linear-gradient(90deg, #F2B134, #FF6B6B, #7CC4FF, #3DDC97, #F2B134, #FF6B6B, #7CC4FF, #3DDC97);
+        background-size: 300% 100%;
+        animation: escBarraFluor 4s linear infinite;
+      }
       @keyframes escCaminante { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
       @keyframes escBandera { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
       @keyframes escConfeti { 0% { transform: translateY(-8px) rotate(0deg); opacity: 1; } 100% { transform: translateY(110px) rotate(360deg); opacity: 0; } }
@@ -411,7 +417,16 @@ export default function EscaleraView({ data, persistFresco, vendedor, rutaPropia
         <div className="display" style={{ fontSize: 18, marginBottom: 12, textAlign: "center" }}>{actual.label}</div>
 
         <div style={{ height: 10, borderRadius: 6, background: "#0F172A", overflow: "hidden", marginBottom: 10 }}>
-          <div style={{ height: "100%", width: `${Math.min(actual.pct, 100)}%`, background: COLOR_GRUPO[actual.grupo] || "#F2B134", transition: "width .5s ease-out" }} />
+          <div
+            className={actual.pct < 100 ? "esc-barra-viva" : undefined}
+            style={{
+              height: "100%",
+              width: `${Math.min(actual.pct, 100)}%`,
+              background: actual.pct >= 100 ? "#3DDC97" : undefined,
+              transition: "width .5s ease-out",
+              borderRadius: 6,
+            }}
+          />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 18 }}>
           <span>{fmt(actual.unit, actual.avance)} de {fmt(actual.unit, actual.objetivo)}</span>
