@@ -1,355 +1,515 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
-import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2 } from "lucide-react";
-import { RUTAS, NOMBRES, DIAS_SEMANA_VISITAS } from "../constants";
-import { fechaHoyISO } from "../utils";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Flag, Trophy, Zap, CheckCircle2, Circle, SkipForward,
+  ArrowUpNarrowWide, ArrowDownWideNarrow, ChevronDown, ChevronUp, PartyPopper, Sunrise, MessageSquare,
+} from "lucide-react";
+import { MARCAS_DIA } from "../constants";
+import { fmt } from "../utils";
 
-// Suma días a una fecha "YYYY-MM-DD" sin problemas de zona horaria.
-function sumarDiasISO(fechaISO, dias) {
-  const [y, m, d] = fechaISO.split("-").map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, d));
-  fecha.setUTCDate(fecha.getUTCDate() + dias);
-  return fecha.toISOString().slice(0, 10);
+/* -----------------------------------------------------------------------
+   TIPS — banco de consejos de venta. Se muestran según el tipo de peldaño
+   en el que esté parado el vendedor. Los tips por marca están escritos
+   para las 4 marcas de MARCAS_DIA (Ice Mix, Bloss Mix, Summ Mix, Faronet);
+   si en el futuro se agrega una marca nueva que no esté aquí, cae
+   automáticamente al set genérico (TIPS_GENERALES) para que el módulo
+   nunca se quede sin consejos que mostrar.
+------------------------------------------------------------------------ */
+const TIPS_GENERALES = [
+  "Revisa MESA DE CONTROL antes de salir: ahí ves quién no ha comprado esta semana, tu oportunidad más rápida de cerrar hoy mismo.",
+  "Ofrece siempre el combo o exhibidor antes que la pieza suelta — sube tu ticket promedio sin necesitar clientes nuevos.",
+  "Pide espacio de exhibición en el mostrador: un producto visible se vende solo, incluso cuando ya te fuiste.",
+  "Revisa SIN VISITA — son clientes que ya te conocen y solo necesitan que vuelvas a tocar la puerta hoy.",
+  "Si un cliente no compra la marca que necesitas empujar hoy, pregúntale qué le falta: precio, exhibición o rotación.",
+];
+
+const TIPS_MARCA = {
+  iceMix: [
+    "Ice Mix se mueve mejor en puntos con tráfico joven: tiendas cerca de escuelas, gimnasios o zonas de oficinas.",
+    "Úsala como upsell cuando el cliente ya pidió otra variedad: \"llévate también esta, es la que más está rotando esta semana\".",
+    "Si el cliente ya la conoce pero no repite, pregunta si le falta exhibición o refrigeración — Ice Mix se vende por impulso.",
+  ],
+  blossMix: [
+    "Bloss Mix funciona muy bien como segunda opción cuando el cliente ya compró Summ Mix — son complementarias, no compiten entre sí.",
+    "Destaca el sabor floral/frutal en tu pitch, es el gancho principal contra la competencia genérica.",
+    "En clientes que solo compran una marca, ofrece piezas chicas de prueba antes de pedir volumen completo.",
+  ],
+  summMix: [
+    "Summ Mix suele salir mejor con exhibidor visible en mostrador — negocia el espacio antes de dejar el pedido.",
+    "Aprovecha el clima cálido para empujarla con el mensaje de \"sabor de temporada\".",
+    "Si el cliente ya la tiene pero en poca cantidad, sugiere subir el pedido de hoy con el argumento de rotación.",
+  ],
+  faronet: [
+    "Faronet responde bien a clientes fieles de marca — prioriza hoy las tiendas donde ya tienes buena relación antes de ir a clientes fríos.",
+    "Explícale al dueño el margen del punto de venta, no solo el precio al público — a muchos les convence más el margen.",
+    "Ofrécela en combo con la marca que más rota en esa tienda para asegurar que se mueva junto.",
+  ],
+};
+
+const TIPS_OTC = [
+  "OTC se mide en pesos, no en piezas — hoy enfócate en 1 o 2 tickets grandes (exhibidor, carga completa) más que en muchas visitas sueltas.",
+  "Revisa qué clientes de tu ruta de hoy suelen tener ticket promedio alto y visítalos primero.",
+  "Un solo cliente grande puede cerrarte el peldaño de OTC de hoy — no lo dejes para el final del recorrido.",
+];
+
+const TIPS_VOLUMEN_TOTAL = [
+  "Este peldaño suma TODO lo que vendes hoy, sin importar la marca — cualquier pieza que muevas te acerca a él.",
+  "No dependas de un solo cliente para llegar: reparte tus visitas de hoy entre varios puntos.",
+  ...TIPS_GENERALES.slice(0, 2),
+];
+
+function tipsPara(peldano) {
+  if (peldano.tipo === "otc") return TIPS_OTC;
+  if (peldano.tipo === "total") return TIPS_VOLUMEN_TOTAL;
+  return TIPS_MARCA[peldano.marcaKey] || TIPS_GENERALES;
 }
 
-const DIAS_SEMANA_KEYS_TODOS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
-
-// "2026-08-21" -> "viernes".
-function diaSemanaKeyDe(fechaISO) {
-  const [y, m, d] = fechaISO.split("-").map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, d));
-  return DIAS_SEMANA_KEYS_TODOS[fecha.getUTCDay()];
+/* -----------------------------------------------------------------------
+   Construcción de peldaños a partir de los objetivos DEL DÍA de hoy
+   (vendedor.hoy — los mismos que alimentan la pestaña DÍA). Se recalculan
+   solos cada vez que cambia la fecha: mañana es una escalera nueva. El
+   avance nunca se marca "a mano": un peldaño se da por conquistado solo
+   cuando la venta real de HOY ya llegó al 100% de su meta de hoy.
+   Estas funciones se exportan para que EscaleraStaffView (Supervisor-1 /
+   Gerente) pueda reutilizar exactamente la misma lógica ruta por ruta.
+------------------------------------------------------------------------ */
+export function pct(vendido, objetivo) {
+  return objetivo > 0 ? Math.min((vendido / objetivo) * 100, 100) : 0;
 }
 
-// Día hábil siguiente a hoy (mañana), saltando domingo -> lunes.
-function siguienteDiaHabil() {
-  let fecha = sumarDiasISO(fechaHoyISO(), 1);
-  let dia = diaSemanaKeyDe(fecha);
-  if (dia === "domingo") {
-    fecha = sumarDiasISO(fecha, 1);
-    dia = diaSemanaKeyDe(fecha);
+export function construirPeldanos(vendedor) {
+  const hoy = vendedor?.hoy;
+  const peldanos = [];
+  if (!hoy) return peldanos;
+
+  if (hoy.volumen?.objetivo > 0) {
+    const { objetivo, vendido } = hoy.volumen;
+    peldanos.push({ id: "dia_volumen", tipo: "total", grupo: "VOLUMEN DEL DÍA", label: "Volumen de hoy", unit: "units", objetivo, avance: vendido, restante: Math.max(objetivo - vendido, 0), pct: pct(vendido, objetivo) });
   }
-  return { dia, fecha };
+  MARCAS_DIA.forEach((m) => {
+    const info = hoy.marcas?.[m.key];
+    if (info && info.objetivo > 0) {
+      peldanos.push({ id: `dia_${m.key}`, tipo: "marca", marcaKey: m.key, grupo: "MARCA DEL DÍA", label: m.label, unit: "units", objetivo: info.objetivo, avance: info.vendido, restante: Math.max(info.objetivo - info.vendido, 0), pct: pct(info.vendido, info.objetivo) });
+    }
+  });
+  if (hoy.otc?.objetivo > 0) {
+    const { objetivo, vendido } = hoy.otc;
+    peldanos.push({ id: "dia_otc", tipo: "otc", grupo: "OTC DEL DÍA", label: "OTC de hoy", unit: "money", objetivo, avance: vendido, restante: Math.max(objetivo - vendido, 0), pct: pct(vendido, objetivo) });
+  }
+  return peldanos;
 }
 
-// "2026-08-21" -> "21 de agosto" — solo se usa como referencia informativa
-// (la identidad de la carga es el día de la semana, no esta fecha).
-function fechaCorta(fechaISO) {
-  if (!fechaISO) return "";
-  const [y, m, d] = fechaISO.split("-").map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, d));
-  return fecha.toLocaleDateString("es-MX", { day: "numeric", month: "long", timeZone: "UTC" });
+export function ordenarPeldanos(peldanos, orden) {
+  const copia = [...peldanos];
+  // "Fácil primero" = el que menos le falta por avance porcentual primero.
+  // "Difícil primero" = el que menos ha avanzado (más lejos de su meta) primero.
+  copia.sort((a, b) => (orden === "facil" ? b.pct - a.pct : a.pct - b.pct));
+  return copia;
 }
 
-const DIA_LABEL = { lunes: "Lunes", martes: "Martes", miercoles: "Miércoles", jueves: "Jueves", viernes: "Viernes", sabado: "Sábado" };
-// Orden fijo en el que se muestran las 6 casillas — reutiliza la misma
-// lista de días que ya usa el resto de SMART-TRACK (DIAS_SEMANA_VISITAS).
-const DIAS_ORDEN = DIAS_SEMANA_VISITAS;
+export const COLOR_GRUPO = { "VOLUMEN DEL DÍA": "#7CC4FF", "MARCA DEL DÍA": "#3DDC97", "OTC DEL DÍA": "#F2B134" };
 
-/* -----------------------------------------------------------------
-   Cargas por DÍA DE LA SEMANA: hay 6 casillas fijas (lunes..sábado) que
-   se reciclan cada semana — hoy jueves subo/activo la de "viernes"; la
-   semana que entra, jueves otra vez, vuelvo a usar esa misma casilla
-   "viernes", sin que importe la fecha calendario real. Pueden existir
-   varias casillas guardadas a la vez (cargasPorDia), pero solo UNA está
-   "activa" (cargaActivoDia) — esa es la que ven y editan los vendedores.
-   Activar una casilla la deja automáticamente lista para modificar
-   (desbloqueada y sin envíos previos), por si venía bloqueada o con
-   envíos de una semana anterior.
------------------------------------------------------------------- */
-export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, onActivarCarga, onEliminarCarga }) {
-  const cargasPorDia = data.cargasPorDia || {};
-  const cargaActivoDia = data.cargaActivoDia || null;
-  const cargaActiva = cargaActivoDia ? (cargasPorDia[cargaActivoDia] || null) : null;
+/* -----------------------------------------------------------------------
+   Efectos visuales — keyframes compartidos, la escalera SVG animada y el
+   confeti de celebración. Todo en CSS/SVG puro, sin librerías nuevas.
+------------------------------------------------------------------------ */
+function EscaleraEstilos() {
+  return (
+    <style>{`
+      @keyframes escGlowPulso { 0%,100% { box-shadow: 0 0 0px rgba(242,177,52,0); } 50% { box-shadow: 0 0 18px rgba(242,177,52,0.45); } }
+      @keyframes escPasoGlow { 0%,100% { filter: drop-shadow(0 0 2px rgba(242,177,52,0.5)); } 50% { filter: drop-shadow(0 0 7px rgba(242,177,52,0.9)); } }
+      @keyframes escBarraFluor { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+      .esc-barra-viva {
+        background: linear-gradient(90deg, #F2B134, #FF6B6B, #7CC4FF, #3DDC97, #F2B134, #FF6B6B, #7CC4FF, #3DDC97);
+        background-size: 300% 100%;
+        animation: escBarraFluor 4s linear infinite;
+      }
+      @keyframes escCaminante { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+      @keyframes escBandera { 0%,100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+      @keyframes escConfeti { 0% { transform: translateY(-8px) rotate(0deg); opacity: 1; } 100% { transform: translateY(110px) rotate(360deg); opacity: 0; } }
+      @keyframes escPopIn { 0% { transform: scale(0.85); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+      .esc-pop-in { animation: escPopIn .35s ease-out; }
+      .esc-glow-actual { animation: escGlowPulso 2.2s ease-in-out infinite; }
+    `}</style>
+  );
+}
 
-  const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
-  const esGerente = rol === "staff" && puesto === "gerente";
-  const yaEnviado = !!cargaActiva?.enviosPorRuta?.[vendedorActual];
-  const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
-  const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
-
-  // Edición 100% local (borrador): mientras se escribe, NO se guarda nada en
-  // Supabase — así una sincronización en tiempo real de otro dispositivo
-  // nunca puede "regresar" el número a medio escribir. Solo al presionar
-  // "Enviar" se manda todo de un jalón.
-  const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
-  const [borrador, setBorrador] = useState({});
-  useEffect(() => { setBorrador({}); }, [rutaActiva, cargaActivoDia]);
-
-  function cambiarLocal(itemIndex, valor) {
-    setBorrador((b) => ({ ...b, [itemIndex]: valor }));
-  }
-
-  async function enviarPara(nombreRuta) {
-    if (!cargaActivoDia) return;
-    await persistCargas(cargaActivoDia, (cargasFrescas) => {
-      const items = cargasFrescas.items.map((it, i) => {
-        if (borrador[i] === undefined) return it;
-        const valor = borrador[i];
-        return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
-      });
-      return { ...cargasFrescas, items, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
-    });
-    setBorrador({});
-  }
-
-  function subirArchivo(e) {
-    onUpload(e, diaParaSubir);
-  }
-
-  const diasGuardados = DIAS_ORDEN.filter((dia) => cargasPorDia[dia]);
-  const { dia: diaSugerido, fecha: fechaSugerida } = siguienteDiaHabil();
+// Escalera dibujada en SVG: cada peldaño real se representa como un
+// escalón ascendente. El peldaño actual "brilla" y tiene un caminante
+// animado encima; la bandera de la cima ondea solo cuando ya se conquistó
+// todo. Es puramente decorativo — el estado real vive en `pasos`.
+function EscaleraSVG({ pasos, idActual }) {
+  const n = pasos.length;
+  if (n === 0) return null;
+  const stepW = 58;
+  const stepH = 20;
+  const baseH = 34;
+  const width = n * stepW + 30;
+  const height = baseH + n * stepH + 34;
+  const todoConquistado = pasos.every((p) => p.pct >= 100);
 
   return (
-    <div>
-      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>CARGAS</div>
-
-      {esStaffConPermiso && (
-        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-          {esGerente && (
-            <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #1E2A42" }}>
-              <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>SUBIR CARGA NUEVA</div>
-              <div style={{ fontSize: 10, color: "#9AA7BD", marginBottom: 6 }}>¿Para qué día de la semana es esta carga?</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                {DIAS_ORDEN.map((dia) => (
-                  <button
-                    key={dia}
-                    onClick={() => setDiaParaSubir(dia)}
-                    className={diaParaSubir === dia ? "btn" : "btn-ghost"}
-                    style={{ fontSize: 12.5, padding: "6px 12px" }}
-                  >
-                    {DIA_LABEL[dia]}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <button className="btn" onClick={() => cargasFileInputRef.current?.click()}>
-                  <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir archivo de cargas
-                </button>
-                <input ref={cargasFileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={subirArchivo} />
-              </div>
-              <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>
-                Por default es para el día hábil siguiente ({DIA_LABEL[diaSugerido]}, aprox. {fechaCorta(fechaSugerida)}) — cámbialo arriba si es para otro día. Cada día de la semana tiene su propia casilla fija: si ya había una carga guardada para {DIA_LABEL[diaParaSubir]}, se reemplaza por la nueva. Se guarda sin activar; actívala abajo cuando corresponda.
-              </div>
-              {cargasStatus && <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 6 }}>{cargasStatus}</div>}
-            </div>
-          )}
-
-          <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>CARGAS GUARDADAS</div>
-          {diasGuardados.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#9AA7BD" }}>Todavía no hay ninguna carga guardada.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: cargaActiva ? 16 : 0 }}>
-              {diasGuardados.map((dia) => {
-                const c = cargasPorDia[dia];
-                const activa = dia === cargaActivoDia;
-                return (
-                  <div key={dia} className="card" style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, border: activa ? "1px solid #3DDC97" : undefined }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>
-                        {DIA_LABEL[dia]} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#9AA7BD" }}>
-                        {c.items.length} artículos · subida el {c.fechaSubida}{c.fechaReferencia ? ` (para el ${fechaCorta(c.fechaReferencia)})` : ""} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
-                      </div>
-                    </div>
-                    {esGerente && (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        {!activa && (
-                          <button className="btn-ghost" onClick={() => onActivarCarga(dia)}>
-                            <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar esta carga
-                          </button>
-                        )}
-                        <button
-                          className="btn-ghost"
-                          onClick={() => {
-                            const confirmado = window.confirm(
-                              `¿Eliminar la carga de ${DIA_LABEL[dia]} (${c.items.length} artículos)?${activa ? "\n\nEsta carga está ACTIVA — al eliminarla, dejará de haber una carga activa." : ""}\n\nEsta acción no se puede deshacer.`
-                            );
-                            if (confirmado) onEliminarCarga(dia);
-                          }}
-                          style={{ color: "#FF6B6B", borderColor: "#FF6B6B33" }}
-                          title="Eliminar esta carga"
-                        >
-                          <Trash2 size={13} style={{ verticalAlign: "-2px" }} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {cargaActiva && (
-            <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
-                <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-                  Editando carga activa · {DIA_LABEL[cargaActiva.dia]} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
-                </div>
-                {cargaActiva.items.length > 0 && (
-                  <button className="btn-ghost" onClick={onDescargar}>
-                    <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar archivo modificado
-                  </button>
-                )}
-              </div>
-              {cargaActiva.bloqueado && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 6, marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, color: "#FF6B6B" }}>
-                    Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades.
-                  </div>
-                  <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: false }))}>
-                    <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reactivar edición
-                  </button>
-                </div>
+    <div style={{ width: "100%", overflowX: pasos.length > 8 ? "auto" : "visible" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} width={Math.max(width, 220)} height={Math.min(height, 190)} style={{ display: "block", margin: "0 auto" }}>
+        {pasos.map((p, i) => {
+          const x = 14 + i * stepW;
+          const stepTop = height - 18 - (i + 1) * stepH;
+          const stepBottom = height - 18;
+          const hecho = p.pct >= 100;
+          const esActual = p.id === idActual;
+          const trazo = hecho ? "#3DDC97" : esActual ? "#F2B134" : "#2A3852";
+          const relleno = hecho ? "rgba(61,220,151,0.16)" : esActual ? "rgba(242,177,52,0.18)" : "rgba(255,255,255,0.03)";
+          return (
+            <g key={p.id} style={esActual ? { animation: "escPasoGlow 2.2s ease-in-out infinite" } : undefined}>
+              <rect x={x} y={stepTop} width={stepW - 8} height={stepBottom - stepTop} rx={4} fill={relleno} stroke={trazo} strokeWidth={esActual ? 2 : 1.2} />
+              <text x={x + (stepW - 8) / 2} y={stepTop + 14} textAnchor="middle" fontSize="10" fontWeight="700" fill={trazo}>{i + 1}</text>
+              {hecho && (
+                <text x={x + (stepW - 8) / 2} y={stepTop + 27} textAnchor="middle" fontSize="11">✓</text>
               )}
-
-              {cargaActiva.items.length > 0 && (
-                <div>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>ESTATUS POR RUTA · TOCA PARA VER/EDITAR SU CARGA</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: rutaVistaStaff ? 14 : 0 }}>
-                    {RUTAS.map((nombreRuta) => {
-                      const enviado = !!cargaActiva.enviosPorRuta?.[nombreRuta];
-                      const seleccionada = rutaVistaStaff === nombreRuta;
-                      return (
-                        <div
-                          key={nombreRuta}
-                          style={{
-                            display: "flex", alignItems: "center", borderRadius: 8,
-                            border: `1px solid ${enviado ? "#3DDC97" : "#1E2A42"}`,
-                            background: seleccionada ? "#1E2A42" : "transparent", overflow: "hidden",
-                          }}
-                        >
-                          <button
-                            onClick={() => setRutaVistaStaff((r) => (r === nombreRuta ? null : nombreRuta))}
-                            style={{
-                              display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "5px 10px",
-                              border: "none", background: "transparent", color: enviado ? "#3DDC97" : "#9AA7BD", cursor: "pointer",
-                            }}
-                          >
-                            <span style={{ width: 8, height: 8, borderRadius: 4, background: enviado ? "#3DDC97" : "#5b6478", display: "inline-block" }} />
-                            {nombreRuta}{NOMBRES[nombreRuta] ? ` · ${NOMBRES[nombreRuta]}` : ""}
-                          </button>
-                          {enviado && (
-                            <button
-                              onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: false } }))}
-                              title="Reactivar edición para esta ruta"
-                              style={{ display: "flex", alignItems: "center", padding: "5px 8px", border: "none", borderLeft: "1px solid #3DDC97", background: "transparent", color: "#3DDC97", cursor: "pointer" }}
-                            >
-                              <RefreshCw size={12} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {rutaVistaStaff && (() => {
-                    const enviadoEstaRuta = !!cargaActiva.enviosPorRuta?.[rutaVistaStaff];
-                    return (
-                      <div>
-                        <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
-                          Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargaActiva.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
-                        </div>
-                        <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
-                        {!cargaActiva.bloqueado && (
-                          <button
-                            className="btn"
-                            style={{
-                              marginTop: 12, width: "100%",
-                              background: enviadoEstaRuta ? "#3DDC97" : undefined, borderColor: enviadoEstaRuta ? "#3DDC97" : undefined,
-                              color: enviadoEstaRuta ? "#0B1220" : undefined,
-                            }}
-                            onClick={() => enviarPara(rutaVistaStaff)}
-                          >
-                            <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {enviadoEstaRuta ? "Carga enviada correctamente ✓" : "Enviar / confirmar esta carga"}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
+              {esActual && (
+                <text x={x + (stepW - 8) / 2} y={stepTop - 8} textAnchor="middle" fontSize="16" style={{ animation: "escCaminante 1s ease-in-out infinite" }}>🚶</text>
               )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!cargaActiva ? (
-        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-          {rol === "vendedor"
-            ? "Todavía no hay una carga activa para hoy."
-            : "No hay ninguna carga activa por el momento."}
-        </div>
-      ) : rol === "vendedor" ? (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#9AA7BD", marginBottom: 10 }}>
-            <Clock size={12} /> Carga del {DIA_LABEL[cargaActiva.dia]}
-          </div>
-          {cargaActiva.bloqueado && (
-            <div className="card" style={{ padding: 12, marginBottom: 14, border: "1px solid #FF6B6B" }}>
-              <div style={{ fontSize: 12, color: "#FF6B6B" }}>Esta carga ya se descargó — ya no se puede modificar.</div>
-            </div>
-          )}
-          {!cargaActiva.bloqueado && (
-            <div className="card" style={{ padding: 12, marginBottom: 14, border: `1px solid ${yaEnviado ? "#3DDC97" : "#F2B134"}` }}>
-              <div style={{ fontSize: 12, color: yaEnviado ? "#3DDC97" : "#F2B134" }}>
-                {yaEnviado ? "Ya enviaste tus cambios correctamente — no puedes seguir editando hasta que gerente/supervisor lo reactive." : "Aún no has enviado tus cambios."}
-              </div>
-            </div>
-          )}
-          <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
-            Escribe la cantidad que consideres — no se guarda hasta que le des "Enviar cambios". Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
-          </div>
-          <TablaCargaVendedor items={cargaActiva.items} nombreRuta={vendedorActual} bloqueado={cargaActiva.bloqueado || yaEnviado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
-          {!cargaActiva.bloqueado && !yaEnviado && (
-            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={() => enviarPara(vendedorActual)}>
-              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar cambios
-            </button>
-          )}
-        </>
-      ) : (
-        <div className="card" style={{ padding: 16 }}>
-          <div style={{ fontSize: 13, color: "#9AA7BD" }}>
-            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde {DIA_LABEL[cargaActiva.dia]}.
-            Cada vendedor ya puede entrar a su propia pestaña "CARGAS" para revisar y, si quiere, ajustar su cantidad propuesta.
-          </div>
-        </div>
-      )}
+              {i === n - 1 && (
+                <text
+                  x={x + (stepW - 8) / 2}
+                  y={stepTop - (esActual ? 26 : 8)}
+                  textAnchor="middle"
+                  fontSize="16"
+                  style={{
+                    opacity: todoConquistado ? 1 : 0.3,
+                    transformBox: "fill-box",
+                    transformOrigin: "center",
+                    animation: todoConquistado ? "escBandera 1.6s ease-in-out infinite" : undefined,
+                  }}
+                >
+                  🚩
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }
 
-function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCambiarLocal }) {
+// Confeti simple para la celebración de escalera completa — puras
+// posiciones/animación CSS, sin dependencias externas.
+function Confeti() {
+  const piezas = Array.from({ length: 16 });
+  const colores = ["#F2B134", "#3DDC97", "#7CC4FF", "#FF6B6B"];
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {items.map((it, i) => {
-        const porRuta = it.porRuta[nombreRuta] || { inicial: 0, modificada: null };
-        const valorGuardado = porRuta.modificada != null ? porRuta.modificada : porRuta.inicial;
-        const valorMostrado = valoresLocales[i] !== undefined ? valoresLocales[i] : valorGuardado;
-        return (
-          <div key={i} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ flex: "1 1 140px", minWidth: 0 }}>
-              <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.marca}</div>
-              <div style={{ fontSize: 11, color: "#9AA7BD" }}>{it.fa}</div>
-            </div>
-            <div style={{ textAlign: "center", minWidth: 56 }}>
-              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Inicial</div>
-              <div className="mono" style={{ fontSize: 15, color: "#E8EDF5" }}>{porRuta.inicial}</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Tu propuesta</div>
-              <input
-                type="number"
-                value={valorMostrado}
-                onChange={(e) => onCambiarLocal(i, e.target.value)}
-                onFocus={(e) => e.target.select()}
-                disabled={bloqueado}
-                style={{ width: 80, padding: "6px 8px", textAlign: "center", fontSize: 14, boxSizing: "border-box" }}
-              />
-            </div>
+    <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+      {piezas.map((_, i) => (
+        <span
+          key={i}
+          style={{
+            position: "absolute", top: 0, left: `${(i / piezas.length) * 100}%`,
+            width: 6, height: 10, borderRadius: 2, background: colores[i % colores.length],
+            animation: `escConfeti ${1.3 + (i % 5) * 0.15}s ease-in ${(i % 7) * 0.12}s infinite`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+export default function EscaleraView({ data, persistFresco, vendedor, rutaPropia }) {
+  const fechaHoy = vendedor?.hoy?.fecha || null;
+  const peldanos = useMemo(() => construirPeldanos(vendedor), [vendedor]);
+  const progresoGuardado = data.escaleraProgreso?.[rutaPropia] || null;
+  // Si cambió el día (o nunca se había abierto), el conteo de saltos y el
+  // puntero se reinician solos — pero se conserva la preferencia de orden
+  // (fácil/difícil) que el vendedor ya había elegido, para no preguntarle
+  // cada mañana lo mismo.
+  const progreso = useMemo(() => {
+    if (!progresoGuardado) return null;
+    if (progresoGuardado.fecha === fechaHoy) return progresoGuardado;
+    return { orden: progresoGuardado.orden, fecha: fechaHoy, pasoActualId: null, saltos: 0, saltados: [], diasCompletos: progresoGuardado.diasCompletos || 0, fechaUltimoDiaCompleto: progresoGuardado.fechaUltimoDiaCompleto || null };
+  }, [progresoGuardado, fechaHoy]);
+
+  const [verTodos, setVerTodos] = useState(false);
+  const [celebrar, setCelebrar] = useState(null);
+
+  function guardarProgreso(cambios) {
+    persistFresco((fresca) => {
+      const actual = fresca.escaleraProgreso || {};
+      const propioGuardado = actual[rutaPropia] || {};
+      const propioBase = propioGuardado.fecha === fechaHoy
+        ? propioGuardado
+        : { orden: propioGuardado.orden, fecha: fechaHoy, pasoActualId: null, saltos: 0, saltados: [], diasCompletos: propioGuardado.diasCompletos || 0, fechaUltimoDiaCompleto: propioGuardado.fechaUltimoDiaCompleto || null };
+      return { escaleraProgreso: { ...actual, [rutaPropia]: { ...propioBase, ...cambios, fecha: fechaHoy } } };
+    });
+  }
+
+  const ordenados = useMemo(
+    () => (progreso?.orden ? ordenarPeldanos(peldanos, progreso.orden) : []),
+    [peldanos, progreso?.orden]
+  );
+  const pendientes = ordenados.filter((p) => p.pct < 100);
+  const conquistados = ordenados.filter((p) => p.pct >= 100);
+
+  // El puntero de "peldaño actual" solo debe apuntar a algo que sigue
+  // pendiente hoy. Si el peldaño guardado ya se conquistó con datos reales
+  // (o nunca se fijó uno), se recalcula solo y se avisa con una celebración.
+  useEffect(() => {
+    if (!progreso?.orden) return;
+    const actualSigueValido = pendientes.some((p) => p.id === progreso.pasoActualId);
+    if (!actualSigueValido) {
+      const siguiente = pendientes[0] || null;
+      const eraConquista = progreso.pasoActualId && conquistados.some((p) => p.id === progreso.pasoActualId);
+      if (eraConquista) {
+        const nombrePeldano = ordenados.find((p) => p.id === progreso.pasoActualId)?.label;
+        setCelebrar(nombrePeldano || "peldaño");
+        setTimeout(() => setCelebrar(null), 4500);
+      }
+      guardarProgreso({ pasoActualId: siguiente?.id || null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progreso?.pasoActualId, progreso?.orden, fechaHoy, pendientes.map((p) => p.id).join("|")]);
+
+  // Si ya se conquistaron TODOS los peldaños de hoy y todavía no se había
+  // contado ese día como completo, suma uno al contador — una sola vez por
+  // fecha, sin importar cuántas veces se recargue la pantalla.
+  useEffect(() => {
+    if (!progreso?.orden || peldanos.length === 0) return;
+    if (pendientes.length === 0 && progreso.fechaUltimoDiaCompleto !== fechaHoy) {
+      guardarProgreso({ diasCompletos: (progreso.diasCompletos || 0) + 1, fechaUltimoDiaCompleto: fechaHoy });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progreso?.orden, pendientes.length, fechaHoy]);
+
+  const observaciones = data.escaleraObservaciones?.[rutaPropia] || [];
+  const ultimaObservacion = observaciones[0] || null;
+
+  const TarjetaObservacion = ultimaObservacion && (
+    <div className="card esc-pop-in" style={{ padding: 14, border: "1px solid #7CC4FF" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <MessageSquare size={14} color="#7CC4FF" />
+        <span className="display" style={{ fontSize: 12, color: "#7CC4FF" }}>COMENTARIO DE TU SUPERVISOR</span>
+      </div>
+      <div style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{ultimaObservacion.texto}</div>
+      <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>{ultimaObservacion.autor} · {ultimaObservacion.fecha}</div>
+    </div>
+  );
+
+  if (peldanos.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <EscaleraEstilos />
+        {TarjetaObservacion}
+        <div className="card" style={{ padding: 24, textAlign: "center" }}>
+          <Flag size={28} color="#9AA7BD" style={{ marginBottom: 10 }} />
+          <div style={{ color: "#9AA7BD", fontSize: 13 }}>
+            Hoy no tienes objetivos del día cargados todavía (o ya los cumpliste todos). En cuanto haya avance del día u objetivos pendientes, aquí aparece tu escalera de hoy.
           </div>
-        );
-      })}
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Paso 1: elegir orden (la primera vez, o si el vendedor decide cambiarlo) ----
+  if (!progreso?.orden) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <EscaleraEstilos />
+        {TarjetaObservacion}
+        <div className="card" style={{ padding: 18 }}>
+          <div className="display" style={{ fontSize: 15, marginBottom: 6 }}>ARMEMOS TU ESCALERA DE HOY</div>
+          <div style={{ fontSize: 12.5, color: "#9AA7BD", lineHeight: 1.5 }}>
+            Vamos a ordenar tus {peldanos.length} objetivos de hoy como una escalera: uno a la vez, en el orden que tú elijas. Cada noche esta escalera se borra sola y mañana arranca una nueva.
+          </div>
+        </div>
+        <button
+          className="card"
+          style={{ padding: 18, textAlign: "left", display: "flex", gap: 12, alignItems: "center", cursor: "pointer", border: "1px solid #2A3852" }}
+          onClick={() => guardarProgreso({ orden: "facil", pasoActualId: null, saltos: 0, saltados: [] })}
+        >
+          <ArrowUpNarrowWide size={22} color="#3DDC97" />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>Empezar por el más fácil</div>
+            <div style={{ fontSize: 12, color: "#9AA7BD" }}>Arrancas con lo que ya llevas más avanzado hoy — bueno para agarrar ritmo desde temprano.</div>
+          </div>
+        </button>
+        <button
+          className="card"
+          style={{ padding: 18, textAlign: "left", display: "flex", gap: 12, alignItems: "center", cursor: "pointer", border: "1px solid #2A3852" }}
+          onClick={() => guardarProgreso({ orden: "dificil", pasoActualId: null, saltos: 0, saltados: [] })}
+        >
+          <ArrowDownWideNarrow size={22} color="#FF6B6B" />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>Empezar por el más difícil</div>
+            <div style={{ fontSize: 12, color: "#9AA7BD" }}>Te quitas de encima lo más pesado mientras traes energía fresca en la mañana.</div>
+          </div>
+        </button>
+      </div>
+    );
+  }
+
+  // ---- Escalera de hoy completa ----
+  if (pendientes.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <EscaleraEstilos />
+        {TarjetaObservacion}
+        <div className="card esc-pop-in" style={{ padding: 26, textAlign: "center", position: "relative", overflow: "hidden" }}>
+          <Confeti />
+          <Trophy size={34} color="#F2B134" style={{ marginBottom: 10 }} />
+          <div className="display" style={{ fontSize: 16, marginBottom: 6 }}>¡ESCALERA DE HOY COMPLETA!</div>
+          <div style={{ fontSize: 12.5, color: "#9AA7BD", marginBottom: 4 }}>
+            Conquistaste los {conquistados.length} peldaños de hoy.
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <EscaleraSVG pasos={ordenados} idActual={null} />
+          </div>
+          <div style={{ fontSize: 11.5, color: "#6C7A96" }}>
+            Días completos conquistados: <strong style={{ color: "#3DDC97" }}>{progreso.diasCompletos || 1}</strong> · mañana se arma una escalera nueva.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const actual = pendientes.find((p) => p.id === progreso.pasoActualId) || pendientes[0];
+  const posicion = pendientes.findIndex((p) => p.id === actual.id) + 1;
+  const siguiente = pendientes[posicion] || null;
+  const tips = tipsPara(actual);
+
+  function saltarAlSiguiente() {
+    if (!siguiente) return;
+    guardarProgreso({
+      pasoActualId: siguiente.id,
+      saltos: (progreso.saltos || 0) + 1,
+      saltados: [...(progreso.saltados || []), actual.id],
+    });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <EscaleraEstilos />
+
+      {celebrar && (
+        <div className="card esc-pop-in" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 10, border: "1px solid #3DDC97", background: "rgba(61,220,151,0.08)" }}>
+          <PartyPopper size={18} color="#3DDC97" />
+          <div style={{ fontSize: 12.5, color: "#3DDC97" }}><strong>¡Peldaño conquistado!</strong> {celebrar} ya llegó al 100% de hoy. Vamos por el siguiente.</div>
+        </div>
+      )}
+
+      {TarjetaObservacion}
+
+      <div className="card" style={{ padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "#9AA7BD", display: "flex", alignItems: "center", gap: 6 }}>
+          <Sunrise size={13} color="#F2B134" />
+          Peldaño <strong style={{ color: "#E8EDF5" }}>{posicion}</strong> de {pendientes.length} hoy · {conquistados.length} conquistados · orden {progreso.orden === "facil" ? "fácil → difícil" : "difícil → fácil"}
+        </div>
+        <button className="btn-ghost" style={{ fontSize: 11.5 }} onClick={() => guardarProgreso({ orden: null, pasoActualId: null })}>
+          Cambiar orden
+        </button>
+      </div>
+
+      {/* Peldaño actual */}
+      <div className="card esc-glow-actual" style={{ padding: 20, border: `1px solid ${COLOR_GRUPO[actual.grupo] || "#F2B134"}` }}>
+        <div style={{ marginBottom: 14 }}>
+          <EscaleraSVG pasos={ordenados} idActual={actual.id} />
+        </div>
+
+        <div style={{ fontSize: 11, color: COLOR_GRUPO[actual.grupo] || "#9AA7BD", fontWeight: 700, letterSpacing: 0.5, marginBottom: 4, textAlign: "center" }}>{actual.grupo}</div>
+        <div className="display" style={{ fontSize: 18, marginBottom: 12, textAlign: "center" }}>{actual.label}</div>
+
+        <div style={{ height: 10, borderRadius: 6, background: "#0F172A", overflow: "hidden", marginBottom: 10 }}>
+          <div
+            className={actual.pct < 100 ? "esc-barra-viva" : undefined}
+            style={{
+              height: "100%",
+              width: `${Math.min(actual.pct, 100)}%`,
+              background: actual.pct >= 100 ? "#3DDC97" : undefined,
+              transition: "width .5s ease-out",
+              borderRadius: 6,
+            }}
+          />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 18 }}>
+          <span>{fmt(actual.unit, actual.avance)} de {fmt(actual.unit, actual.objetivo)}</span>
+          <span>{actual.pct.toFixed(0)}%</span>
+        </div>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+          <div style={{ flex: 1, minWidth: 140, background: "#0F172A", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>TE FALTA HOY</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6B6B" }}>{fmt(actual.unit, actual.restante)}</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 140, background: "#0F172A", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>META DE HOY</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#F2B134" }}>{fmt(actual.unit, actual.objetivo)}</div>
+          </div>
+        </div>
+
+        <div style={{ background: "#0F172A", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#9AA7BD", fontWeight: 700, marginBottom: 8 }}>
+            <Zap size={13} color="#F2B134" /> TIPS PARA ESTE PELDAÑO
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+            {tips.map((t, i) => (
+              <li key={i} style={{ fontSize: 12, color: "#C6CFE0", lineHeight: 1.45 }}>{t}</li>
+            ))}
+          </ul>
+        </div>
+
+        <div style={{ fontSize: 11, color: "#6C7A96", marginBottom: 10 }}>
+          Este peldaño se marca conquistado solo, en cuanto tu venta real de hoy llegue al 100%. No hace falta que lo confirmes a mano.
+        </div>
+
+        {siguiente && (
+          <button className="btn-ghost" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }} onClick={saltarAlSiguiente}>
+            <SkipForward size={13} /> Se complicó — pasar al siguiente peldaño
+          </button>
+        )}
+      </div>
+
+      {/* Vista completa de la escalera de hoy */}
+      <button
+        className="card"
+        style={{ padding: 14, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+        onClick={() => setVerTodos((v) => !v)}
+      >
+        <span style={{ fontSize: 12.5, color: "#9AA7BD", fontWeight: 700 }}>VER TODA LA ESCALERA DE HOY</span>
+        {verTodos ? <ChevronUp size={16} color="#9AA7BD" /> : <ChevronDown size={16} color="#9AA7BD" />}
+      </button>
+
+      {verTodos && (
+        <div className="card esc-pop-in" style={{ padding: "6px 16px 6px 8px", borderLeft: "2px solid #2A3852" }}>
+          {ordenados.map((p, i) => {
+            const esActual = p.id === actual.id;
+            const hecho = p.pct >= 100;
+            return (
+              <div
+                key={p.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "12px 0",
+                  marginLeft: Math.min(i * 6, 48),
+                  borderBottom: i < ordenados.length - 1 ? "1px solid #1E2A42" : "none",
+                  opacity: hecho ? 0.6 : 1,
+                }}
+              >
+                {hecho ? <CheckCircle2 size={16} color="#3DDC97" /> : <Circle size={16} color={esActual ? "#F2B134" : "#3A4763"} />}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: esActual ? 700 : 500, color: esActual ? "#F2B134" : "#E8EDF5" }}>
+                    {i + 1}. {p.label}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#9AA7BD" }}>{p.grupo} · {fmt(p.unit, p.avance)} / {fmt(p.unit, p.objetivo)}</div>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: hecho ? "#3DDC97" : "#9AA7BD" }}>{p.pct.toFixed(0)}%</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(progreso.diasCompletos || 0) > 0 && (
+        <div style={{ textAlign: "center", fontSize: 11, color: "#6C7A96" }}>
+          Días completos conquistados hasta hoy: <strong style={{ color: "#3DDC97" }}>{progreso.diasCompletos}</strong>
+        </div>
+      )}
     </div>
   );
 }
