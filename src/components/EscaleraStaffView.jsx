@@ -1,11 +1,51 @@
 // @ts-nocheck
 import React, { useMemo, useState } from "react";
 import {
-  Users, Milestone, MessageSquare, Sparkles, Trash2, TrendingDown,
+  Users, Milestone, MessageSquare, Sparkles, Trash2, TrendingDown, History, Target, Plus, Power,
 } from "lucide-react";
-import { NOMBRES } from "../constants";
+import { NOMBRES, RUTAS } from "../constants";
 import { fmt, todayISO } from "../utils";
 import { construirPeldanos, COLOR_GRUPO } from "./EscaleraView";
+
+// Días anteriores guardados por EscaleraView (resultado real, independiente
+// de si el vendedor ya reinició su escalera con los objetivos de hoy). Se
+// excluye la fecha de hoy porque esa ya se muestra en vivo arriba.
+function HistorialEscaleraRuta({ historial, fechaHoy }) {
+  const [abierto, setAbierto] = useState(false);
+  const fechas = Object.keys(historial).filter((f) => f !== fechaHoy).sort().reverse().slice(0, 14);
+
+  if (fechas.length === 0) return null;
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        style={{ width: "100%", padding: 16, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "transparent", cursor: "pointer" }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, color: "#9AA7BD" }}>
+          <History size={15} color="#9AA7BD" /> HISTORIAL DE DÍAS ANTERIORES
+        </span>
+        <span style={{ fontSize: 11, color: "#6C7A96" }}>{abierto ? "ocultar" : `${fechas.length} días`}</span>
+      </button>
+      {abierto && (
+        <div style={{ padding: "0 16px 16px" }}>
+          {fechas.map((f, i) => {
+            const h = historial[f];
+            const pct = h.total > 0 ? Math.round((h.conquistados / h.total) * 100) : 0;
+            return (
+              <div key={f} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: i > 0 ? "1px solid #1E2A42" : "none" }}>
+                <span style={{ fontSize: 12, color: "#E8EDF5" }}>{f}</span>
+                <span style={{ fontSize: 12, color: colorEfectividad(h.efectividadPct ?? pct) }}>
+                  {h.conquistados}/{h.total} peldaños{h.efectividadPct != null ? ` · ${Math.round(h.efectividadPct)}% efectividad` : ""}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function colorEfectividad(p) {
   if (p >= 90) return "#3DDC97";
@@ -35,6 +75,203 @@ function MiniEscalera({ peldanos }) {
           }}
         />
       ))}
+    </div>
+  );
+}
+
+const TIPO_LABEL = { venta: "Venta general", otc: "OTC", visitas: "Visitas efectivas" };
+const TIPO_UNIDAD_TEXTO = { venta: "paquetes", otc: "pesos ($)", visitas: "visitas" };
+
+// Panel de administración de objetivos manuales — exclusivo de Supervisor-1
+// y Gerente. Cada objetivo se aplica a 1, varias o todas las rutas, y en
+// la Escalera de cada vendedor aparece como su PRIMER peldaño (antes que
+// los automáticos), con avance calculado en tiempo real desde App.tsx.
+function ObjetivosManualesPanel({ data, persistFresco, revisorNombre }) {
+  const objetivos = data.escaleraObjetivosManuales || [];
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const vacio = { tipo: "venta", nombre: "", articulosTexto: "", rutas: "todas", rutasEspecificas: [], objetivo: "", detalles: "" };
+  const [form, setForm] = useState(vacio);
+
+  function actualizar(campo, valor) {
+    setForm((f) => ({ ...f, [campo]: valor }));
+  }
+
+  function alternarRuta(ruta) {
+    setForm((f) => {
+      const set = new Set(f.rutasEspecificas);
+      if (set.has(ruta)) set.delete(ruta); else set.add(ruta);
+      return { ...f, rutasEspecificas: Array.from(set) };
+    });
+  }
+
+  function guardar() {
+    if (!form.nombre.trim() || !form.objetivo || Number(form.objetivo) <= 0) return;
+    if (form.rutas === "especificas" && form.rutasEspecificas.length === 0) return;
+    const articulos = form.articulosTexto.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+    const nuevo = {
+      id: "obj" + Date.now(),
+      tipo: form.tipo,
+      nombre: form.nombre.trim(),
+      articulos,
+      rutas: form.rutas === "todas" ? "todas" : form.rutasEspecificas,
+      objetivo: Number(form.objetivo),
+      detalles: form.detalles.trim(),
+      activo: true,
+      creadoPor: revisorNombre,
+      fechaCreado: todayISO(),
+    };
+    persistFresco((fresca) => ({
+      escaleraObjetivosManuales: [...(fresca.escaleraObjetivosManuales || []), nuevo],
+    }));
+    setForm(vacio);
+    setMostrarForm(false);
+  }
+
+  function alternarActivo(id) {
+    persistFresco((fresca) => ({
+      escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).map((o) => (o.id === id ? { ...o, activo: !o.activo } : o)),
+    }));
+  }
+
+  function eliminar(id, nombre) {
+    if (!window.confirm(`¿Eliminar el objetivo "${nombre}"? Esto no se puede deshacer.`)) return;
+    persistFresco((fresca) => ({
+      escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).filter((o) => o.id !== id),
+    }));
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontSize: 12, color: "#9AA7BD" }}>
+        Estos objetivos aparecen como el <strong style={{ color: "#C084FC" }}>primer peldaño</strong> en la Escalera de cada ruta a la que aplican, antes que sus objetivos automáticos del día — con avance real, no manual.
+      </div>
+
+      {!mostrarForm ? (
+        <button className="btn" style={{ alignSelf: "flex-start" }} onClick={() => setMostrarForm(true)}>
+          <Plus size={14} style={{ verticalAlign: "-2px" }} /> Nuevo objetivo manual
+        </button>
+      ) : (
+        <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>TIPO DE OBJETIVO</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {Object.entries(TIPO_LABEL).map(([key, label]) => (
+                <button key={key} className={form.tipo === key ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => actualizar("tipo", key)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>NOMBRE DEL OBJETIVO</div>
+            <input
+              type="text"
+              value={form.nombre}
+              onChange={(e) => actualizar("nombre", e.target.value)}
+              placeholder='Ej. "Empuje Faronet quincena", "Meta especial cliente X"'
+              style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: 13 }}
+            />
+          </div>
+
+          {form.tipo !== "visitas" && (
+            <div>
+              <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>
+                CÓDIGO(S) DE PRODUCTO (opcional — separados por coma. Si lo dejas vacío, cuenta {form.tipo === "otc" ? "todo el OTC del día" : "toda la venta del día"})
+              </div>
+              <input
+                type="text"
+                value={form.articulosTexto}
+                onChange={(e) => actualizar("articulosTexto", e.target.value)}
+                placeholder="Ej. FA04016, FA04017, FA15010"
+                style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", fontSize: 13 }}
+              />
+            </div>
+          )}
+
+          <div>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>RUTAS A APLICAR</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: form.rutas === "especificas" ? 8 : 0 }}>
+              <button className={form.rutas === "todas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => actualizar("rutas", "todas")}>
+                Todas las rutas
+              </button>
+              <button className={form.rutas === "especificas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => actualizar("rutas", "especificas")}>
+                Elegir rutas
+              </button>
+            </div>
+            {form.rutas === "especificas" && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {RUTAS.map((r) => (
+                  <button
+                    key={r}
+                    className={form.rutasEspecificas.includes(r) ? "btn" : "btn-ghost"}
+                    style={{ fontSize: 11.5, padding: "5px 10px" }}
+                    onClick={() => alternarRuta(r)}
+                  >
+                    {r.replace("RUTA ", "")}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>NÚMERO OBJETIVO ({TIPO_UNIDAD_TEXTO[form.tipo]})</div>
+            <input
+              type="number"
+              value={form.objetivo}
+              onChange={(e) => actualizar("objetivo", e.target.value)}
+              placeholder="0"
+              style={{ width: 140, boxSizing: "border-box", padding: "8px 10px", fontSize: 13 }}
+            />
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10.5, color: "#9AA7BD", marginBottom: 4 }}>DETALLES PARA EL VENDEDOR (opcional — se muestra como tip de este peldaño)</div>
+            <textarea
+              value={form.detalles}
+              onChange={(e) => actualizar("detalles", e.target.value)}
+              rows={2}
+              placeholder="Ej. Este mes hay bono extra si se logra este objetivo..."
+              style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, resize: "vertical", color: "#000000", background: "#FFFFFF" }}
+            />
+          </div>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn" onClick={guardar}>Guardar objetivo</button>
+            <button className="btn-ghost" onClick={() => { setForm(vacio); setMostrarForm(false); }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {objetivos.length === 0 && !mostrarForm && (
+          <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>Todavía no hay objetivos manuales creados.</div>
+        )}
+        {objetivos.map((o) => (
+          <div key={o.id} className="card" style={{ padding: 14, opacity: o.activo === false ? 0.55 : 1, border: "1px solid #C084FC44" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5" }}>{o.nombre}</div>
+                <div style={{ fontSize: 11, color: "#9AA7BD" }}>
+                  {TIPO_LABEL[o.tipo]} · {o.objetivo.toLocaleString("es-MX")} {TIPO_UNIDAD_TEXTO[o.tipo]} · {o.rutas === "todas" ? "Todas las rutas" : o.rutas.map((r) => r.replace("RUTA ", "")).join(", ")}
+                  {o.articulos && o.articulos.length > 0 && ` · códigos: ${o.articulos.join(", ")}`}
+                </div>
+                {o.detalles && <div style={{ fontSize: 11.5, color: "#C6CFE0", marginTop: 4 }}>{o.detalles}</div>}
+                <div style={{ fontSize: 10, color: "#6C7A96", marginTop: 4 }}>Creado por {o.creadoPor} · {o.fechaCreado}{o.activo === false ? " · INACTIVO" : ""}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button className="btn-ghost" style={{ padding: "5px 8px" }} title={o.activo === false ? "Reactivar" : "Desactivar"} onClick={() => alternarActivo(o.id)}>
+                  <Power size={13} color={o.activo === false ? "#9AA7BD" : "#3DDC97"} />
+                </button>
+                <button className="btn-ghost" style={{ padding: "5px 8px" }} title="Eliminar" onClick={() => eliminar(o.id, o.nombre)}>
+                  <Trash2 size={13} color="#FF6B6B" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -112,12 +349,15 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button className={vista === "grupal" ? "btn" : "btn-ghost"} style={{ fontSize: 12.5 }} onClick={() => setVista("grupal")}>
           <Users size={13} style={{ verticalAlign: "-2px" }} /> Grupal
         </button>
         <button className={vista === "ruta" ? "btn" : "btn-ghost"} style={{ fontSize: 12.5 }} onClick={() => setVista("ruta")}>
           <Milestone size={13} style={{ verticalAlign: "-2px" }} /> Por ruta
+        </button>
+        <button className={vista === "objetivos" ? "btn" : "btn-ghost"} style={{ fontSize: 12.5 }} onClick={() => setVista("objetivos")}>
+          <Target size={13} style={{ verticalAlign: "-2px" }} /> Objetivos manuales
         </button>
       </div>
 
@@ -152,7 +392,7 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
             <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>No hay rutas cargadas todavía.</div>
           )}
         </div>
-      ) : (
+      ) : vista === "ruta" ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <select value={rutaSeleccionada} onChange={(e) => setRutaSeleccionada(e.target.value)} style={{ width: "100%" }}>
             {stats.porVendedor.map((v) => (
@@ -202,6 +442,8 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
                 </div>
               )}
 
+              <HistorialEscaleraRuta historial={data.escaleraHistorial?.[filaSeleccionada.vendedor.name] || {}} fechaHoy={filaSeleccionada.vendedor.hoy?.fecha} />
+
               <div className="card" style={{ padding: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                   <MessageSquare size={15} color="#7CC4FF" />
@@ -244,6 +486,8 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
             </>
           )}
         </div>
+      ) : (
+        <ObjetivosManualesPanel data={data} persistFresco={persistFresco} revisorNombre={revisorNombre} />
       )}
     </div>
   );
