@@ -792,6 +792,36 @@ export default function App() {
       const bajoDesempeno = volumenObjetivo > 0 && paquetesHoy < volumenObjetivo * UMBRAL_BAJO_DESEMPENO;
       const otcDiario = v.objetivos?.otcDiario || 0;
 
+      // Objetivos manuales (Escalera): Supervisor-1 / Gerente pueden fijar
+      // un objetivo extra para 1 o varias rutas — de venta general (con o
+      // sin códigos de artículo específicos), de OTC, o de visitas
+      // efectivas. Aquí se calcula su avance REAL de hoy con los mismos
+      // registros crudos (propiasAvanceDia/propiasOtcDia) que ya se usan
+      // para el resto de "hoy", para que en la Escalera se vean como un
+      // peldaño más, prioritario, con datos reales — nunca a mano.
+      const objetivosManualesDef = (data.escaleraObjetivosManuales || []).filter(
+        (o) => o.activo !== false && (o.rutas === "todas" || (o.rutas || []).includes(v.name))
+      );
+      const objetivosManualesHoy = objetivosManualesDef.map((o) => {
+        const codigos = (o.articulos || []).map((c) => String(c).trim().toUpperCase()).filter(Boolean);
+        let avance = 0;
+        if (o.tipo === "otc") {
+          avance = codigos.length > 0
+            ? propiasOtcDia.filter((r) => codigos.includes(String(r.codigoArticulo || "").trim().toUpperCase())).reduce((s, r) => s + (Number(r.monto) || 0), 0)
+            : otcHoy;
+        } else if (o.tipo === "visitas") {
+          avance = visitasEfectivasHoy;
+        } else {
+          avance = codigos.length > 0
+            ? propiasAvanceDia.filter((r) => codigos.includes(String(r.articulo || "").trim().toUpperCase())).reduce((s, r) => s + (Number(r.paquetes) || 0), 0)
+            : paquetesHoy;
+        }
+        return {
+          id: o.id, nombre: o.nombre, tipo: o.tipo, objetivo: Number(o.objetivo) || 0, avance,
+          unidad: o.tipo === "otc" ? "money" : "units", detalles: o.detalles || "", articulos: codigos,
+        };
+      });
+
       // Evaluación ampliada: junta TODOS los indicadores del día que tengan
       // un objetivo válido (volumen, cada marca, OTC) y saca un % promedio
       // de efectividad. También arma la lista de lo que le falta a cada
@@ -823,6 +853,7 @@ export default function App() {
         bajoDesempeno,
         efectividadPct,
         indicadoresDebiles,
+        objetivosManuales: objetivosManualesHoy,
       };
 
       const porDiaMap = {};
@@ -972,7 +1003,7 @@ export default function App() {
     const bottom3Nombres = rankingDesempeno.slice(0, 3).map((v) => v.name);
 
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
-  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo]);
+  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data.escaleraObjetivosManuales]);
 
   async function procesarFilasOtcSemanal(filas) {
     const registros = convertirFilasOtcDia(filas);
@@ -1434,7 +1465,7 @@ export default function App() {
       const monto = Number(getVal(row, "Total $") || getVal(row, "Total") || 0) || 0;
       const cliente = String(getVal(row, "Cliente") || "").trim();
 
-      registros.push({ fecha, vendedor, marca, cliente, monto, paquetes });
+      registros.push({ fecha, vendedor, marca, articulo, cliente, monto, paquetes });
     });
     return registros;
   }
