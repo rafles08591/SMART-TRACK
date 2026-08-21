@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare, Download, Plus, Trash2, Ban } from "lucide-react";
+import { LogOut, RefreshCw, Star, CheckCircle2, AlertCircle, Copy, Check, MessageSquare, Download, Plus, Trash2, Ban, History } from "lucide-react";
 import { supabase } from "../supabaseClient";
 import { normalizarCodigo } from "../utils";
 import { RUTAS, NOMBRES } from "../constants";
@@ -89,6 +89,126 @@ function BotonCopiar({ texto, etiqueta }) {
     >
       {copiado ? <Check size={12} /> : <Copy size={12} />} {copiado ? "Copiado" : (etiqueta || "Copiar")}
     </button>
+  );
+}
+
+// Para clientes de CRÉDITO — busca y muestra la última compra anterior de
+// ese cliente (misma ruta + código), la fecha más reciente ANTES de la
+// venta que se está viendo ahora mismo. Trae los DOS tipos por separado
+// (Productos y OTC) porque son registros distintos en ventas_facturas
+// (articulo = "OTC" vs artículo real) y un cliente puede tener historial
+// de uno, del otro, o de ambos — se muestran como pestañas complementarias
+// dentro del mismo panel. Se busca bajo demanda (no en automático) porque
+// la fecha puede variar de un cliente a otro y no vale la pena consultarla
+// si nadie la necesita.
+function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) {
+  const [abierto, setAbierto] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [buscado, setBuscado] = useState(false);
+  const [subTab, setSubTab] = useState(esOtcActual ? "OTC" : "PROD");
+  const [resultados, setResultados] = useState({ PROD: null, OTC: null }); // cada uno: null | "sin_datos" | {fecha, formaPago, productos, totalCajetillas, totalMonto}
+  const [errorBusqueda, setErrorBusqueda] = useState(null);
+
+  async function buscarUnTipo(tipoOtc) {
+    let qFecha = supabase
+      .from("ventas_facturas")
+      .select("fecha")
+      .eq("ruta", ruta)
+      .eq("codigo_cliente", codigoCliente)
+      .lt("fecha", fechaActual);
+    qFecha = tipoOtc ? qFecha.eq("articulo", "OTC") : qFecha.neq("articulo", "OTC");
+    const { data: fechas, error: errF } = await qFecha.order("fecha", { ascending: false }).limit(1);
+    if (errF) throw errF;
+    if (!fechas || fechas.length === 0) return "sin_datos";
+
+    const fechaAnterior = fechas[0].fecha;
+    let qFilas = supabase
+      .from("ventas_facturas")
+      .select("articulo, producto_nombre, cajetillas, monto, forma_pago")
+      .eq("ruta", ruta)
+      .eq("codigo_cliente", codigoCliente)
+      .eq("fecha", fechaAnterior);
+    qFilas = tipoOtc ? qFilas.eq("articulo", "OTC") : qFilas.neq("articulo", "OTC");
+    const { data: filasAnteriores, error: errFilas } = await qFilas;
+    if (errFilas) throw errFilas;
+
+    const totalCajetillas = (filasAnteriores || []).reduce((s, f) => s + (Number(f.cajetillas) || 0), 0);
+    const totalMonto = (filasAnteriores || []).reduce((s, f) => s + (Number(f.monto) || 0), 0);
+    return {
+      fecha: fechaAnterior,
+      formaPago: filasAnteriores?.[0]?.forma_pago || "EFECTIVO",
+      productos: filasAnteriores || [],
+      totalCajetillas,
+      totalMonto,
+    };
+  }
+
+  async function buscar() {
+    if (buscado) { setAbierto((v) => !v); return; }
+    setCargando(true);
+    setErrorBusqueda(null);
+    try {
+      const [prod, otc] = await Promise.all([buscarUnTipo(false), buscarUnTipo(true)]);
+      setResultados({ PROD: prod, OTC: otc });
+      setBuscado(true);
+      setAbierto(true);
+    } catch (err) {
+      console.error("Error buscando última compra anterior:", err);
+      setErrorBusqueda("No se pudo buscar la compra anterior.");
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  const resultadoActual = resultados[subTab];
+
+  return (
+    <div style={{ marginBottom: 12 }} onClick={(e) => e.stopPropagation()}>
+      <button className="btn-ghost" style={{ fontSize: 11 }} disabled={cargando} onClick={buscar}>
+        <History size={12} style={{ verticalAlign: "-2px" }} /> {cargando ? "Buscando..." : abierto ? "Ocultar última compra anterior" : "Ver última compra anterior"}
+      </button>
+      {errorBusqueda && <div style={{ fontSize: 11, color: "#FF6B6B", marginTop: 6 }}>{errorBusqueda}</div>}
+
+      {abierto && buscado && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <button className={subTab === "PROD" ? "btn" : "btn-ghost"} style={{ fontSize: 10.5, padding: "4px 10px" }} onClick={() => setSubTab("PROD")}>
+              Productos
+            </button>
+            <button className={subTab === "OTC" ? "btn" : "btn-ghost"} style={{ fontSize: 10.5, padding: "4px 10px" }} onClick={() => setSubTab("OTC")}>
+              OTC
+            </button>
+          </div>
+
+          {resultadoActual === "sin_datos" && (
+            <div style={{ fontSize: 11.5, color: "#9AA7BD" }}>
+              Este cliente no tiene compras {subTab === "OTC" ? "OTC" : "de producto"} anteriores registradas.
+            </div>
+          )}
+
+          {resultadoActual && resultadoActual !== "sin_datos" && (
+            <div className="card" style={{ padding: 12, border: "1px solid #2A3852" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontSize: 11.5, color: "#9AA7BD" }}>Última compra {subTab === "OTC" ? "OTC" : "de producto"} anterior · {resultadoActual.fecha}</div>
+                <span style={{ fontSize: 10.5, fontWeight: 700, color: COLOR_FORMA_PAGO[resultadoActual.formaPago] || "#E8EDF5" }}>{resultadoActual.formaPago}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+                {resultadoActual.productos.map((p, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#C6CFE0", gap: 8 }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.articulo === "OTC" ? "Venta OTC" : `${p.articulo} — ${p.producto_nombre || p.articulo}`}</span>
+                    <span style={{ whiteSpace: "nowrap" }}>{p.articulo !== "OTC" ? `${num(p.cajetillas)} caj. · ` : ""}{money(p.monto)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, borderTop: "1px solid #1E2A42", paddingTop: 6 }}>
+                <span style={{ color: "#9AA7BD" }}>{resultadoActual.totalCajetillas > 0 ? `${num(resultadoActual.totalCajetillas)} caj. total` : ""}</span>
+                <span style={{ color: "#F2B134" }}>{money(resultadoActual.totalMonto)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -661,6 +781,8 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     setNuevosNormalClaves(new Set());
   }
 
+  const [recalculandoClaves, setRecalculandoClaves] = useState(new Set());
+
   async function cambiarFormaPago(ticket, nuevaFormaPago) {
     if (ticket.estado === "FACTURADO") {
       alert("Esta venta ya está facturada — no se puede cambiar la forma de pago. Si es un error, primero regrésala a ESPERA.");
@@ -668,16 +790,50 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     }
     const ids = ticket.productos.map((p) => p.id).filter(Boolean);
     if (ids.length === 0) return;
-    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago } : f)));
+
+    // Si pasa de CRÉDITO/TRANSFERENCIA a EFECTIVO y el total (con
+    // distribución incluida) supera el límite de $2000, antes no hacía
+    // falta dividirlo — ahora sí. Se le quita el folio a esas filas (solo
+    // a ESTAS, las demás de otros tickets no se tocan) para que
+    // asignarFoliosTickets las vuelva a tomar como "sin folio" y las
+    // reparta en partes ≤ $2000, igual que ya hace con ventas que nacen
+    // en efectivo desde el principio.
+    const formaAnterior = ticket.formaPago || "EFECTIVO";
+    const { distribucionBruta } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
+    const totalConDistribucion = ticket.totalMonto + distribucionBruta;
+    const necesitaRecalcular =
+      nuevaFormaPago === "EFECTIVO" &&
+      formaAnterior !== "EFECTIVO" &&
+      !ticket.ventaOriginal.esOtc &&
+      totalConDistribucion > LIMITE_TICKET_EFECTIVO;
+
+    if (necesitaRecalcular) setRecalculandoClaves((s) => new Set(s).add(ticket.claveTicket));
+
+    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago, ...(necesitaRecalcular ? { ticket_folio: null, ticket_parte: null, ticket_de: null } : {}) } : f)));
+
+    const payload = { forma_pago: nuevaFormaPago };
+    if (necesitaRecalcular) {
+      payload.ticket_folio = null;
+      payload.ticket_parte = null;
+      payload.ticket_de = null;
+    }
     const { error: err } = await supabase
       .from("ventas_facturas")
-      .update({ forma_pago: nuevaFormaPago })
+      .update(payload)
       .in("id", ids);
     if (err) {
       console.error("Error actualizando forma de pago:", err);
       alert("No se pudo actualizar la forma de pago: " + err.message);
       cargar();
+      setRecalculandoClaves((s) => { const n = new Set(s); n.delete(ticket.claveTicket); return n; });
+      return;
     }
+
+    if (necesitaRecalcular && asignarFoliosTickets) {
+      await asignarFoliosTickets();
+      setRecalculandoClaves((s) => { const n = new Set(s); n.delete(ticket.claveTicket); return n; });
+    }
+    cargar();
   }
 
   async function cambiarEstado(ticket, nuevoEstado) {
@@ -911,7 +1067,15 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
           50% { box-shadow: 0 0 0 8px rgba(255,140,0,0); background-color: rgba(255,140,0,0.5); }
         }
         .tab-parpadeo-mensaje { animation: parpadeoTabMensaje 0.9s ease-in-out infinite; border: 2px solid #FF8C00 !important; }
+
+        /* Indicador de "esta pestaña está seleccionada" — una barra fija
+           debajo del botón, en un elemento aparte (no el borde del botón),
+           para que nunca se confunda ni se tape con el parpadeo de
+           "hay algo nuevo" (que sí pinta el borde del botón). */
+        .tab-indicador-seleccionada { position: absolute; left: 10%; right: 10%; bottom: -5px; height: 3px; border-radius: 2px; background: #FFFFFF; }
       `}</style>
+
+      {/* Indicador reutilizable de selección — se usa junto a cada botón de pestaña. */}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 8, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0 }}>
@@ -938,13 +1102,15 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
               {nuevosPrioritarioClaves.size + nuevosNormalClaves.size + nuevosMensajesIds.size}
             </span>
           )}
+          {vistaPrincipal === "facturacion" && <span className="tab-indicador-seleccionada" />}
         </button>
         <button
           className={vistaPrincipal === "checador" ? "btn" : "btn-ghost"}
-          style={{ flex: 1 }}
+          style={{ flex: 1, position: "relative" }}
           onClick={() => setVistaPrincipal("checador")}
         >
           RELOJ CHECADOR
+          {vistaPrincipal === "checador" && <span className="tab-indicador-seleccionada" />}
         </button>
       </div>
 
@@ -966,6 +1132,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
               {nuevosPrioritarioClaves.size}
             </span>
           )}
+          {vista === "clientes" && tab === "prioritario" && <span className="tab-indicador-seleccionada" />}
         </button>
         <button
           className={`${vista === "clientes" && tab === "normal" ? "btn" : "btn-ghost"} ${hayNuevasNormal ? "tab-parpadeo-normal" : ""}`}
@@ -978,6 +1145,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
               {nuevosNormalClaves.size}
             </span>
           )}
+          {vista === "clientes" && tab === "normal" && <span className="tab-indicador-seleccionada" />}
         </button>
         <button
           className={`${vista === "mensajes" ? "btn" : "btn-ghost"} ${nuevosMensajesIds.size > 0 ? "tab-parpadeo-mensaje" : ""}`}
@@ -990,13 +1158,15 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
               {nuevosMensajesIds.size}
             </span>
           )}
+          {vista === "mensajes" && <span className="tab-indicador-seleccionada" />}
         </button>
         <button
           className={vista === "catalogo" ? "btn" : "btn-ghost"}
-          style={{ flex: "1 1 45%", minWidth: 0 }}
+          style={{ flex: "1 1 45%", minWidth: 0, position: "relative" }}
           onClick={() => setVista("catalogo")}
         >
           CLIENTES
+          {vista === "catalogo" && <span className="tab-indicador-seleccionada" />}
         </button>
       </div>
 
@@ -1117,13 +1287,13 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                     <select
                       value={ticket.formaPago || "EFECTIVO"}
                       onChange={(e) => cambiarFormaPago(ticket, e.target.value)}
-                      disabled={ticket.estado === "FACTURADO"}
+                      disabled={ticket.estado === "FACTURADO" || recalculandoClaves.has(ticket.claveTicket)}
                       title={ticket.estado === "FACTURADO" ? "Ya está facturado — no se puede cambiar la forma de pago" : undefined}
                       style={{
                         fontSize: 12, fontWeight: 700, padding: "6px 8px",
                         color: COLOR_FORMA_PAGO[ticket.formaPago] || "#E8EDF5",
-                        opacity: ticket.estado === "FACTURADO" ? 0.6 : 1,
-                        cursor: ticket.estado === "FACTURADO" ? "not-allowed" : "pointer",
+                        opacity: (ticket.estado === "FACTURADO" || recalculandoClaves.has(ticket.claveTicket)) ? 0.6 : 1,
+                        cursor: (ticket.estado === "FACTURADO" || recalculandoClaves.has(ticket.claveTicket)) ? "not-allowed" : "pointer",
                       }}
                     >
                       <option value="EFECTIVO">EFECTIVO</option>
@@ -1143,10 +1313,25 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   </div>
                 </div>
 
+                {recalculandoClaves.has(ticket.claveTicket) && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5AA9E6", marginBottom: 10 }}>
+                    <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Recalculando la división del ticket en partes ≤ {money(LIMITE_TICKET_EFECTIVO)}...
+                  </div>
+                )}
+
                 {ticket.estado === "OBSERVACION" && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#FF8C00", marginBottom: 10 }}>
                     <MessageSquare size={13} /> En observación — esperando respuesta de la ruta.
                   </div>
+                )}
+
+                {ticket.formaPago === "CREDITO" && (
+                  <UltimaCompraCredito
+                    ruta={venta.ruta}
+                    codigoCliente={venta.codigoCliente}
+                    fechaActual={venta.fecha}
+                    esOtcActual={venta.esOtc}
+                  />
                 )}
 
                 <div style={{ marginBottom: 14 }}>
