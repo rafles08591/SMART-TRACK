@@ -101,13 +101,14 @@ function BotonCopiar({ texto, etiqueta }) {
 // dentro del mismo panel. Se busca bajo demanda (no en automático) porque
 // la fecha puede variar de un cliente a otro y no vale la pena consultarla
 // si nadie la necesita.
-function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) {
+function UltimaCompraCredito({ ruta, codigoCliente, cliente, fechaActual, esOtcActual, onCambiarFormaPago, onCambiarEstado }) {
   const [abierto, setAbierto] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [buscado, setBuscado] = useState(false);
   const [subTab, setSubTab] = useState(esOtcActual ? "OTC" : "PROD");
-  const [resultados, setResultados] = useState({ PROD: null, OTC: null }); // cada uno: null | "sin_datos" | {fecha, formaPago, productos, totalCajetillas, totalMonto}
+  const [resultados, setResultados] = useState({ PROD: null, OTC: null }); // cada uno: null | "sin_datos" | {fecha, formaPago, estado, filas, totalCajetillas, totalMonto}
   const [errorBusqueda, setErrorBusqueda] = useState(null);
+  const [procesando, setProcesando] = useState(false);
 
   async function buscarUnTipo(tipoOtc) {
     let qFecha = supabase
@@ -122,9 +123,13 @@ function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) 
     if (!fechas || fechas.length === 0) return "sin_datos";
 
     const fechaAnterior = fechas[0].fecha;
+    // Trae id y estado también (no solo lo necesario para mostrar) — con
+    // esto se reutiliza la MISMA maquinaria de cambiar forma de pago /
+    // estado que usa el ticket actual, para poder facturar esta compra
+    // anterior tal cual, sin duplicar esa lógica.
     let qFilas = supabase
       .from("ventas_facturas")
-      .select("articulo, producto_nombre, cajetillas, monto, forma_pago")
+      .select("id, articulo, producto_nombre, cajetillas, monto, forma_pago, estado")
       .eq("ruta", ruta)
       .eq("codigo_cliente", codigoCliente)
       .eq("fecha", fechaAnterior);
@@ -137,7 +142,8 @@ function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) 
     return {
       fecha: fechaAnterior,
       formaPago: filasAnteriores?.[0]?.forma_pago || "EFECTIVO",
-      productos: filasAnteriores || [],
+      estado: filasAnteriores?.[0]?.estado || "ESPERA",
+      filas: filasAnteriores || [],
       totalCajetillas,
       totalMonto,
     };
@@ -162,15 +168,61 @@ function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) 
 
   const resultadoActual = resultados[subTab];
 
+  // Arma un objeto con la MISMA forma que un "ticket" normal — así se
+  // puede reutilizar CuerpoTicket tal cual, y las funciones
+  // cambiarFormaPago/cambiarEstado del padre sin tocarlas.
+  function construirTicketHistorial(res) {
+    return {
+      claveTicket: `historial_${ruta}_${codigoCliente}_${res.fecha}_${subTab}`,
+      parteLabel: null,
+      estado: res.estado,
+      formaPago: res.formaPago,
+      totalMonto: res.totalMonto,
+      totalCajetillas: res.totalCajetillas,
+      productos: res.filas.map((f) => ({
+        id: f.id, articulo: f.articulo, nombre: f.producto_nombre || f.articulo,
+        cajetillas: Number(f.cajetillas) || 0, monto: Number(f.monto) || 0,
+      })),
+      ventaOriginal: { ruta, codigoCliente, cliente, fecha: res.fecha, esOtc: subTab === "OTC" },
+    };
+  }
+
+  async function refrescarSubTab() {
+    const nuevo = await buscarUnTipo(subTab === "OTC");
+    setResultados((r) => ({ ...r, [subTab]: nuevo }));
+  }
+
+  async function manejarCambiarFormaPago(nuevaFormaPago) {
+    if (!resultadoActual || resultadoActual === "sin_datos") return;
+    setProcesando(true);
+    try {
+      await onCambiarFormaPago(construirTicketHistorial(resultadoActual), nuevaFormaPago);
+      await refrescarSubTab();
+    } finally {
+      setProcesando(false);
+    }
+  }
+
+  async function manejarCambiarEstado(nuevoEstado) {
+    if (!resultadoActual || resultadoActual === "sin_datos") return;
+    setProcesando(true);
+    try {
+      await onCambiarEstado(construirTicketHistorial(resultadoActual), nuevoEstado);
+      await refrescarSubTab();
+    } finally {
+      setProcesando(false);
+    }
+  }
+
   return (
-    <div style={{ marginBottom: 12 }} onClick={(e) => e.stopPropagation()}>
+    <div style={{ marginBottom: 14 }} onClick={(e) => e.stopPropagation()}>
       <button className="btn-ghost" style={{ fontSize: 11 }} disabled={cargando} onClick={buscar}>
         <History size={12} style={{ verticalAlign: "-2px" }} /> {cargando ? "Buscando..." : abierto ? "Ocultar última compra anterior" : "Ver última compra anterior"}
       </button>
       {errorBusqueda && <div style={{ fontSize: 11, color: "#FF6B6B", marginTop: 6 }}>{errorBusqueda}</div>}
 
       {abierto && buscado && (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 10 }}>
           <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             <button className={subTab === "PROD" ? "btn" : "btn-ghost"} style={{ fontSize: 10.5, padding: "4px 10px" }} onClick={() => setSubTab("PROD")}>
               Productos
@@ -187,28 +239,174 @@ function UltimaCompraCredito({ ruta, codigoCliente, fechaActual, esOtcActual }) 
           )}
 
           {resultadoActual && resultadoActual !== "sin_datos" && (
-            <div className="card" style={{ padding: 12, border: "1px solid #2A3852" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-                <div style={{ fontSize: 11.5, color: "#9AA7BD" }}>Última compra {subTab === "OTC" ? "OTC" : "de producto"} anterior · {resultadoActual.fecha}</div>
-                <span style={{ fontSize: 10.5, fontWeight: 700, color: COLOR_FORMA_PAGO[resultadoActual.formaPago] || "#E8EDF5" }}>{resultadoActual.formaPago}</span>
+            // Marco intencionalmente distinto al del ticket actual (línea
+            // punteada azul + fondo apenas teñido, sin el dorado de
+            // CRÉDITO) para que a simple vista quede claro que esto es la
+            // compra ANTERIOR, no la que se está capturando ahora.
+            <div style={{ border: "1px dashed #5AA9E6", borderRadius: 12, padding: 14, background: "rgba(90,169,230,0.06)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#5AA9E6", letterSpacing: 0.5 }}>
+                  COMPRA ANTERIOR · {resultadoActual.fecha}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    value={resultadoActual.formaPago || "EFECTIVO"}
+                    onChange={(e) => manejarCambiarFormaPago(e.target.value)}
+                    disabled={procesando || resultadoActual.estado === "FACTURADO"}
+                    title={resultadoActual.estado === "FACTURADO" ? "Ya está facturada — no se puede cambiar la forma de pago" : undefined}
+                    style={{
+                      fontSize: 11, fontWeight: 700, padding: "5px 7px",
+                      color: COLOR_FORMA_PAGO[resultadoActual.formaPago] || "#E8EDF5",
+                      opacity: (procesando || resultadoActual.estado === "FACTURADO") ? 0.6 : 1,
+                    }}
+                  >
+                    <option value="EFECTIVO">EFECTIVO</option>
+                    <option value="CREDITO">CRÉDITO</option>
+                    <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                  </select>
+                  <select
+                    value={resultadoActual.estado || "ESPERA"}
+                    onChange={(e) => manejarCambiarEstado(e.target.value)}
+                    disabled={procesando}
+                    style={{ fontSize: 11, fontWeight: 700, padding: "5px 7px", color: COLOR_ESTADO[resultadoActual.estado] || "#E8EDF5", opacity: procesando ? 0.6 : 1 }}
+                  >
+                    <option value="ESPERA">ESPERA</option>
+                    <option value="FACTURADO">FACTURADO</option>
+                    <option value="OBSERVACION">OBSERVACIÓN</option>
+                  </select>
+                </div>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-                {resultadoActual.productos.map((p, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#C6CFE0", gap: 8 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.articulo === "OTC" ? "Venta OTC" : `${p.articulo} — ${p.producto_nombre || p.articulo}`}</span>
-                    <span style={{ whiteSpace: "nowrap" }}>{p.articulo !== "OTC" ? `${num(p.cajetillas)} caj. · ` : ""}{money(p.monto)}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, borderTop: "1px solid #1E2A42", paddingTop: 6 }}>
-                <span style={{ color: "#9AA7BD" }}>{resultadoActual.totalCajetillas > 0 ? `${num(resultadoActual.totalCajetillas)} caj. total` : ""}</span>
-                <span style={{ color: "#F2B134" }}>{money(resultadoActual.totalMonto)}</span>
-              </div>
+              {procesando && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: "#5AA9E6", marginBottom: 10 }}>
+                  <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> Guardando...
+                </div>
+              )}
+              <CuerpoTicket ticket={construirTicketHistorial(resultadoActual)} />
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+function textoParaCopiar(ticket) {
+  const venta = ticket.ventaOriginal;
+  const { distribucionBruta, distribucionNeta, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
+  const lineas = [
+    `Cliente: ${venta.codigoCliente}${venta.cliente ? " — " + venta.cliente : ""}${venta.esOtc ? " (OTC)" : ""}${ticket.parteLabel ? ` (ticket ${ticket.parteLabel})` : ""}`,
+    `Ruta: ${venta.ruta}   Fecha: ${venta.fecha}   Forma de pago: ${venta.formaPago || "EFECTIVO"}`,
+    "",
+    "Productos:",
+    ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
+    "",
+    `Total cajetillas: ${num(ticket.totalCajetillas)}`,
+    `Total del ticket: ${money(ticket.totalMonto + distribucionBruta)}`,
+    "",
+    ...(venta.esOtc
+      ? [`OTC · sin IVA (sin costo de distribución): ${money(precioProductoNeto)}`]
+      : [
+          `Distribución (${num(ticket.totalCajetillas)} caj. × $${COSTO_DISTRIBUCION_UNITARIO}), sin IVA: ${money(distribucionNeta)}`,
+          "",
+          `Comprobación: ${money(ticket.totalMonto)} (productos) + ${money(distribucionBruta)} (distribución) = ${money(ticket.totalMonto + distribucionBruta)}`,
+        ]),
+  ];
+  return lineas.join("\n");
+}
+
+// Cuerpo completo de un ticket — tabla "PARA CAPTURAR", caja de
+// distribución (u OTC), totales y comprobación con "Copiar todo". Es
+// EXACTAMENTE lo mismo que se ve en un ticket normal, así que se
+// reutiliza tanto en la lista principal como dentro del panel de
+// "última compra anterior", para que se vea con todo el detalle tal cual.
+function CuerpoTicket({ ticket }) {
+  const venta = ticket.ventaOriginal;
+  const { distribucionBruta, distribucionNeta, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
+  return (
+    <>
+      <div style={{ marginBottom: 14 }}>
+        <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
+            <thead>
+              <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+                <th style={{ padding: "4px 8px 4px 0" }}>Código FA</th>
+                <th>Producto</th>
+                <th>Cajetillas</th>
+                <th>Costo unitario</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ticket.productos.map((p, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
+                  <td style={{ padding: "6px 8px 6px 0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="mono" style={{ color: "#F2B134" }}>{p.articulo}</span>
+                      <BotonCopiar texto={p.articulo} etiqueta="" />
+                    </div>
+                  </td>
+                  <td style={{ color: "#E8EDF5" }}>{p.nombre}</td>
+                  <td className="mono">{num(p.cajetillas)}</td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="mono" style={{ color: "#3DDC97" }}>{money(costoUnitarioNeto(p.monto, p.cajetillas))}</span>
+                      <BotonCopiar texto={money(costoUnitarioNeto(p.monto, p.cajetillas))} etiqueta="" />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {!venta.esOtc && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700 }}>
+              DISTRIBUCIÓN ({num(ticket.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO}) · SIN IVA
+            </div>
+            <BotonCopiar texto={money(distribucionNeta)} etiqueta="" />
+          </div>
+          <div className="mono" style={{ fontSize: 18, color: "#5AA9E6" }}>{money(distribucionNeta)}</div>
+        </div>
+      )}
+      {venta.esOtc && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 11, color: "#9AA7BD", fontWeight: 700 }}>OTC · SIN IVA (sin costo de distribución)</div>
+            <BotonCopiar texto={money(precioProductoNeto)} etiqueta="" />
+          </div>
+          <div className="mono" style={{ fontSize: 18, color: "#3DDC97" }}>{money(precioProductoNeto)}</div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL CAJETILLAS{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
+            <BotonCopiar texto={num(ticket.totalCajetillas)} etiqueta="" />
+          </div>
+          <div className="mono" style={{ fontSize: 18 }}>{num(ticket.totalCajetillas)}</div>
+        </div>
+        <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL DEL TICKET{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
+            <BotonCopiar texto={money(ticket.totalMonto + distribucionBruta)} etiqueta="" />
+          </div>
+          <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto + distribucionBruta)}</div>
+        </div>
+      </div>
+
+      {!venta.esOtc && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <div style={{ fontSize: 10.5, color: "#5b6478" }}>
+            Comprobación: {money(ticket.totalMonto)} (productos) + {money(distribucionBruta)} (distribución) = {money(ticket.totalMonto + distribucionBruta)}
+          </div>
+          <BotonCopiar texto={textoParaCopiar(ticket)} etiqueta="Copiar todo" />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1023,30 +1221,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
   const hayNuevasPrioritarias = nuevosPrioritarioClaves.size > 0;
   const hayNuevasNormal = nuevosNormalClaves.size > 0;
 
-  function textoParaCopiar(ticket) {
-    const venta = ticket.ventaOriginal;
-    const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
-    const lineas = [
-      `Cliente: ${venta.codigoCliente}${venta.cliente ? " — " + venta.cliente : ""}${venta.esOtc ? " (OTC)" : ""}${ticket.parteLabel ? ` (ticket ${ticket.parteLabel})` : ""}`,
-      `Ruta: ${venta.ruta}   Fecha: ${venta.fecha}   Forma de pago: ${venta.formaPago || "EFECTIVO"}`,
-      "",
-      "Productos:",
-      ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
-      "",
-      `Total cajetillas: ${num(ticket.totalCajetillas)}`,
-      `Total del ticket: ${money(ticket.totalMonto + distribucionBruta)}`,
-      "",
-      ...(venta.esOtc
-        ? [`OTC · sin IVA (sin costo de distribución): ${money(precioProductoNeto)}`]
-        : [
-            `Distribución (${num(ticket.totalCajetillas)} caj. × $${COSTO_DISTRIBUCION_UNITARIO}), sin IVA: ${money(distribucionNeta)}`,
-            "",
-            `Comprobación: ${money(ticket.totalMonto)} (productos) + ${money(distribucionBruta)} (distribución) = ${money(ticket.totalMonto + distribucionBruta)}`,
-          ]),
-    ];
-    return lineas.join("\n");
-  }
-
   return (
     <div style={{ maxWidth: 920, width: "100%", boxSizing: "border-box", margin: "0 auto", padding: "24px 16px 60px", overflowX: "hidden" }}>
       <style>{`
@@ -1237,7 +1411,6 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
             const venta = ticket.ventaOriginal;
             const esPrioritaria = tab === "prioritario";
             const esNueva = esPrioritaria ? nuevosPrioritarioClaves.has(venta.clave) : nuevosNormalClaves.has(venta.clave);
-            const { distribucionBruta, ivaDistribucion, distribucionNeta, subtotalProducto, ivaProducto, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
             return (
               <div
                 key={ticket.claveTicket}
@@ -1329,93 +1502,15 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
                   <UltimaCompraCredito
                     ruta={venta.ruta}
                     codigoCliente={venta.codigoCliente}
+                    cliente={venta.cliente}
                     fechaActual={venta.fecha}
                     esOtcActual={venta.esOtc}
+                    onCambiarFormaPago={cambiarFormaPago}
+                    onCambiarEstado={cambiarEstado}
                   />
                 )}
 
-                <div style={{ marginBottom: 14 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#3DDC97", marginBottom: 6 }}>PARA CAPTURAR · SIN IVA</div>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 420 }}>
-                      <thead>
-                        <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                          <th style={{ padding: "4px 8px 4px 0" }}>Código FA</th>
-                          <th>Producto</th>
-                          <th>Cajetillas</th>
-                          <th>Costo unitario</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ticket.productos.map((p, i) => (
-                          <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
-                            <td style={{ padding: "6px 8px 6px 0" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span className="mono" style={{ color: "#F2B134" }}>{p.articulo}</span>
-                                <BotonCopiar texto={p.articulo} etiqueta="" />
-                              </div>
-                            </td>
-                            <td style={{ color: "#E8EDF5" }}>{p.nombre}</td>
-                            <td className="mono">{num(p.cajetillas)}</td>
-                            <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span className="mono" style={{ color: "#3DDC97" }}>{money(costoUnitarioNeto(p.monto, p.cajetillas))}</span>
-                                <BotonCopiar texto={money(costoUnitarioNeto(p.monto, p.cajetillas))} etiqueta="" />
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {!venta.esOtc && (
-                  <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 11, color: "#5AA9E6", fontWeight: 700 }}>
-                        DISTRIBUCIÓN ({num(ticket.totalCajetillas)} caj. × ${COSTO_DISTRIBUCION_UNITARIO}) · SIN IVA
-                      </div>
-                      <BotonCopiar texto={money(distribucionNeta)} etiqueta="" />
-                    </div>
-                    <div className="mono" style={{ fontSize: 18, color: "#5AA9E6" }}>{money(distribucionNeta)}</div>
-                  </div>
-                )}
-                {venta.esOtc && (
-                  <div className="card" style={{ padding: "10px 14px", marginBottom: 12 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 11, color: "#9AA7BD", fontWeight: 700 }}>OTC · SIN IVA (sin costo de distribución)</div>
-                      <BotonCopiar texto={money(precioProductoNeto)} etiqueta="" />
-                    </div>
-                    <div className="mono" style={{ fontSize: 18, color: "#3DDC97" }}>{money(precioProductoNeto)}</div>
-                  </div>
-                )}
-
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-                  <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL CAJETILLAS{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
-                      <BotonCopiar texto={num(ticket.totalCajetillas)} etiqueta="" />
-                    </div>
-                    <div className="mono" style={{ fontSize: 18 }}>{num(ticket.totalCajetillas)}</div>
-                  </div>
-                  <div className="card" style={{ padding: "10px 14px", flex: "1 1 160px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 10, color: "#9AA7BD" }}>TOTAL DEL TICKET{ticket.parteLabel ? ` (${ticket.parteLabel})` : ""}</div>
-                      <BotonCopiar texto={money(ticket.totalMonto + distribucionBruta)} etiqueta="" />
-                    </div>
-                    <div className="mono" style={{ fontSize: 18, color: "#F2B134" }}>{money(ticket.totalMonto + distribucionBruta)}</div>
-                  </div>
-                </div>
-
-                {!venta.esOtc && (
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <div style={{ fontSize: 10.5, color: "#5b6478" }}>
-                      Comprobación: {money(ticket.totalMonto)} (productos) + {money(distribucionBruta)} (distribución) = {money(ticket.totalMonto + distribucionBruta)}
-                    </div>
-                    <BotonCopiar texto={textoParaCopiar(ticket)} etiqueta="Copiar todo" />
-                  </div>
-                )}
+                <CuerpoTicket ticket={ticket} />
               </div>
             );
           })}
