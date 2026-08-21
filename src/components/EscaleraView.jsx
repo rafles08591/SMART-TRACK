@@ -59,6 +59,10 @@ const TIPS_VOLUMEN_TOTAL = [
 ];
 
 function tipsPara(peldano) {
+  if (peldano.tipo === "manual") {
+    const base = peldano.detalles ? [peldano.detalles] : [];
+    return [...base, "Este es un objetivo especial que te asignó tu supervisor o gerente para hoy — por eso va primero en tu escalera."];
+  }
   if (peldano.tipo === "otc") return TIPS_OTC;
   if (peldano.tipo === "total") return TIPS_VOLUMEN_TOTAL;
   return TIPS_MARCA[peldano.marcaKey] || TIPS_GENERALES;
@@ -82,6 +86,21 @@ export function construirPeldanos(vendedor) {
   const peldanos = [];
   if (!hoy) return peldanos;
 
+  // Objetivos manuales (fijados por Supervisor-1 / Gerente) van primero
+  // siempre — son la prioridad del día, antes que los objetivos
+  // automáticos. Su avance ya viene calculado con datos reales desde
+  // App.tsx (hoy.objetivosManuales).
+  (hoy.objetivosManuales || []).forEach((o) => {
+    if (o.objetivo > 0) {
+      peldanos.push({
+        id: `manual_${o.id}`, tipo: "manual", grupo: "OBJETIVO PRINCIPAL", label: o.nombre,
+        unit: o.unidad === "money" ? "money" : "units", objetivo: o.objetivo, avance: o.avance,
+        restante: Math.max(o.objetivo - o.avance, 0), pct: pct(o.avance, o.objetivo),
+        detalles: o.detalles || "", prioridad: true,
+      });
+    }
+  });
+
   if (hoy.volumen?.objetivo > 0) {
     const { objetivo, vendido } = hoy.volumen;
     peldanos.push({ id: "dia_volumen", tipo: "total", grupo: "VOLUMEN DEL DÍA", label: "Volumen de hoy", unit: "units", objetivo, avance: vendido, restante: Math.max(objetivo - vendido, 0), pct: pct(vendido, objetivo) });
@@ -100,14 +119,18 @@ export function construirPeldanos(vendedor) {
 }
 
 export function ordenarPeldanos(peldanos, orden) {
-  const copia = [...peldanos];
+  // Los objetivos con prioridad (manuales) siempre van primero, en el
+  // orden en que se crearon; el resto se ordena fácil/difícil como
+  // siempre. Así "objetivo principal" es de verdad el primer peldaño.
+  const prioritarios = peldanos.filter((p) => p.prioridad);
+  const normales = peldanos.filter((p) => !p.prioridad);
   // "Fácil primero" = el que menos le falta por avance porcentual primero.
   // "Difícil primero" = el que menos ha avanzado (más lejos de su meta) primero.
-  copia.sort((a, b) => (orden === "facil" ? b.pct - a.pct : a.pct - b.pct));
-  return copia;
+  normales.sort((a, b) => (orden === "facil" ? b.pct - a.pct : a.pct - b.pct));
+  return [...prioritarios, ...normales];
 }
 
-export const COLOR_GRUPO = { "VOLUMEN DEL DÍA": "#7CC4FF", "MARCA DEL DÍA": "#3DDC97", "OTC DEL DÍA": "#F2B134" };
+export const COLOR_GRUPO = { "OBJETIVO PRINCIPAL": "#C084FC", "VOLUMEN DEL DÍA": "#7CC4FF", "MARCA DEL DÍA": "#3DDC97", "OTC DEL DÍA": "#F2B134" };
 
 /* -----------------------------------------------------------------------
    Efectos visuales — keyframes compartidos, la escalera SVG animada y el
@@ -278,6 +301,40 @@ export default function EscaleraView({ data, persistFresco, vendedor, rutaPropia
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progreso?.orden, pendientes.length, fechaHoy]);
+
+  // Resultado del día, INDEPENDIENTE del juego (orden elegido, saltos,
+  // etc.) — se guarda siempre que haya objetivos de hoy, para que
+  // Supervisor-1 y Gerente puedan consultar cómo le fue a la ruta ese día
+  // aunque, al día siguiente, la escalera del vendedor ya se haya
+  // reiniciado sola con los nuevos objetivos. Se sobreescribe mientras
+  // sigue siendo "hoy" (así refleja avance en vivo); en cuanto cambia la
+  // fecha, ese registro queda congelado como historial.
+  const conquistadosHoy = peldanos.filter((p) => p.pct >= 100).length;
+  useEffect(() => {
+    if (!fechaHoy || peldanos.length === 0) return;
+    const previo = data.escaleraHistorial?.[rutaPropia]?.[fechaHoy];
+    if (previo && previo.conquistados === conquistadosHoy && previo.total === peldanos.length) return;
+    persistFresco((fresca) => {
+      const actual = fresca.escaleraHistorial || {};
+      const propios = actual[rutaPropia] || {};
+      return {
+        escaleraHistorial: {
+          ...actual,
+          [rutaPropia]: {
+            ...propios,
+            [fechaHoy]: {
+              fecha: fechaHoy,
+              conquistados: conquistadosHoy,
+              total: peldanos.length,
+              efectividadPct: vendedor?.hoy?.efectividadPct ?? null,
+              detalle: peldanos.map((p) => ({ label: p.label, pct: Math.round(p.pct) })),
+            },
+          },
+        },
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fechaHoy, conquistadosHoy, peldanos.length]);
 
   const observaciones = data.escaleraObservaciones?.[rutaPropia] || [];
   const ultimaObservacion = observaciones[0] || null;
