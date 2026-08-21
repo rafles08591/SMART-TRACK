@@ -799,7 +799,7 @@ export default function App() {
       // registros crudos (propiasAvanceDia/propiasOtcDia) que ya se usan
       // para el resto de "hoy", para que en la Escalera se vean como un
       // peldaño más, prioritario, con datos reales — nunca a mano.
-      const objetivosManualesDef = (data.escaleraObjetivosManuales || []).filter(
+      const objetivosManualesDef = (data?.escaleraObjetivosManuales || []).filter(
         (o) => o.activo !== false && (o.rutas === "todas" || (o.rutas || []).includes(v.name))
       );
       const objetivosManualesHoy = objetivosManualesDef.map((o) => {
@@ -1003,7 +1003,7 @@ export default function App() {
     const bottom3Nombres = rankingDesempeno.slice(0, 3).map((v) => v.name);
 
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
-  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data.escaleraObjetivosManuales]);
+  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data?.escaleraObjetivosManuales]);
 
   async function procesarFilasOtcSemanal(filas) {
     const registros = convertirFilasOtcDia(filas);
