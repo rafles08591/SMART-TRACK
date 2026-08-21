@@ -986,31 +986,62 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       alert("Esta venta ya está facturada — no se puede cambiar la forma de pago. Si es un error, primero regrésala a ESPERA.");
       return;
     }
-    const ids = ticket.productos.map((p) => p.id).filter(Boolean);
-    if (ids.length === 0) return;
+    const venta = ticket.ventaOriginal;
+    const formaAnterior = ticket.formaPago || "EFECTIVO";
+    const pasaAEfectivo = nuevaFormaPago === "EFECTIVO" && formaAnterior !== "EFECTIVO";
+    const pasaFueraDeEfectivo = nuevaFormaPago !== "EFECTIVO" && formaAnterior === "EFECTIVO";
 
     // Si pasa de CRÉDITO/TRANSFERENCIA a EFECTIVO y el total (con
     // distribución incluida) supera el límite de $2000, antes no hacía
-    // falta dividirlo — ahora sí. Se le quita el folio a esas filas (solo
-    // a ESTAS, las demás de otros tickets no se tocan) para que
-    // asignarFoliosTickets las vuelva a tomar como "sin folio" y las
-    // reparta en partes ≤ $2000, igual que ya hace con ventas que nacen
-    // en efectivo desde el principio.
-    const formaAnterior = ticket.formaPago || "EFECTIVO";
+    // falta dividirlo — ahora sí.
     const { distribucionBruta } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
     const totalConDistribucion = ticket.totalMonto + distribucionBruta;
-    const necesitaRecalcular =
-      nuevaFormaPago === "EFECTIVO" &&
-      formaAnterior !== "EFECTIVO" &&
-      !ticket.ventaOriginal.esOtc &&
-      totalConDistribucion > LIMITE_TICKET_EFECTIVO;
+    const necesitaDividir = pasaAEfectivo && !venta.esOtc && totalConDistribucion > LIMITE_TICKET_EFECTIVO;
 
-    if (necesitaRecalcular) setRecalculandoClaves((s) => new Set(s).add(ticket.claveTicket));
+    // Caso inverso: si YA estaba dividido en partes (era efectivo > $2000)
+    // y pasa a CRÉDITO/TRANSFERENCIA, esas partes ya no tienen razón de
+    // existir — hay que juntar TODO el ticket (todas las partes, no solo
+    // la que se está viendo) en uno solo. Por eso aquí se trae el grupo
+    // completo directo de Supabase en vez de usar solo ticket.productos.
+    const necesitaUnificar = pasaFueraDeEfectivo && !venta.esOtc && ticket.necesitaDividir;
 
-    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago, ...(necesitaRecalcular ? { ticket_folio: null, ticket_parte: null, ticket_de: null } : {}) } : f)));
+    let ids;
+    if (necesitaUnificar) {
+      let qGrupo = supabase
+        .from("ventas_facturas")
+        .select("id, estado")
+        .eq("ruta", venta.ruta)
+        .eq("codigo_cliente", venta.codigoCliente)
+        .eq("fecha", venta.fecha);
+      qGrupo = venta.esOtc ? qGrupo.eq("articulo", "OTC") : qGrupo.neq("articulo", "OTC");
+      const { data: filasGrupo, error: errGrupo } = await qGrupo;
+      if (errGrupo) {
+        alert("No se pudo leer el ticket completo para unificarlo: " + errGrupo.message);
+        return;
+      }
+      if ((filasGrupo || []).some((f) => f.estado === "FACTURADO")) {
+        alert("Alguna de las partes de este ticket ya está facturada — no se puede unificar. Regrésala a ESPERA primero.");
+        return;
+      }
+      ids = (filasGrupo || []).map((f) => f.id);
+    } else {
+      ids = ticket.productos.map((p) => p.id).filter(Boolean);
+    }
+    if (ids.length === 0) return;
+
+    // En ambos casos (dividir o unificar) se le quita el folio a las filas
+    // afectadas para que asignarFoliosTickets las vuelva a tomar como
+    // "sin folio" y las reparta desde cero con la regla que corresponda:
+    // en varias partes ≤ $2000 si ahora es efectivo, o en una sola si ya
+    // no hace falta dividir.
+    const necesitaResetFolio = necesitaDividir || necesitaUnificar;
+
+    if (necesitaResetFolio) setRecalculandoClaves((s) => new Set(s).add(ticket.claveTicket));
+
+    setFilas((fs) => fs.map((f) => (ids.includes(f.id) ? { ...f, forma_pago: nuevaFormaPago, ...(necesitaResetFolio ? { ticket_folio: null, ticket_parte: null, ticket_de: null } : {}) } : f)));
 
     const payload = { forma_pago: nuevaFormaPago };
-    if (necesitaRecalcular) {
+    if (necesitaResetFolio) {
       payload.ticket_folio = null;
       payload.ticket_parte = null;
       payload.ticket_de = null;
@@ -1027,7 +1058,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
       return;
     }
 
-    if (necesitaRecalcular && asignarFoliosTickets) {
+    if (necesitaResetFolio && asignarFoliosTickets) {
       await asignarFoliosTickets();
       setRecalculandoClaves((s) => { const n = new Set(s); n.delete(ticket.claveTicket); return n; });
     }
@@ -1488,7 +1519,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
 
                 {recalculandoClaves.has(ticket.claveTicket) && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5AA9E6", marginBottom: 10 }}>
-                    <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Recalculando la división del ticket en partes ≤ {money(LIMITE_TICKET_EFECTIVO)}...
+                    <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Actualizando la división del ticket...
                   </div>
                 )}
 
