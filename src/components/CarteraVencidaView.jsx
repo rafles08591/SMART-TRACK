@@ -48,7 +48,9 @@ const COLOR_BORDE = "#2A3852";
 
 function formatFecha(d) {
   if (!d) return "—";
-  return d.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const fecha = d instanceof Date ? d : new Date(d);
+  if (isNaN(fecha)) return "—";
+  return fecha.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function Badge({ children, color }) {
@@ -107,7 +109,7 @@ function FilaRegistro({ r, hoy }) {
 function FilaRuta({ g, registros, diasUmbral, hoy, expandido, onToggle }) {
   const detalle = registros
     .filter((r) => r.rutaCodigo === g.rutaCodigo && (esVencido(r) || esProximoAVencer(r, diasUmbral, hoy)))
-    .sort((a, b) => (esVencido(a) === esVencido(b) ? a.vence - b.vence : esVencido(a) ? -1 : 1));
+    .sort((a, b) => (esVencido(a) === esVencido(b) ? new Date(a.vence) - new Date(b.vence) : esVencido(a) ? -1 : 1));
 
   return (
     <div className="card" style={{ padding: 0, marginBottom: 10, overflow: "hidden" }}>
@@ -221,7 +223,7 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
   if (rol === "vendedor") {
     const misRegistros = registros
       .filter((r) => esVencido(r) || esProximoAVencer(r, diasUmbral, hoy))
-      .sort((a, b) => (esVencido(a) === esVencido(b) ? a.vence - b.vence : esVencido(a) ? -1 : 1));
+      .sort((a, b) => (esVencido(a) === esVencido(b) ? new Date(a.vence) - new Date(b.vence) : esVencido(a) ? -1 : 1));
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
