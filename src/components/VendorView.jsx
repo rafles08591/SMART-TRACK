@@ -104,7 +104,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         setTab={setTab}
         tabs={OBJETIVO_TABS.filter((t) => {
           if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
-          return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad"].includes(t.key);
+          return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
         })}
         estadoTabs={{
           rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
