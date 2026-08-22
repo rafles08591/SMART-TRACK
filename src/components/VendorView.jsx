@@ -27,6 +27,7 @@ import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
 import EscaleraView from "./EscaleraView";
 import CarteraVencidaView from "./CarteraVencidaView";
+import AltaClienteView from "./AltaClienteView";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
@@ -81,7 +82,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -150,6 +151,15 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <EscaleraView data={data} persistFresco={persistFresco} vendedor={vendedor} rutaPropia={rutaCodigo} />
       ) : tab === "cartera_vencida" ? (
         <CarteraVencidaView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "alta_cliente" ? (
+        <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
+      ) : !m ? (
+        // Guardia de seguridad: si algún día se agrega una pestaña nueva a
+        // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
+        // evita que truene toda la app.
+        <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
+          Esta pestaña ("{tab}") todavía no tiene una vista configurada aquí.
+        </div>
       ) : (
         <>
           <RoadProgress pct={m.avancePct} />
