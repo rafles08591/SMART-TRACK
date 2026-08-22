@@ -81,21 +81,35 @@ export function pct(vendido, objetivo) {
   return objetivo > 0 ? Math.min((vendido / objetivo) * 100, 100) : 0;
 }
 
-export function construirPeldanos(vendedor) {
+export function construirPeldanos(vendedor, definicionesManuales = []) {
   const hoy = vendedor?.hoy;
   const peldanos = [];
   if (!hoy) return peldanos;
 
+  // Búsqueda rápida de la definición completa (con sus reinicios) por id,
+  // para saber si Supervisor-1/Gerente reiniciaron este objetivo para esta
+  // ruta específica.
+  const defsPorId = {};
+  (definicionesManuales || []).forEach((d) => { defsPorId[d.id] = d; });
+
   // Objetivos manuales (fijados por Supervisor-1 / Gerente) van primero
   // siempre — son la prioridad del día, antes que los objetivos
-  // automáticos. Su avance ya viene calculado con datos reales desde
-  // App.tsx (hoy.objetivosManuales).
+  // automáticos. Su avance base ya viene calculado con datos reales desde
+  // App.tsx (hoy.objetivosManuales) — es un acumulado desde que se creó el
+  // objetivo, NO se reinicia solo cada día (a propósito, porque puede durar
+  // varios días). Si Supervisor-1/Gerente le dieron "Reiniciar a 0" a este
+  // objetivo para esta ruta, se le resta ese punto de reinicio al avance
+  // real, para que el vendedor vea el contador en 0 sin tocar las ventas
+  // reales de nadie.
   (hoy.objetivosManuales || []).forEach((o) => {
     if (o.objetivo > 0) {
+      const def = defsPorId[o.id];
+      const puntoReinicio = def?.reinicios?.[vendedor.name] || 0;
+      const avanceAjustado = Math.max(0, o.avance - puntoReinicio);
       peldanos.push({
         id: `manual_${o.id}`, tipo: "manual", grupo: "OBJETIVO PRINCIPAL", label: o.nombre,
-        unit: o.unidad === "money" ? "money" : "units", objetivo: o.objetivo, avance: o.avance,
-        restante: Math.max(o.objetivo - o.avance, 0), pct: pct(o.avance, o.objetivo),
+        unit: o.unidad === "money" ? "money" : "units", objetivo: o.objetivo, avance: avanceAjustado,
+        restante: Math.max(o.objetivo - avanceAjustado, 0), pct: pct(avanceAjustado, o.objetivo),
         detalles: o.detalles || "", prioridad: true,
       });
     }
@@ -239,7 +253,10 @@ function Confeti() {
 
 export default function EscaleraView({ data, persistFresco, vendedor, rutaPropia }) {
   const fechaHoy = vendedor?.hoy?.fecha || null;
-  const peldanos = useMemo(() => construirPeldanos(vendedor), [vendedor]);
+  const peldanos = useMemo(
+    () => construirPeldanos(vendedor, data.escaleraObjetivosManuales),
+    [vendedor, data.escaleraObjetivosManuales]
+  );
   const progresoGuardado = data.escaleraProgreso?.[rutaPropia] || null;
   // Si cambió el día (o nunca se había abierto), el conteo de saltos y el
   // puntero se reinician solos — pero se conserva la preferencia de orden
