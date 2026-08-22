@@ -283,8 +283,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "otc_ventas")
-                : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente" && t.key !== "otc_ventas")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
+                : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
             }
             estadoTabs={estadoTabsActividades}
           />
