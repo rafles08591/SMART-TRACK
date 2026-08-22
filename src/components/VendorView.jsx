@@ -27,6 +27,7 @@ import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
 import EscaleraView from "./EscaleraView";
 import CarteraVencidaView from "./CarteraVencidaView";
+import OtcVentasView from "./OtcVentasView";
 import AltaClienteView from "./AltaClienteView";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
@@ -82,7 +83,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -153,6 +154,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <CarteraVencidaView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
       ) : tab === "alta_cliente" ? (
         <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
+      ) : tab === "otc_ventas" ? (
+        <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
       ) : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
         // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
