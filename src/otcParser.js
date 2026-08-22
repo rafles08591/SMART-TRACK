@@ -102,6 +102,7 @@ export function diasDisponibles(registros, rutaCodigo) {
     if (rutaCodigo && r.rutaCodigo !== rutaCodigo) continue;
     const f = aFecha(r.fecha);
     if (!f) continue;
+    if (f.getDay() === 0) continue; // domingo — no es día laboral (Lun-Sáb), no se muestra como pestaña
     const key = f.toISOString().slice(0, 10);
     if (!set.has(key)) set.set(key, f);
   }
