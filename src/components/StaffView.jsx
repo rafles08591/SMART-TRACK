@@ -40,7 +40,7 @@ import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./
 import EscaleraStaffView from "./EscaleraStaffView";
 import CarteraVencidaView from "./CarteraVencidaView";
 import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
-import { generarScriptAltaClienteFase2 } from "../altaClienteScriptGenerator";
+import AltasClienteStaffView from "./AltasClienteStaffView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -108,48 +108,6 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [pwstActualizando, setPwstActualizando] = useState(false);
   const [pwstStatus, setPwstStatus] = useState("");
   const capturaPorRutaHoy = useCapturaImagen();
-
-  // Altas de cliente pendientes (Fase 2) — cuenta cuántas hay y arma el
-  // botón "Copiar script de Alta Cliente", igual que "Copiar script de
-  // KM": genera el script con las credenciales de Supabase y el nombre
-  // de quien lo copió ya metidos, listo para pegar en la consola del
-  // sitio externo.
-  const [altasClientePendientes, setAltasClientePendientes] = useState([]);
-  const [altaClienteScriptStatus, setAltaClienteScriptStatus] = useState("");
-  useEffect(() => {
-    if (tab !== "cargar") return;
-    let activo = true;
-    async function revisarAltasPendientes() {
-      try {
-        const { data: filas, error } = await supabase
-          .from("altas_cliente")
-          .select("id, nombre_negocio")
-          .eq("estatus", "pendiente");
-        if (!error && activo) setAltasClientePendientes(filas || []);
-      } catch (e) {
-        console.error("Error revisando altas de cliente pendientes:", e);
-      }
-    }
-    revisarAltasPendientes();
-    const intervalo = setInterval(revisarAltasPendientes, 30000);
-    return () => { activo = false; clearInterval(intervalo); };
-  }, [tab]);
-
-  async function copiarScriptAltaCliente() {
-    try {
-      const texto = generarScriptAltaClienteFase2({
-        supabaseUrl: supabase.supabaseUrl,
-        supabaseAnonKey: supabase.supabaseKey,
-        staffUsername: revisorNombre || staffUsername,
-      });
-      await navigator.clipboard.writeText(texto);
-      setAltaClienteScriptStatus("Copiado ✅ — pégalo en la consola de jmdresources");
-    } catch (e) {
-      setAltaClienteScriptStatus(`Error al copiar: ${e.message || e}`);
-    } finally {
-      setTimeout(() => setAltaClienteScriptStatus(""), 4000);
-    }
-  }
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -532,6 +490,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "cartera_vencida" ? (
             <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
+          ) : objTab === "altas_cliente" ? (
+            <AltasClienteStaffView revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
@@ -1046,20 +1006,6 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             {pedidosDiaStatus && (
               <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: pedidosDiaStatus.startsWith("Pedidos cargados") ? "#3DDC97" : "#FF6B6B" }}>
                 {pedidosDiaStatus.startsWith("Pedidos cargados") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {pedidosDiaStatus}
-              </span>
-            )}
-          </div>
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>ALTAS DE CLIENTE PENDIENTES</div>
-            <span style={{ fontSize: 12.5, color: altasClientePendientes.length > 0 ? "#F2B134" : "#9AA7BD" }}>
-              {altasClientePendientes.length} pendiente{altasClientePendientes.length === 1 ? "" : "s"}
-            </span>
-            <button className="btn" onClick={copiarScriptAltaCliente}>
-              <RefreshCw size={14} style={{ verticalAlign: "-2px" }} /> Copiar script de Alta Cliente
-            </button>
-            {altaClienteScriptStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: altaClienteScriptStatus.startsWith("Copiado") ? "#3DDC97" : "#FF6B6B" }}>
-                {altaClienteScriptStatus.startsWith("Copiado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {altaClienteScriptStatus}
               </span>
             )}
           </div>
