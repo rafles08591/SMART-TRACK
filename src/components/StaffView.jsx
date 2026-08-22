@@ -651,6 +651,21 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 </div>
               )}
             </div>
+          ) : objTab === "alta_cliente" ? (
+            // "Alta cliente" es solo para vendedores — el Staff no tiene
+            // botón para llegar aquí, pero se deja una rama explícita por
+            // seguridad, para nunca caer en el fallback de abajo (que
+            // asume que la pestaña es una meta de venta con avancePct).
+            <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
+              Esta sección es exclusiva de la vista de vendedor.
+            </div>
+          ) : !stats.total.tabs[objTab] ? (
+            // Guardia de seguridad: si algún día se agrega una pestaña
+            // nueva a OBJETIVO_TABS y se le olvida su propia rama aquí,
+            // esto evita que truene toda la app — solo muestra un aviso.
+            <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
+              Esta pestaña ("{objTab}") todavía no tiene una vista configurada aquí.
+            </div>
           ) : (
             <>
               <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
