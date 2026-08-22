@@ -41,6 +41,7 @@ import EscaleraStaffView from "./EscaleraStaffView";
 import CarteraVencidaView from "./CarteraVencidaView";
 import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
 import AltasClienteStaffView from "./AltasClienteStaffView";
+import OtcVentasView from "./OtcVentasView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -282,8 +283,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               esSupervisor2
                 ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
                 : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
-                : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
+                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "otc_ventas")
+                : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente" && t.key !== "otc_ventas")
             }
             estadoTabs={estadoTabsActividades}
           />
@@ -515,6 +516,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
           ) : objTab === "altas_cliente" ? (
             <AltasClienteStaffView revisorNombre={revisorNombre} />
+          ) : objTab === "otc_ventas" ? (
+            <OtcVentasView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
