@@ -17,7 +17,7 @@ import { supabase } from "../supabaseClient";
         import AltaClienteView from "./AltaClienteView";
         ...
         {tab === "altaCliente" && (
-          <AltaClienteView vendedorUsername={vendedorUsername} />
+          <AltaClienteView vendedorUsername={vendedorUsername} rutaCodigo={rutaCodigo} />
         )}
 
    3. Ajustar FONT_SANS / colores si tu VendorView usa clases de Tailwind en
@@ -79,17 +79,36 @@ const initialForm = {
 // Reverse geocoding con OpenStreetMap Nominatim — gratis, sin API key.
 // Solo pre-llena; el vendedor siempre puede corregir a mano antes de
 // guardar (la dirección exacta es responsabilidad de quien la captura).
+//
+// Se piden dos niveles de detalle (zoom 18 = edificio, zoom 16 = calle) y
+// se combinan: en muchas zonas de México, OpenStreetMap no tiene el
+// "house_number" de un domicilio exacto etiquetado, pero sí el nombre de
+// la calle a nivel más amplio — con esto se aprovecha lo que exista en
+// vez de dejar todo vacío si falta el dato más fino.
 // -------------------------------------------------------------------------
-async function reverseGeocode(lat, lon) {
-  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1&accept-language=es`;
+async function pedirNominatim(lat, lon, zoom) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1&zoom=${zoom}&accept-language=es`;
   const res = await fetch(url, { headers: { "Accept-Language": "es" } });
-  if (!res.ok) throw new Error("No se pudo obtener la dirección");
+  if (!res.ok) return {};
   const data = await res.json();
-  const a = data.address || {};
+  return data.address || {};
+}
+
+async function reverseGeocode(lat, lon) {
+  // zoom 18 = nivel edificio (más preciso, si existe el dato);
+  // zoom 16 = nivel calle (más probable que sí tenga el nombre de la vía).
+  const [fino, amplio] = await Promise.all([
+    pedirNominatim(lat, lon, 18),
+    pedirNominatim(lat, lon, 16),
+  ]);
+  // Combina: prioriza el resultado fino, pero rellena con el amplio lo
+  // que falte (típicamente el nombre de la calle cuando no hay número
+  // de casa etiquetado en OSM para ese punto exacto).
+  const a = { ...amplio, ...fino };
   return {
-    calle: a.road || a.pedestrian || a.residential || "",
+    calle: a.road || a.pedestrian || a.residential || a.footway || amplio.road || "",
     numero: a.house_number || "",
-    colonia: a.suburb || a.neighbourhood || a.quarter || "",
+    colonia: a.suburb || a.neighbourhood || a.quarter || a.residential || "",
     municipio: a.city || a.town || a.village || a.municipality || "",
     estado: a.state || "",
     codigoPostal: a.postcode || "",
@@ -132,7 +151,7 @@ function TextInput({ value, onChange, placeholder, type = "text" }) {
   );
 }
 
-export default function AltaClienteView({ vendedorUsername }) {
+export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
   const [form, setForm] = useState(initialForm);
   const [ubicando, setUbicando] = useState(false);
   const [ubicacionMsg, setUbicacionMsg] = useState("");
@@ -190,7 +209,11 @@ export default function AltaClienteView({ vendedorUsername }) {
             estado: dir.estado || f.estado,
             codigoPostal: dir.codigoPostal || f.codigoPostal,
           }));
-          setUbicacionMsg("Dirección sugerida — revísala y corrige lo que haga falta antes de guardar.");
+          if (!dir.numero) {
+            setUbicacionMsg("Dirección sugerida — el mapa no tiene registrado el número exacto de esta calle, agrégalo a mano. Revisa lo demás antes de guardar.");
+          } else {
+            setUbicacionMsg("Dirección sugerida — revísala y corrige lo que haga falta antes de guardar.");
+          }
         } catch (e) {
           setUbicacionMsg("Tomé tus coordenadas, pero no pude sugerir la dirección. Llénala a mano.");
         } finally {
@@ -264,6 +287,7 @@ export default function AltaClienteView({ vendedorUsername }) {
       // 3) Insertar registro — solo se guarda la URL, nunca base64.
       const { error: errInsert } = await supabase.from("altas_cliente").insert({
         vendedor_username: vendedorUsername,
+        ruta_codigo: rutaCodigo || null,
         nombre_negocio: form.nombreNegocio,
         nombre_cliente: form.nombreCliente,
         calle: form.calle,
