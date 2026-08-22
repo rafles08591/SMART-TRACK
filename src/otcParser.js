@@ -85,6 +85,9 @@ function agregarPorCodigo(regs) {
   const mapa = {};
   for (const r of regs) {
     if (!mapa[r.codigo]) mapa[r.codigo] = { codigo: r.codigo, articulo: r.articulo, piezas: 0, pesos: 0 };
+    // Si el registro que abrió el grupo no traía nombre (venía de antes del
+    // cambio en App.tsx) pero uno posterior sí, se completa con ese.
+    if (!mapa[r.codigo].articulo && r.articulo) mapa[r.codigo].articulo = r.articulo;
     mapa[r.codigo].piezas += r.totalUnidades;
     mapa[r.codigo].pesos += r.totalPesos;
   }
@@ -158,7 +161,9 @@ export function adaptarOtcCargado(registrosCargados) {
       rutaCompleta,
       vendedorNombre: "", // no viene en este formato — se completa en la vista con NOMBRES
       codigo: String(r.codigoArticulo || "").trim(),
-      articulo: "", // tampoco viene — se muestra solo el código
+      // Registros viejos (subidos antes de este cambio en App.tsx) no
+      // traen articulo — para esos se sigue mostrando solo el código.
+      articulo: String(r.articulo || "").trim(),
       unidadesVendidas: piezas,
       unidadesDevueltas: 0,
       totalUnidades: piezas,
@@ -179,6 +184,7 @@ export function detallePorProductoGlobal(registros) {
     if (!mapa[r.codigo]) {
       mapa[r.codigo] = { codigo: r.codigo, articulo: r.articulo, piezas: 0, pesos: 0, rutas: new Set() };
     }
+    if (!mapa[r.codigo].articulo && r.articulo) mapa[r.codigo].articulo = r.articulo;
     mapa[r.codigo].piezas += r.totalUnidades;
     mapa[r.codigo].pesos += r.totalPesos;
     mapa[r.codigo].rutas.add(r.rutaCodigo);
