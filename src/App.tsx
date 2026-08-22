@@ -1606,6 +1606,7 @@ export default function App() {
       // Dinero del rally / OTC: siempre TOTAL $
       const monto = Number(getVal(row, "TOTAL $", "Total $", "Total") || 0) || 0;
       const codigoArticulo = String(getVal(row, "Codigo", "Código") || "").trim();
+      const articulo = String(getVal(row, "Articulo", "Artículo") || "").trim();
 
       // Piezas del rally: SIEMPRE "Unidades<BR>Vendidas" (cantidad real).
       // NUNCA usar la columna "Unidades" sola — esa trae 1 (contador de línea).
@@ -1620,7 +1621,7 @@ export default function App() {
         ) || 0
       ) || 0;
 
-      registros.push({ fecha, vendedor, monto, codigoArticulo, unidadesVendidas });
+      registros.push({ fecha, vendedor, monto, codigoArticulo, articulo, unidadesVendidas });
     });
     return registros;
   }
