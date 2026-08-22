@@ -9,6 +9,8 @@ import {
   detalleCodigosSemana,
   totalesRuta,
   resumenSemanaPorRuta,
+  detallePorProductoGlobal,
+  ventasPorRutaDeProducto,
   tasaComisionOtc,
   cubreObjetivoOtc,
   comisionOtc,
@@ -45,7 +47,7 @@ function formatDia(d) {
   return d.toLocaleDateString("es-MX", { weekday: "short", day: "2-digit" }).replace(".", "");
 }
 
-function TablaCodigos({ filas }) {
+function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
   if (filas.length === 0) {
     return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>Sin datos.</div>;
   }
@@ -54,13 +56,46 @@ function TablaCodigos({ filas }) {
       <div style={{ display: "flex", fontSize: 10.5, color: COLOR_MUTED, textTransform: "uppercase", letterSpacing: "0.04em", padding: "0 4px" }}>
         <span style={{ flex: "0 0 62px" }}>Código</span>
         <span style={{ flex: 1 }}>Artículo</span>
+        {mostrarRutas && <span style={{ flex: "0 0 46px", textAlign: "right" }}>Rutas</span>}
         <span style={{ flex: "0 0 56px", textAlign: "right" }}>Pz</span>
         <span style={{ flex: "0 0 78px", textAlign: "right" }}>$</span>
       </div>
       {filas.map((f) => (
-        <div key={f.codigo} style={{ display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8, background: "#0F172A" }}>
+        <div
+          key={f.codigo}
+          onClick={onClickFila ? () => onClickFila(f) : undefined}
+          style={{
+            display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8,
+            background: "#0F172A", cursor: onClickFila ? "pointer" : "default",
+          }}
+        >
           <span style={{ flex: "0 0 62px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.codigo}</span>
           <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.articulo}</span>
+          {mostrarRutas && <span style={{ flex: "0 0 46px", textAlign: "right", fontFamily: "monospace", color: COLOR_MUTED }}>{f.numRutas}</span>}
+          <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
+          <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TablaRutasDeProducto({ filas }) {
+  if (filas.length === 0) {
+    return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>Sin datos.</div>;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", fontSize: 10.5, color: COLOR_MUTED, textTransform: "uppercase", letterSpacing: "0.04em", padding: "0 4px" }}>
+        <span style={{ flex: "0 0 60px" }}>Ruta</span>
+        <span style={{ flex: 1 }}>Vendedor</span>
+        <span style={{ flex: "0 0 56px", textAlign: "right" }}>Pz</span>
+        <span style={{ flex: "0 0 78px", textAlign: "right" }}>$</span>
+      </div>
+      {filas.map((f) => (
+        <div key={f.rutaCodigo} style={{ display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8, background: "#0F172A" }}>
+          <span style={{ flex: "0 0 60px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.rutaCodigo}</span>
+          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.vendedorNombre}</span>
           <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
           <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
         </div>
@@ -131,12 +166,19 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
   const [rawInput, setRawInput] = useState("");
   const [procesando, setProcesando] = useState(false);
   const [status, setStatus] = useState("");
+  const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
+  const [productoSeleccionado, setProductoSeleccionado] = useState(null); // {codigo, articulo}
 
   const registrosTodos = data?.otcVentas?.registros || [];
   const cargadoEn = data?.otcVentas?.cargadoEn;
 
   const resumenRutas = useMemo(() => resumenSemanaPorRuta(registrosTodos), [registrosTodos]);
+  const resumenProductos = useMemo(() => detallePorProductoGlobal(registrosTodos), [registrosTodos]);
+  const rutasDelProducto = useMemo(
+    () => (productoSeleccionado ? ventasPorRutaDeProducto(registrosTodos, productoSeleccionado.codigo) : []),
+    [registrosTodos, productoSeleccionado]
+  );
 
   async function procesarYGuardar() {
     if (!rawInput.trim()) {
@@ -213,57 +255,107 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
         {status && <div style={{ fontSize: 12, color: status.startsWith("Error") ? COLOR_ROJO : COLOR_VERDE, marginTop: 8 }}>{status}</div>}
       </div>
 
-      {!rutaStaffSeleccionada ? (
-        <div>
-          <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 10 }}>
-            TODAS LAS RUTAS {resumenRutas.length > 0 && `(${resumenRutas.length})`}
-          </div>
-          {resumenRutas.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: COLOR_MUTED }}>No hay datos de OTC cargados aún.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {resumenRutas.map((g) => (
-                <button
-                  key={g.rutaCodigo}
-                  onClick={() => setRutaStaffSeleccionada(g.rutaCodigo)}
-                  className="card"
-                  style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left", cursor: "pointer", border: "none" }}
-                >
-                  <div>
-                    <div style={{ fontSize: 13.5, fontWeight: 700, color: "#E8EDF5" }}>{g.rutaCodigo}</div>
-                    <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>{g.vendedorNombre}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 16, textAlign: "right" }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>{g.piezas % 1 === 0 ? g.piezas : g.piezas.toFixed(1)}</div>
-                      <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>piezas</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: COLOR_VERDE }}>{money(g.pesos)}</div>
-                      <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>total</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: COLOR_AMBAR }}>{money(g.comision)}</div>
-                      <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>comisión</div>
-                    </div>
-                  </div>
-                </button>
-              ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          onClick={() => { setModoStaff("rutas"); setProductoSeleccionado(null); }}
+          className={modoStaff === "rutas" ? "btn" : "btn-ghost"}
+          style={{ fontSize: 13, flex: 1 }}
+        >
+          Por ruta
+        </button>
+        <button
+          onClick={() => { setModoStaff("productos"); setRutaStaffSeleccionada(null); }}
+          className={modoStaff === "productos" ? "btn" : "btn-ghost"}
+          style={{ fontSize: 13, flex: 1 }}
+        >
+          Por producto
+        </button>
+      </div>
+
+      {modoStaff === "rutas" && (
+        !rutaStaffSeleccionada ? (
+          <div>
+            <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 10 }}>
+              TODAS LAS RUTAS {resumenRutas.length > 0 && `(${resumenRutas.length})`}
             </div>
-          )}
-        </div>
-      ) : (
-        <div>
-          <button onClick={() => setRutaStaffSeleccionada(null)} className="btn-ghost" style={{ fontSize: 12.5, marginBottom: 10 }}>
-            ← Volver a todas las rutas
-          </button>
-          <div className="display" style={{ fontSize: 14, color: "#E8EDF5", marginBottom: 10 }}>{rutaStaffSeleccionada}</div>
-          <RutaDetalle
-            registros={registrosTodos}
-            rutaCodigo={rutaStaffSeleccionada}
-            vendedorNombre={resumenRutas.find((r) => r.rutaCodigo === rutaStaffSeleccionada)?.vendedorNombre}
-          />
-        </div>
+            {resumenRutas.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: COLOR_MUTED }}>No hay datos de OTC cargados aún.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {resumenRutas.map((g) => (
+                  <button
+                    key={g.rutaCodigo}
+                    onClick={() => setRutaStaffSeleccionada(g.rutaCodigo)}
+                    className="card"
+                    style={{ padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left", cursor: "pointer", border: "none" }}
+                  >
+                    <div>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: "#E8EDF5" }}>{g.rutaCodigo}</div>
+                      <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>{g.vendedorNombre}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 16, textAlign: "right" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{g.piezas % 1 === 0 ? g.piezas : g.piezas.toFixed(1)}</div>
+                        <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>piezas</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: COLOR_VERDE }}>{money(g.pesos)}</div>
+                        <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>total</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: COLOR_AMBAR }}>{money(g.comision)}</div>
+                        <div style={{ fontSize: 9.5, color: COLOR_MUTED, textTransform: "uppercase" }}>comisión</div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <button onClick={() => setRutaStaffSeleccionada(null)} className="btn-ghost" style={{ fontSize: 12.5, marginBottom: 10 }}>
+              ← Volver a todas las rutas
+            </button>
+            <div className="display" style={{ fontSize: 14, color: "#E8EDF5", marginBottom: 10 }}>{rutaStaffSeleccionada}</div>
+            <RutaDetalle
+              registros={registrosTodos}
+              rutaCodigo={rutaStaffSeleccionada}
+              vendedorNombre={resumenRutas.find((r) => r.rutaCodigo === rutaStaffSeleccionada)?.vendedorNombre}
+            />
+          </div>
+        )
+      )}
+
+      {modoStaff === "productos" && (
+        !productoSeleccionado ? (
+          <div>
+            <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 10 }}>
+              TODOS LOS PRODUCTOS {resumenProductos.length > 0 && `(${resumenProductos.length})`}
+            </div>
+            <div className="card" style={{ padding: 12 }}>
+              <TablaCodigos filas={resumenProductos} mostrarRutas onClickFila={(f) => setProductoSeleccionado(f)} />
+            </div>
+          </div>
+        ) : (
+          <div>
+            <button onClick={() => setProductoSeleccionado(null)} className="btn-ghost" style={{ fontSize: 12.5, marginBottom: 10 }}>
+              ← Volver a todos los productos
+            </button>
+            <div style={{ marginBottom: 10 }}>
+              <div className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>{productoSeleccionado.articulo}</div>
+              <div style={{ fontSize: 11.5, color: COLOR_MUTED, fontFamily: "monospace" }}>Código {productoSeleccionado.codigo}</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+              <KpiCard icon={<Package size={14} />} label="Piezas totales" value={productoSeleccionado.piezas % 1 === 0 ? productoSeleccionado.piezas : productoSeleccionado.piezas.toFixed(1)} />
+              <KpiCard icon={<DollarSign size={14} />} label="Total en pesos" value={money(productoSeleccionado.pesos)} accent={COLOR_VERDE} />
+            </div>
+            <div className="display" style={{ fontSize: 12, color: COLOR_MUTED, marginBottom: 8 }}>VENTAS POR RUTA</div>
+            <div className="card" style={{ padding: 12 }}>
+              <TablaRutasDeProducto filas={rutasDelProducto} />
+            </div>
+          </div>
+        )
       )}
     </div>
   );
