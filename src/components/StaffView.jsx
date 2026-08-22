@@ -38,6 +38,8 @@ import ActividadView from "./ActividadView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
 import EscaleraStaffView from "./EscaleraStaffView";
+import CarteraVencidaView from "./CarteraVencidaView";
+import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -91,6 +93,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     unidades: rutaPropiaStaff && !unidadYaRegistradaHoy(data, rutaPropiaStaff) ? "pendiente_urgente" : undefined,
     creditos: puesto === "gerente" && !creditosPendientes(data) ? "completo" : undefined,
     facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
+    cartera_vencida: (puesto === "supervisor" || puesto === "gerente") && hayCarteraVencidaGlobal(data) ? "pendiente_urgente" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
@@ -484,6 +487,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             </div>
           ) : objTab === "creditos" ? (
             <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
+          ) : objTab === "cartera_vencida" ? (
+            <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
             <RutasView stats={stats} />
           ) : objTab === "actividades_dia" ? (
