@@ -82,6 +82,28 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     return () => { activo = false; clearInterval(intervalo); };
   }, []);
 
+  // Altas de cliente nuevas (Fase 2) — se revisa en cuanto se abre el
+  // Panel Staff (no solo al entrar a la pestaña), para que Supervisor-1
+  // y Gerente vean de inmediato si cayó un cliente nuevo del vendedor.
+  const [hayAltaClienteNueva, setHayAltaClienteNueva] = useState(false);
+  useEffect(() => {
+    let activo = true;
+    async function revisarAltasNuevas() {
+      try {
+        const { count } = await supabase
+          .from("altas_cliente")
+          .select("id", { count: "exact", head: true })
+          .eq("estatus", "pendiente");
+        if (activo) setHayAltaClienteNueva((count || 0) > 0);
+      } catch (e) {
+        console.error("Error revisando altas de cliente nuevas:", e);
+      }
+    }
+    revisarAltasNuevas();
+    const intervalo = setInterval(revisarAltasNuevas, 20000);
+    return () => { activo = false; clearInterval(intervalo); };
+  }, []);
+
   // Estado de cada checklist de actividades, para pintar la pestaña
   // parpadeando en rojo (hay pendientes) o en verde (todo completo).
   const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
@@ -95,6 +117,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     creditos: puesto === "gerente" && !creditosPendientes(data) ? "completo" : undefined,
     facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
     cartera_vencida: (puesto === "supervisor" || puesto === "gerente") && hayCarteraVencidaGlobal(data) ? "pendiente_urgente" : undefined,
+    altas_cliente: (puesto === "supervisor" || puesto === "gerente") && hayAltaClienteNueva ? "aviso_azul" : undefined,
   };
   const [newOpen, setNewOpen] = useState("");
   const [newChampions, setNewChampions] = useState("");
