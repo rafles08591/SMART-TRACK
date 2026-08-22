@@ -85,11 +85,23 @@ export function parseCreditosRaw(rawText) {
   return registros;
 }
 
+// Convierte de forma segura a Date, ya sea que venga como objeto Date
+// (recién pegado) o como string ISO (recargado desde Supabase — al
+// guardar en el blob JSON, las fechas se serializan a texto).
+function aFecha(valor) {
+  if (!valor) return null;
+  if (valor instanceof Date) return isNaN(valor) ? null : valor;
+  const d = new Date(valor);
+  return isNaN(d) ? null : d;
+}
+
 export function diasParaVencer(vence, hoy = new Date()) {
-  if (!vence) return null;
-  const h = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-  const v = new Date(vence.getFullYear(), vence.getMonth(), vence.getDate());
-  return Math.round((v - h) / 86400000);
+  const v = aFecha(vence);
+  const h = aFecha(hoy) || new Date();
+  if (!v) return null;
+  const hLimpio = new Date(h.getFullYear(), h.getMonth(), h.getDate());
+  const vLimpio = new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  return Math.round((vLimpio - hLimpio) / 86400000);
 }
 
 export function esVencido(r) {
