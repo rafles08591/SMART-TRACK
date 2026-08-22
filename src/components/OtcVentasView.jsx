@@ -1,9 +1,11 @@
 import React, { useState, useMemo } from "react";
-import { UploadCloud, CheckCircle2, AlertCircle, Package, DollarSign, Percent, Target } from "lucide-react";
+import { Package, DollarSign, Percent, Target } from "lucide-react";
 import { money } from "../utils";
+import { NOMBRES } from "../constants";
 import { KpiCard } from "./ui";
 import {
-  parseOtcRaw,
+  adaptarOtcCargado,
+  filtrarSemanaActual,
   diasDisponibles,
   detalleCodigosPorDia,
   detalleCodigosSemana,
@@ -21,19 +23,24 @@ import {
    OtcVentasView — ventas OTC por ruta: detalle diario, resumen semanal con
    desglose de códigos, y comisión.
 
-   - rol === "vendedor": solo ve su propia ruta (filtrado por rutaPropia),
-     sin opción de cargar el archivo.
-   - rol === "staff" (Supervisor-1 / Gerente): puede pegar el export OTC
-     (semanal o del día — ambos vienen en el mismo formato), ve la tabla
-     de TODAS las rutas y puede entrar al detalle de cualquiera.
+   Lee directo de data.otcSemanal (lo que ya llena el botón "OTC SEMANAL"
+   en Cargar datos) — no tiene su propio cuadro de pegar texto, para no
+   duplicar la carga de información que el Panel Staff ya hace.
 
-   Los datos se guardan dentro del mismo blob `data` vía persistFresco:
-     data.otcVentas = { registros: [...], cargadoEn }
+   - rol === "vendedor": solo ve su propia ruta (filtrado por rutaPropia).
+   - rol === "staff" (Supervisor-1 / Gerente): ve la tabla de TODAS las
+     rutas y puede entrar al detalle de cualquiera, o ver el desglose por
+     producto sumando todas las rutas.
+
+   NOTA: data.otcSemanal solo trae { fecha, vendedor, monto, codigoArticulo,
+   unidadesVendidas } — sin el nombre del artículo. Se muestra el código
+   solo; si más adelante quieres el nombre también, se puede agregar en
+   convertirFilasOtcDia() de App.tsx para que lo guarde también.
 
    NOTA sobre la comisión: es automática según el objetivo OTC —
    $1,600 al día / $9,600 a la semana. Si la ruta cubre esa meta
-   semanal, la comisión es del 7%; si no la cubre, es del 5.6%. No hay
-   ningún % editable a mano.
+   semanal, la comisión es del 7%; si no la cubre, es del 5.6%. Esto es
+   el mismo criterio que ya usa tasaComisionOtc en tu App.tsx.
    ========================================================================= */
 
 const COLOR_ROJO = "#FF6B6B";
@@ -70,7 +77,7 @@ function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
           }}
         >
           <span style={{ flex: "0 0 62px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.codigo}</span>
-          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.articulo}</span>
+          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.articulo || "—"}</span>
           {mostrarRutas && <span style={{ flex: "0 0 46px", textAlign: "right", fontFamily: "monospace", color: COLOR_MUTED }}>{f.numRutas}</span>}
           <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
           <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
@@ -95,7 +102,7 @@ function TablaRutasDeProducto({ filas }) {
       {filas.map((f) => (
         <div key={f.rutaCodigo} style={{ display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8, background: "#0F172A" }}>
           <span style={{ flex: "0 0 60px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.rutaCodigo}</span>
-          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.vendedorNombre}</span>
+          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{NOMBRES[`RUTA ${f.rutaCodigo}`] || "—"}</span>
           <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
           <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
         </div>
@@ -162,16 +169,28 @@ function RutaDetalle({ registros, rutaCodigo, vendedorNombre }) {
   );
 }
 
-export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, identidad, revisorNombre }) {
-  const [rawInput, setRawInput] = useState("");
-  const [procesando, setProcesando] = useState(false);
-  const [status, setStatus] = useState("");
+export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
   const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
   const [productoSeleccionado, setProductoSeleccionado] = useState(null); // {codigo, articulo}
 
-  const registrosTodos = data?.otcVentas?.registros || [];
-  const cargadoEn = data?.otcVentas?.cargadoEn;
+  // Fuente de datos: lo que ya carga el botón "OTC SEMANAL" (y, como
+  // respaldo por si esa semana no se ha vuelto a subir, se completa con
+  // "OTC DEL DÍA") en la pestaña "Cargar datos" del Panel Staff — no hay
+  // cuadro de pegar texto propio aquí, para no duplicar esa carga.
+  //
+  // OJO: data.otcDia se acumula a propósito día tras día (sin borrar los
+  // anteriores) porque el Rally OTC de varios días lo necesita completo —
+  // eso está bien y no se toca. Pero cuando este módulo lo usa como
+  // respaldo, se filtra solo a la semana en curso (lunes-sábado), para no
+  // mezclar semanas viejas en este resumen.
+  const registrosTodos = useMemo(() => {
+    const semanal = adaptarOtcCargado(data?.otcSemanal);
+    if (semanal.length > 0) return semanal;
+    return filtrarSemanaActual(adaptarOtcCargado(data?.otcDia));
+  }, [data?.otcSemanal, data?.otcDia]);
+
+  const hayDatos = registrosTodos.length > 0;
 
   const resumenRutas = useMemo(() => resumenSemanaPorRuta(registrosTodos), [registrosTodos]);
   const resumenProductos = useMemo(() => detallePorProductoGlobal(registrosTodos), [registrosTodos]);
@@ -180,38 +199,12 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
     [registrosTodos, productoSeleccionado]
   );
 
-  async function procesarYGuardar() {
-    if (!rawInput.trim()) {
-      setStatus("Pega primero el export de OTC.");
-      setTimeout(() => setStatus(""), 3000);
-      return;
-    }
-    setProcesando(true);
-    try {
-      const nuevos = parseOtcRaw(rawInput);
-      if (nuevos.length === 0) {
-        setStatus("No se reconoció ningún registro — revisa el formato.");
-      } else {
-        await persistFresco(() => ({
-          otcVentas: { registros: nuevos, cargadoEn: new Date().toISOString() },
-        }));
-        setStatus(`Cargado — ${nuevos.length} registros procesados.`);
-        setRawInput("");
-      }
-    } catch (e) {
-      setStatus(`Error al procesar: ${e.message || e}`);
-    } finally {
-      setProcesando(false);
-      setTimeout(() => setStatus(""), 4000);
-    }
-  }
-
   // ---------------------------------------------------------------------
-  // Vista VENDEDOR — solo su ruta, sin carga de archivo.
+  // Vista VENDEDOR — solo su ruta.
   // ---------------------------------------------------------------------
   if (rol === "vendedor") {
-    if (!cargadoEn) {
-      return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no se ha cargado la información de OTC.</div>;
+    if (!hayDatos) {
+      return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no se ha cargado la información de OTC de esta semana.</div>;
     }
     return (
       <RutaDetalle
@@ -223,36 +216,15 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
   }
 
   // ---------------------------------------------------------------------
-  // Vista STAFF — carga + tabla de todas las rutas + detalle por ruta.
+  // Vista STAFF — tabla de todas las rutas + detalle por ruta o producto.
   // ---------------------------------------------------------------------
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="card" style={{ padding: 16 }}>
-        <div style={{ marginBottom: 10 }}>
-          <div className="display" style={{ fontSize: 13, color: COLOR_MUTED }}>CARGAR VENTAS OTC (SEMANAL O DEL DÍA)</div>
-          <div style={{ fontSize: 11, color: COLOR_MUTED, marginTop: 2 }}>
-            Objetivo: $1,600/día · $9,600/semana — comisión 7% si se cubre, 5.6% si no (automático).
-          </div>
+        <div className="display" style={{ fontSize: 13, color: COLOR_MUTED }}>OTC — VENTAS</div>
+        <div style={{ fontSize: 11, color: COLOR_MUTED, marginTop: 2 }}>
+          Objetivo: $1,600/día · $9,600/semana — comisión 7% si se cubre, 5.6% si no (automático). Datos tomados de "OTC SEMANAL" en Cargar datos.
         </div>
-        <textarea
-          value={rawInput}
-          onChange={(e) => setRawInput(e.target.value)}
-          placeholder="Pega aquí el export de OTC (Vendedor,Codigo,Articulo,Unidades,Unidades Vendidas,Unidades Devueltas,Total Unidades,Ventas $,Devoluciones $,TOTAL $,Fecha Venta)…"
-          rows={5}
-          style={{
-            width: "100%", boxSizing: "border-box", borderRadius: 10, padding: 10, fontSize: 12,
-            fontFamily: "monospace", background: "#0F172A", color: "#E8EDF5", border: `1px solid ${COLOR_BORDE}`, resize: "vertical",
-          }}
-        />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
-          <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>
-            {cargadoEn ? `Última carga: ${new Date(cargadoEn).toLocaleString("es-MX")}` : "Sin cargas todavía"}
-          </div>
-          <button onClick={procesarYGuardar} disabled={procesando} className="btn" style={{ display: "flex", alignItems: "center", gap: 6, opacity: procesando ? 0.6 : 1 }}>
-            <UploadCloud size={15} /> {procesando ? "Procesando…" : "Procesar y guardar"}
-          </button>
-        </div>
-        {status && <div style={{ fontSize: 12, color: status.startsWith("Error") ? COLOR_ROJO : COLOR_VERDE, marginTop: 8 }}>{status}</div>}
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
@@ -291,7 +263,7 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
                   >
                     <div>
                       <div style={{ fontSize: 13.5, fontWeight: 700, color: "#E8EDF5" }}>{g.rutaCodigo}</div>
-                      <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>{g.vendedorNombre}</div>
+                      <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>{NOMBRES[`RUTA ${g.rutaCodigo}`] || g.rutaCodigo}</div>
                     </div>
                     <div style={{ display: "flex", gap: 16, textAlign: "right" }}>
                       <div>
@@ -317,11 +289,12 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
             <button onClick={() => setRutaStaffSeleccionada(null)} className="btn-ghost" style={{ fontSize: 12.5, marginBottom: 10 }}>
               ← Volver a todas las rutas
             </button>
-            <div className="display" style={{ fontSize: 14, color: "#E8EDF5", marginBottom: 10 }}>{rutaStaffSeleccionada}</div>
+            <div className="display" style={{ fontSize: 14, color: "#E8EDF5", marginBottom: 10 }}>
+              {rutaStaffSeleccionada} — {NOMBRES[`RUTA ${rutaStaffSeleccionada}`] || ""}
+            </div>
             <RutaDetalle
               registros={registrosTodos}
               rutaCodigo={rutaStaffSeleccionada}
-              vendedorNombre={resumenRutas.find((r) => r.rutaCodigo === rutaStaffSeleccionada)?.vendedorNombre}
             />
           </div>
         )
@@ -343,7 +316,7 @@ export default function OtcVentasView({ data, persistFresco, rol, rutaPropia, id
               ← Volver a todos los productos
             </button>
             <div style={{ marginBottom: 10 }}>
-              <div className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>{productoSeleccionado.articulo}</div>
+              <div className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>{productoSeleccionado.articulo || `Código ${productoSeleccionado.codigo}`}</div>
               <div style={{ fontSize: 11.5, color: COLOR_MUTED, fontFamily: "monospace" }}>Código {productoSeleccionado.codigo}</div>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
