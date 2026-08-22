@@ -8,6 +8,7 @@ import {
   esVencido,
   esProximoAVencer,
   diasParaVencer,
+  esDeEsteAno,
 } from "../carteraVencidaParser";
 
 /* =========================================================================
@@ -168,7 +169,7 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
   const [rutaExpandida, setRutaExpandida] = useState(null);
 
   const hoy = new Date();
-  const registrosTodos = data?.carteraVencida?.registros || [];
+  const registrosTodos = (data?.carteraVencida?.registros || []).filter((r) => esDeEsteAno(r, hoy));
   const cargadoEn = data?.carteraVencida?.cargadoEn;
 
   const registros = rol === "vendedor" ? registrosTodos.filter((r) => r.rutaCodigo === rutaPropia) : registrosTodos;
