@@ -88,11 +88,30 @@ export function parseCreditosRaw(rawText) {
 // Convierte de forma segura a Date, ya sea que venga como objeto Date
 // (recién pegado) o como string ISO (recargado desde Supabase — al
 // guardar en el blob JSON, las fechas se serializan a texto).
-function aFecha(valor) {
+export function aFecha(valor) {
   if (!valor) return null;
   if (valor instanceof Date) return isNaN(valor) ? null : valor;
   const d = new Date(valor);
   return isNaN(d) ? null : d;
+}
+
+// Solo clientes/documentos cuya fecha (de la venta/factura, no del
+// vencimiento) sea del mismo año en curso — descarta cartera vieja
+// (ej. saldos de 2018/2019/2023 que ya no son cartera activa real).
+export function esDeEsteAno(r, hoy = new Date()) {
+  const f = aFecha(r.fecha);
+  const h = aFecha(hoy) || new Date();
+  return !!f && f.getFullYear() === h.getFullYear();
+}
+
+// Plazo original del crédito, en días (de la fecha del documento a su
+// fecha de vencimiento) — no confundir con "días para vencer" (que se
+// cuenta desde hoy).
+export function plazoDias(r) {
+  const f = aFecha(r.fecha);
+  const v = aFecha(r.vence);
+  if (!f || !v) return null;
+  return Math.round((v - f) / 86400000);
 }
 
 export function diasParaVencer(vence, hoy = new Date()) {
@@ -108,18 +127,26 @@ export function esVencido(r) {
   return r.saldo > 0 && r.estado === "Saldo";
 }
 
+// "Próximo a vencer" además exige que el plazo ORIGINAL del crédito
+// haya sido mayor a 7 días — documentos con plazos muy cortos (venta de
+// contado a unos días, por ejemplo) no cuentan aquí, aunque su fecha de
+// corte esté cerca.
 export function esProximoAVencer(r, diasUmbral = 3, hoy = new Date()) {
   if (r.saldo <= 0 || r.estado !== "Corriente") return false;
+  const plazo = plazoDias(r);
+  if (plazo === null || plazo <= 7) return false;
   const dias = diasParaVencer(r.vence, hoy);
   return dias !== null && dias >= 0 && dias <= diasUmbral;
 }
 
 // Resumen por ruta — incluye el conteo de "créditos registrados"
 // (Venta Credito + eOrdering Credito + Credito Adicional, es decir todo
-// lo que no es Factura) tomado de este mismo archivo de cartera.
+// lo que no es Factura) tomado de este mismo archivo de cartera. Solo
+// considera clientes/documentos de este año (ver esDeEsteAno).
 export function resumenPorRuta(registros, diasUmbral = 3, hoy = new Date()) {
   const mapa = {};
   for (const r of registros) {
+    if (!esDeEsteAno(r, hoy)) continue;
     if (!mapa[r.rutaCodigo]) {
       mapa[r.rutaCodigo] = {
         rutaCodigo: r.rutaCodigo,
@@ -148,17 +175,17 @@ export function resumenPorRuta(registros, diasUmbral = 3, hoy = new Date()) {
 // unidadYaRegistradaHoy / hayAvisoNuevoPara en el resto de la app).
 export function hayCarteraVencidaPara(data, rutaCodigo) {
   const registros = data?.carteraVencida?.registros || [];
-  return registros.some((r) => r.rutaCodigo === rutaCodigo && esVencido(r));
+  return registros.some((r) => r.rutaCodigo === rutaCodigo && esDeEsteAno(r) && esVencido(r));
 }
 
 export function hayCarteraProximaPara(data, rutaCodigo, diasUmbral = 3) {
   const registros = data?.carteraVencida?.registros || [];
-  return registros.some((r) => r.rutaCodigo === rutaCodigo && esProximoAVencer(r, diasUmbral));
+  return registros.some((r) => r.rutaCodigo === rutaCodigo && esDeEsteAno(r) && esProximoAVencer(r, diasUmbral));
 }
 
 // Para el badge del Staff (Supervisor-1 / Gerente) — cualquier ruta con
 // algo vencido, sin importar cuál.
 export function hayCarteraVencidaGlobal(data) {
   const registros = data?.carteraVencida?.registros || [];
-  return registros.some(esVencido);
+  return registros.some((r) => esDeEsteAno(r) && esVencido(r));
 }
