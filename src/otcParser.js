@@ -118,6 +118,61 @@ export function detalleCodigosSemana(registros, rutaCodigo) {
 // Detalle por producto SUMANDO TODAS LAS RUTAS — para ver qué se vendió
 // más en general, sin importar quién lo vendió. Incluye cuántas rutas
 // distintas vendieron cada código.
+// -------------------------------------------------------------------
+// Adaptador de data.otcSemanal / data.otcDia (los que ya llena la
+// pestaña "Cargar datos" del Panel Staff) al mismo formato interno que
+// usan las funciones de este archivo. Esos registros ya vienen
+// simplificados desde App.tsx: { fecha, vendedor, monto, codigoArticulo,
+// unidadesVendidas } — sin nombre de artículo ni nombre de vendedor, así
+// que se completan con lo disponible.
+// -------------------------------------------------------------------
+// data.otcDia se acumula a propósito (día tras día, sin borrar los
+// anteriores) porque el Rally OTC de varios días lo necesita completo.
+// Cuando este módulo lo usa como respaldo (si aún no se ha vuelto a
+// subir "OTC SEMANAL"), NO debe mostrar meses de historial acumulado —
+// solo la semana en curso (lunes a sábado). Este filtro es solo para la
+// vista de este módulo; no toca ni recorta data.otcDia en sí.
+export function filtrarSemanaActual(registros) {
+  const hoy = new Date();
+  const diaSemana = hoy.getDay(); // 0=domingo … 6=sábado
+  const diffALunes = diaSemana === 0 ? -6 : 1 - diaSemana;
+  const lunes = new Date(hoy);
+  lunes.setDate(hoy.getDate() + diffALunes);
+  lunes.setHours(0, 0, 0, 0);
+  const finDeHoy = new Date(hoy);
+  finDeHoy.setHours(23, 59, 59, 999);
+  return registros.filter((r) => {
+    const f = aFecha(r.fecha);
+    return f && f >= lunes && f <= finDeHoy;
+  });
+}
+
+export function adaptarOtcCargado(registrosCargados) {
+  return (registrosCargados || []).map((r) => {
+    const rutaCompleta = String(r.vendedor || "").trim(); // "RUTA J201"
+    const rutaCodigo = rutaCompleta.replace(/^RUTA\s*/i, "").trim();
+    const pesos = Number(r.monto) || 0;
+    const piezas = Number(r.unidadesVendidas) || 0;
+    return {
+      rutaCodigo,
+      rutaCompleta,
+      vendedorNombre: "", // no viene en este formato — se completa en la vista con NOMBRES
+      codigo: String(r.codigoArticulo || "").trim(),
+      articulo: "", // tampoco viene — se muestra solo el código
+      unidadesVendidas: piezas,
+      unidadesDevueltas: 0,
+      totalUnidades: piezas,
+      ventas: pesos,
+      devoluciones: 0,
+      totalPesos: pesos,
+      fecha: aFecha(r.fecha), // r.fecha ya viene como "YYYY-MM-DD"
+    };
+  });
+}
+
+// Detalle por producto SUMANDO TODAS LAS RUTAS — para ver qué se vendió
+// más en general, sin importar quién lo vendió. Incluye cuántas rutas
+// distintas vendieron cada código.
 export function detallePorProductoGlobal(registros) {
   const mapa = {};
   for (const r of registros) {
