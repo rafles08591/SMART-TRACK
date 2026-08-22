@@ -52,6 +52,7 @@ export const OBJETIVO_TABS = [
   { key: "cartera_vencida", label: "CARTERA VENCIDA", unit: "special" },
   { key: "alta_cliente", label: "ALTA CLIENTE", unit: "special" },
   { key: "altas_cliente", label: "ALTAS DE CLIENTE", unit: "special" },
+  { key: "otc_ventas", label: "OTC VENTAS", unit: "special" },
 ];
 
 export const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
