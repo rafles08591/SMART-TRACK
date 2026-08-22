@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useMemo, useState } from "react";
 import {
-  Users, Milestone, MessageSquare, Sparkles, Trash2, TrendingDown, History, Target, Plus, Power,
+  Users, Milestone, MessageSquare, Sparkles, Trash2, TrendingDown, History, Target, Plus, Power, RotateCcw,
 } from "lucide-react";
 import { NOMBRES, RUTAS } from "../constants";
 import { fmt, todayISO } from "../utils";
@@ -86,7 +86,7 @@ const TIPO_UNIDAD_TEXTO = { venta: "paquetes", otc: "pesos ($)", visitas: "visit
 // y Gerente. Cada objetivo se aplica a 1, varias o todas las rutas, y en
 // la Escalera de cada vendedor aparece como su PRIMER peldaño (antes que
 // los automáticos), con avance calculado en tiempo real desde App.tsx.
-function ObjetivosManualesPanel({ data, persistFresco, revisorNombre }) {
+function ObjetivosManualesPanel({ data, persistFresco, revisorNombre, stats }) {
   const objetivos = data.escaleraObjetivosManuales || [];
   const [mostrarForm, setMostrarForm] = useState(false);
   const vacio = { tipo: "venta", nombre: "", articulosTexto: "", rutas: "todas", rutasEspecificas: [], objetivo: "", detalles: "" };
@@ -137,6 +137,32 @@ function ObjetivosManualesPanel({ data, persistFresco, revisorNombre }) {
     if (!window.confirm(`¿Eliminar el objetivo "${nombre}"? Esto no se puede deshacer.`)) return;
     persistFresco((fresca) => ({
       escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).filter((o) => o.id !== id),
+    }));
+  }
+
+  // "Reiniciar a 0" — no toca ninguna venta real. Solo guarda, por cada
+  // ruta a la que aplica este objetivo, cuál era su avance real en este
+  // momento (el "punto de reinicio"). A partir de ahí, la Escalera del
+  // vendedor le resta ese punto al avance real y le muestra 0 — como si
+  // arrancara de nuevo, sin borrar ni alterar ninguna venta.
+  function reiniciarAvance(o) {
+    if (!window.confirm(`¿Reiniciar el avance de "${o.nombre}" a 0 para todas las rutas donde aplica? Esto no borra ni altera ninguna venta real, solo el contador que ve el vendedor en su Escalera.`)) return;
+    const todasLasRutas = (stats?.porVendedor || []).map((v) => v.name);
+    const rutasAplicables = o.rutas === "todas" ? todasLasRutas : o.rutas;
+    const nuevosReinicios = { ...(o.reinicios || {}) };
+    rutasAplicables.forEach((rutaNombre) => {
+      const v = (stats?.porVendedor || []).find((vv) => vv.name === rutaNombre);
+      const entradaHoy = v?.hoy?.objetivosManuales?.find((om) => om.id === o.id);
+      // Guarda el avance REAL crudo (tal cual viene de App.tsx, sin restar
+      // reinicios previos) — así, sin importar cuántas veces se reinicie,
+      // el cálculo (avance real - punto de reinicio) siempre da 0 justo
+      // después de reiniciar.
+      nuevosReinicios[rutaNombre] = entradaHoy ? entradaHoy.avance : 0;
+    });
+    persistFresco((fresca) => ({
+      escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).map((x) =>
+        x.id === o.id ? { ...x, reinicios: nuevosReinicios } : x
+      ),
     }));
   }
 
@@ -258,9 +284,15 @@ function ObjetivosManualesPanel({ data, persistFresco, revisorNombre }) {
                   {o.articulos && o.articulos.length > 0 && ` · códigos: ${o.articulos.join(", ")}`}
                 </div>
                 {o.detalles && <div style={{ fontSize: 11.5, color: "#C6CFE0", marginTop: 4 }}>{o.detalles}</div>}
-                <div style={{ fontSize: 10, color: "#6C7A96", marginTop: 4 }}>Creado por {o.creadoPor} · {o.fechaCreado}{o.activo === false ? " · INACTIVO" : ""}</div>
+                <div style={{ fontSize: 10, color: "#6C7A96", marginTop: 4 }}>
+                  Creado por {o.creadoPor} · {o.fechaCreado}{o.activo === false ? " · INACTIVO" : ""}
+                  {o.reinicios && Object.keys(o.reinicios).length > 0 && ` · reiniciado en ${Object.keys(o.reinicios).length} ruta${Object.keys(o.reinicios).length === 1 ? "" : "s"}`}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button className="btn-ghost" style={{ padding: "5px 8px" }} title="Reiniciar avance a 0" onClick={() => reiniciarAvance(o)}>
+                  <RotateCcw size={13} color="#F2B134" />
+                </button>
                 <button className="btn-ghost" style={{ padding: "5px 8px" }} title={o.activo === false ? "Reactivar" : "Desactivar"} onClick={() => alternarActivo(o.id)}>
                   <Power size={13} color={o.activo === false ? "#9AA7BD" : "#3DDC97"} />
                 </button>
@@ -284,7 +316,7 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
   const filas = useMemo(() => {
     return (stats.porVendedor || [])
       .map((v) => {
-        const peldanos = construirPeldanos(v);
+        const peldanos = construirPeldanos(v, data.escaleraObjetivosManuales);
         const conquistados = peldanos.filter((p) => p.pct >= 100).length;
         return {
           vendedor: v,
@@ -296,7 +328,7 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
         };
       })
       .sort((a, b) => a.efectividadPct - b.efectividadPct);
-  }, [stats.porVendedor]);
+  }, [stats.porVendedor, data.escaleraObjetivosManuales]);
 
   const filaSeleccionada = filas.find((f) => f.vendedor.name === rutaSeleccionada) || filas[0];
   const observacionesRuta = filaSeleccionada ? (data.escaleraObservaciones?.[filaSeleccionada.vendedor.name] || []) : [];
@@ -487,7 +519,7 @@ export default function EscaleraStaffView({ data, persistFresco, stats, revisorN
           )}
         </div>
       ) : (
-        <ObjetivosManualesPanel data={data} persistFresco={persistFresco} revisorNombre={revisorNombre} />
+        <ObjetivosManualesPanel data={data} persistFresco={persistFresco} revisorNombre={revisorNombre} stats={stats} />
       )}
     </div>
   );
