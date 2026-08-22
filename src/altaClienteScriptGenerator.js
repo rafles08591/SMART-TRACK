@@ -144,6 +144,14 @@ async function procesarSiguienteAlta() {
     return;
   }
 
+  // CLO va primero y SIEMPRE — el campo NUR depende de él: mientras no
+  // haya CLO seleccionado, NUR no tiene ninguna opción que mostrar (sale
+  // "No data available" sin importar qué se busque). Se le da una espera
+  // extra después de seleccionar CLO para que la lista de NUR termine de
+  // cargar antes de intentar buscar el NUR.
+  await seleccionarAutocomplete(CAMPOS.clo, "PUERTO VALLARTA");
+  await esperar(900);
+
   const nur = NUR_POR_RUTA[alta.ruta_codigo];
   if (nur) await seleccionarAutocomplete(CAMPOS.nur, nur);
   else console.warn(\`No hay NUR mapeado para la ruta "\${alta.ruta_codigo}" — selecciónalo a mano.\`);
@@ -171,19 +179,21 @@ async function procesarSiguienteAlta() {
 
   window.__altaClienteEnProceso = alta;
   console.log("✅ Formulario llenado. Revisa los campos y presiona GUARDAR tú mismo.");
-  console.log('Cuando confirmes que se guardó bien en jmdresources, corre: marcarAltaComoEnviada()');
+  console.log('Cuando el RP te dé el folio de confirmación, corre: marcarAltaComoEnviada()');
 }
 
 async function marcarAltaComoEnviada() {
   const alta = window.__altaClienteEnProceso;
   if (!alta) { console.warn("No hay ninguna alta en proceso (corre procesarSiguienteAlta() primero)."); return; }
+  const folio = window.prompt(\`Folio que dio el RP para "\${alta.nombre_negocio}":\`);
+  if (!folio || !folio.trim()) { console.warn("No se marcó como enviada — se canceló o no se dio un folio."); return; }
   const resp = await fetch(\`\${SUPABASE_URL}/rest/v1/altas_cliente?id=eq.\${alta.id}\`, {
     method: "PATCH",
     headers: { apikey: SUPABASE_ANON_KEY, Authorization: \`Bearer \${SUPABASE_ANON_KEY}\`, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ estatus: "enviado", enviado_por: STAFF_USERNAME, enviado_en: new Date().toISOString() }),
+    body: JSON.stringify({ estatus: "enviado", enviado_por: STAFF_USERNAME, enviado_en: new Date().toISOString(), folio_rp: folio.trim() }),
   });
   if (!resp.ok) { console.error(\`No se pudo marcar como enviada (\${resp.status}).\`); return; }
-  console.log(\`✅ Marcada como enviada: \${alta.nombre_negocio}\`);
+  console.log(\`✅ Marcada como enviada: \${alta.nombre_negocio} — Folio RP: \${folio.trim()}\`);
   window.__altaClienteEnProceso = null;
 }
 
