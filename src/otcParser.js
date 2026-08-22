@@ -115,6 +115,39 @@ export function detalleCodigosSemana(registros, rutaCodigo) {
   return agregarPorCodigo(filtrados);
 }
 
+// Detalle por producto SUMANDO TODAS LAS RUTAS — para ver qué se vendió
+// más en general, sin importar quién lo vendió. Incluye cuántas rutas
+// distintas vendieron cada código.
+export function detallePorProductoGlobal(registros) {
+  const mapa = {};
+  for (const r of registros) {
+    if (!mapa[r.codigo]) {
+      mapa[r.codigo] = { codigo: r.codigo, articulo: r.articulo, piezas: 0, pesos: 0, rutas: new Set() };
+    }
+    mapa[r.codigo].piezas += r.totalUnidades;
+    mapa[r.codigo].pesos += r.totalPesos;
+    mapa[r.codigo].rutas.add(r.rutaCodigo);
+  }
+  return Object.values(mapa)
+    .map((g) => ({ ...g, numRutas: g.rutas.size, rutas: undefined }))
+    .sort((a, b) => b.pesos - a.pesos);
+}
+
+// Para un producto específico, cuánto vendió cada ruta (usado al hacer
+// clic en un producto dentro del detalle global).
+export function ventasPorRutaDeProducto(registros, codigo) {
+  const mapa = {};
+  for (const r of registros) {
+    if (r.codigo !== codigo) continue;
+    if (!mapa[r.rutaCodigo]) {
+      mapa[r.rutaCodigo] = { rutaCodigo: r.rutaCodigo, vendedorNombre: r.vendedorNombre, piezas: 0, pesos: 0 };
+    }
+    mapa[r.rutaCodigo].piezas += r.totalUnidades;
+    mapa[r.rutaCodigo].pesos += r.totalPesos;
+  }
+  return Object.values(mapa).sort((a, b) => b.pesos - a.pesos);
+}
+
 export function totalesRuta(registros, rutaCodigo) {
   const filtrados = registros.filter((r) => r.rutaCodigo === rutaCodigo);
   const piezas = filtrados.reduce((s, r) => s + r.totalUnidades, 0);
