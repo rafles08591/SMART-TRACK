@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Package, DollarSign, Percent, Target } from "lucide-react";
 import { money } from "../utils";
-import { NOMBRES } from "../constants";
+import { NOMBRES, RUTAS } from "../constants";
 import { KpiCard } from "./ui";
 import {
   adaptarOtcCargado,
@@ -186,8 +186,11 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
   // mezclar semanas viejas en este resumen.
   const registrosTodos = useMemo(() => {
     const semanal = adaptarOtcCargado(data?.otcSemanal);
-    if (semanal.length > 0) return semanal;
-    return filtrarSemanaActual(adaptarOtcCargado(data?.otcDia));
+    const base = semanal.length > 0 ? semanal : filtrarSemanaActual(adaptarOtcCargado(data?.otcDia));
+    // El export de OTC trae rutas de TODA la distribuidora (JMD completo),
+    // no solo el equipo de este Gerente — aquí se filtra solo a las rutas
+    // propias (J201-J207, lo mismo que ya usa RUTAS en constants.js).
+    return base.filter((r) => RUTAS.includes(r.rutaCompleta));
   }, [data?.otcSemanal, data?.otcDia]);
 
   const hayDatos = registrosTodos.length > 0;
