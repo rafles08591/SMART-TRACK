@@ -418,7 +418,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
             const diasFiltrados = (r) => pestanaDia === "Total semana" ? r.dias : r.dias.filter((d) => d.dia === pestanaDia);
             const rutasBase = esVendedor ? tablero : tablero;
             const rutasParaMostrar = rutasBase
-              .map((r) => ({ ...r, diasVisibles: diasFiltrados(r).filter((d) => d.pendientes.length > 0 || d.fueraDeDia.length > 0) }))
+              .map((r) => ({ ...r, diasVisibles: diasFiltrados(r).filter((d) => d.pendientes.length > 0 || (!esVendedor && d.fueraDeDia.length > 0)) }))
               .filter((r) => esVendedor || r.diasVisibles.length > 0)
               .sort((a, b) => {
                 const totalA = a.diasVisibles.reduce((s, d) => s + d.pendientes.length, 0);
@@ -459,7 +459,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                             <div style={{ fontSize: 12, fontWeight: 700, color: T.primary, marginBottom: 6 }}>
                               {d.dia} ({d.fecha}) · {d.pendientes.length} de {d.totalAsignados} sin visita
                             </div>
-                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: d.fueraDeDia.length > 0 ? 8 : 0 }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: (!esVendedor && d.fueraDeDia.length > 0) ? 8 : 0 }}>
                               {d.pendientes.map((c) => {
                                 const idGuardado = normalizarCodigo(c.codigo_cliente) || c.nombre;
                                 return (
@@ -484,7 +484,13 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                             </div>
                           </>
                         )}
-                        {d.fueraDeDia.length > 0 && (
+                        {/* La sección "visitado otro día" (fueraDeDia) solo se
+                            muestra a Staff (Supervisor-1/Gerente), como
+                            referencia de supervisión. Al vendedor no le sirve
+                            de nada ver algo que ya está resuelto — solo le
+                            confunde y le hace parecer que le falta más de lo
+                            que realmente le falta. */}
+                        {!esVendedor && d.fueraDeDia.length > 0 && (
                           <>
                             {d.pendientes.length === 0 && (
                               <div style={{ fontSize: 12, fontWeight: 700, color: T.muted, marginBottom: 6 }}>
