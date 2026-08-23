@@ -132,6 +132,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [pwstActualizando, setPwstActualizando] = useState(false);
   const [pwstStatus, setPwstStatus] = useState("");
   const capturaPorRutaHoy = useCapturaImagen();
+  const capturaDiaCompleto = useCapturaImagen();
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -290,7 +291,10 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           />
 
           {objTab === "dia" ? (
-            <>
+            <div ref={capturaDiaCompleto.capturaRef}>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                <BotonGuardarImagen captura={capturaDiaCompleto} nombreArchivo={`dia_${fechaHoyISO()}.png`} etiqueta="Guardar / enviar DÍA" />
+              </div>
               <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {stats.total.hoy.fecha}</div>
               {stats.total.alertas.length > 0 && (
                 <div className="card" style={{ padding: 16, marginBottom: 20, border: "1px solid #FF6B6B" }}>
@@ -428,7 +432,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   <RepartidorAhogadoView stats={stats} />
                 </div>
               )}
-            </>
+            </div>
           ) : objTab === "mesa" ? (
             <>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
