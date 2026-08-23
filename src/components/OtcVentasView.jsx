@@ -6,6 +6,7 @@ import { KpiCard } from "./ui";
 import {
   adaptarOtcCargado,
   filtrarSemanaActual,
+  filtrarHoy,
   diasDisponibles,
   detalleCodigosPorDia,
   detalleCodigosSemana,
@@ -185,11 +186,40 @@ function RutaDetalle({ registros, rutaCodigo, vendedorNombre }) {
   );
 }
 
+// Detalle de "Hoy" para una sola ruta — se alimenta directo de OTC DEL
+// DÍA (no de OTC SEMANAL), a diferencia de todo lo demás en este módulo.
+function DetalleHoyRuta({ registrosHoy, rutaCodigo, mostrarEncabezado }) {
+  const filas = useMemo(() => detalleCodigosSemana(registrosHoy, rutaCodigo), [registrosHoy, rutaCodigo]);
+  const totales = useMemo(() => totalesRuta(registrosHoy, rutaCodigo), [registrosHoy, rutaCodigo]);
+
+  if (filas.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      {mostrarEncabezado && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+          <div>
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: "#E8EDF5" }}>{rutaCodigo}</span>
+            <span style={{ fontSize: 12, color: COLOR_MUTED, marginLeft: 8 }}>{NOMBRES[`RUTA ${rutaCodigo}`] || ""}</span>
+          </div>
+          <div style={{ fontSize: 12, color: COLOR_MUTED }}>
+            {totales.piezas % 1 === 0 ? totales.piezas : totales.piezas.toFixed(1)} pz · <span style={{ color: COLOR_VERDE }}>{money(totales.pesos)}</span>
+          </div>
+        </div>
+      )}
+      <div className="card" style={{ padding: 12 }}>
+        <TablaCodigos filas={filas} />
+      </div>
+    </div>
+  );
+}
+
 export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
-  const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos"
+  const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos" | "hoy"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
   const [productoSeleccionado, setProductoSeleccionado] = useState(null); // {codigo, articulo}
   const [vistaProductos, setVistaProductos] = useState("semana"); // "semana" | ISO date string del día
+  const [modoVendedor, setModoVendedor] = useState("semana"); // "semana" | "hoy" — solo para rol vendedor
 
   // Fuente de datos: lo que ya carga el botón "OTC SEMANAL" (y, como
   // respaldo por si esa semana no se ha vuelto a subir, se completa con
@@ -218,6 +248,16 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
   }, [data?.otcDia]);
   const diasProductos = useMemo(() => diasDisponibles(registrosPorDia), [registrosPorDia]);
 
+  // Para la pestaña "Hoy" — SIEMPRE OTC DEL DÍA, filtrado al día calendario
+  // actual (no a la semana), con nombres y marcado de sin Vuala.
+  const registrosHoy = useMemo(() => {
+    return filtrarHoy(adaptarOtcCargado(data?.otcDia)).filter((r) => RUTAS.includes(r.rutaCompleta));
+  }, [data?.otcDia]);
+  const rutasConVentaHoy = useMemo(
+    () => Array.from(new Set(registrosHoy.map((r) => r.rutaCodigo))).sort(),
+    [registrosHoy]
+  );
+
   const hayDatos = registrosTodos.length > 0;
 
   const resumenRutas = useMemo(() => resumenSemanaPorRuta(registrosTodos), [registrosTodos]);
@@ -240,15 +280,40 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
   // Vista VENDEDOR — solo su ruta.
   // ---------------------------------------------------------------------
   if (rol === "vendedor") {
-    if (!hayDatos) {
+    if (!hayDatos && registrosHoy.length === 0) {
       return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no se ha cargado la información de OTC de esta semana.</div>;
     }
     return (
-      <RutaDetalle
-        registros={registrosTodos}
-        rutaCodigo={rutaPropia}
-        vendedorNombre={identidad}
-      />
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => setModoVendedor("semana")}
+            className={modoVendedor === "semana" ? "btn" : "btn-ghost"}
+            style={{ fontSize: 13, flex: 1 }}
+          >
+            Semana
+          </button>
+          <button
+            onClick={() => setModoVendedor("hoy")}
+            className={modoVendedor === "hoy" ? "btn" : "btn-ghost"}
+            style={{ fontSize: 13, flex: 1 }}
+          >
+            Hoy
+          </button>
+        </div>
+        {modoVendedor === "semana" ? (
+          hayDatos ? (
+            <RutaDetalle registros={registrosTodos} rutaCodigo={rutaPropia} vendedorNombre={identidad} />
+          ) : (
+            <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no se ha cargado la información de OTC de esta semana.</div>
+          )
+        ) : (
+          <DetalleHoyRuta registrosHoy={registrosHoy} rutaCodigo={rutaPropia} mostrarEncabezado={false} />
+        )}
+        {modoVendedor === "hoy" && registrosHoy.filter((r) => r.rutaCodigo === rutaPropia).length === 0 && (
+          <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no hay ventas de OTC cargadas para hoy.</div>
+        )}
+      </div>
     );
   }
 
@@ -279,7 +344,34 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
         >
           Por producto
         </button>
+        <button
+          onClick={() => { setModoStaff("hoy"); setRutaStaffSeleccionada(null); setProductoSeleccionado(null); }}
+          className={modoStaff === "hoy" ? "btn" : "btn-ghost"}
+          style={{ fontSize: 13, flex: 1 }}
+        >
+          Hoy
+        </button>
       </div>
+
+      {modoStaff === "hoy" && (
+        <div>
+          <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 4 }}>
+            DETALLE DE HOY POR VENDEDOR
+          </div>
+          <div style={{ fontSize: 11, color: COLOR_MUTED, marginBottom: 10 }}>
+            Se alimenta de OTC DEL DÍA — solo lo vendido en la fecha de hoy.
+          </div>
+          {rutasConVentaHoy.length === 0 ? (
+            <div className="card" style={{ padding: 16, textAlign: "center", fontSize: 13, color: COLOR_MUTED }}>
+              Aún no hay ventas de OTC cargadas para hoy.
+            </div>
+          ) : (
+            rutasConVentaHoy.map((rc) => (
+              <DetalleHoyRuta key={rc} registrosHoy={registrosHoy} rutaCodigo={rc} mostrarEncabezado />
+            ))
+          )}
+        </div>
+      )}
 
       {modoStaff === "rutas" && (
         !rutaStaffSeleccionada ? (
