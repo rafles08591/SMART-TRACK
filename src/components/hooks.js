@@ -9,6 +9,9 @@ export function useCapturaImagen() {
   const [errorImagen, setErrorImagen] = useState(null);
 
   async function generarImagen(nombreArchivo) {
+    // Siempre arranca desde cero: limpia cualquier imagen anterior antes de
+    // generar la nueva, para que un segundo click nunca reutilice ni
+    // reenvíe la imagen vieja por accidente.
     setGenerandoImagen(true);
     setErrorImagen(null);
     setImagenLista(null);
@@ -25,10 +28,17 @@ export function useCapturaImagen() {
       // celular. Sin esto, html2canvas renderiza con el ancho angosto de la
       // pantalla y la tabla sale cortada — igual que si se le tomara una
       // captura de pantalla normal en vez de a la tabla completa.
-      const anchosInternos = Array.from(capturaRef.current.querySelectorAll("table, [style*='overflow']"))
-        .map((el) => el.scrollWidth)
-        .filter((w) => w > 0);
-      const anchoCompleto = Math.max(capturaRef.current.scrollWidth, capturaRef.current.clientWidth, ...anchosInternos, 0);
+      // IMPORTANTE: solo se consideran contenedores con scroll horizontal
+      // REAL (overflow-x: auto/scroll) — no cualquier elemento con
+      // "overflow" en su estilo (como los que solo usan overflow:hidden
+      // para redondear esquinas de una imagen), porque eso infla el ancho
+      // calculado sin necesidad y descentra/corta la imagen generada.
+      const elementosConScroll = Array.from(capturaRef.current.querySelectorAll("table, *")).filter((el) => {
+        const overflowX = window.getComputedStyle(el).overflowX;
+        return overflowX === "auto" || overflowX === "scroll" || el.tagName === "TABLE";
+      });
+      const anchosInternos = elementosConScroll.map((el) => el.scrollWidth).filter((w) => w > 0);
+      const anchoCompleto = Math.max(capturaRef.current.clientWidth, ...anchosInternos, 0);
 
       const canvas = await Promise.race([
         html2canvas(capturaRef.current, {
@@ -75,18 +85,31 @@ export function useCapturaImagen() {
     if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
       try {
         await navigator.share({ files: [archivo], title: nombreArchivo });
-        return;
       } catch (err) {
-        if (err && err.name === "AbortError") return;
-        console.warn("Share falló, cae a descarga tradicional:", err);
+        if (err && err.name !== "AbortError") {
+          console.warn("Share falló, cae a descarga tradicional:", err);
+          const link = document.createElement("a");
+          link.download = nombreArchivo;
+          link.href = url;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
       }
+    } else {
+      const link = document.createElement("a");
+      link.download = nombreArchivo;
+      link.href = url;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
-    const link = document.createElement("a");
-    link.download = nombreArchivo;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Al terminar de guardar/compartir (o cancelar), se limpia la imagen
+    // generada — así, si se vuelve a presionar el botón, se genera y envía
+    // una imagen NUEVA (con los datos más recientes) en vez de reenviar
+    // esta misma otra vez.
+    if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url);
+    setImagenLista(null);
   }
 
   useEffect(() => {
@@ -95,6 +118,3 @@ export function useCapturaImagen() {
 
   return { capturaRef, generandoImagen, imagenLista, errorImagen, generarImagen, guardarOCompartir, limpiar: () => setImagenLista(null) };
 }
-
-// Botón compacto "Guardar/Compartir imagen" que usa el hook de arriba —
-// muestra "Generando...", el botón cuando ya está lista, y el error si algo falla.
