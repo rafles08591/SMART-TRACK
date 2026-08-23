@@ -98,6 +98,17 @@ function contenedorListaAbierta() {
   );
 }
 
+// El constructor nativo KeyboardEvent NO pone bien keyCode/which (los deja
+// en 0) — pero Vuetify 2 internamente revisa esas propiedades viejas para
+// reconocer ArrowDown/Enter, no e.key. Sin esto, un keydown sintético de
+// "Enter" no significa nada para Vuetify aunque el navegador lo mande bien.
+function dispararTecla(el, key, keyCode) {
+  const evento = new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true });
+  Object.defineProperty(evento, "keyCode", { get: () => keyCode });
+  Object.defineProperty(evento, "which", { get: () => keyCode });
+  el.dispatchEvent(evento);
+}
+
 async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   if (!textoBuscado) return false;
   const input = document.getElementById(inputId);
@@ -135,32 +146,31 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   match.scrollIntoView({ block: "center" });
   await esperar(100);
 
-  // El clic sintético (mousedown/mouseup/click) puede terminar cerrando
-  // el menú SIN seleccionar nada — pasa con algunos campos de Vuetify.
-  // Por eso la selección real va por teclado: flecha abajo resalta la
-  // primera opción visible de la lista ya filtrada, Enter la selecciona.
-  // Esto es justo lo que Vuetify espera de un usuario tecleando, así que
-  // es más confiable que imitar el clic del mouse.
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
-  await esperar(150);
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  // 1) Clic — es lo que ya funcionaba bien para CLO, NUR y Estado, así
+  // que va primero para no arriesgar esos campos.
+  const clickable = match.closest(".v-list-item") || match;
+  clickable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  clickable.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   await esperar(250);
 
-  // Si el teclado no lo dejó seleccionado, se intenta con el clic como
-  // respaldo (por si algún campo sí lo necesita al revés).
-  let valorFinal = String(input.value || "").trim().toUpperCase();
   const primeraPalabra = objetivo.split(" ")[0];
+  let valorFinal = String(input.value || "").trim().toUpperCase();
+
+  // 2) Si el clic no dejó nada seleccionado (pasaba con Municipio: la
+  // lista se cerraba sin tomar la opción), se intenta por teclado —
+  // ahora sí con keyCode/which puestos correctamente, que es lo que
+  // Vuetify 2 de verdad revisa para reconocer ArrowDown/Enter.
   if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
-    match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    await esperar(60);
-    match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    match.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    input.focus();
+    dispararTecla(input, "ArrowDown", 40);
     await esperar(200);
+    dispararTecla(input, "Enter", 13);
+    await esperar(300);
     valorFinal = String(input.value || "").trim().toUpperCase();
   }
 
   if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
-    console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con teclado ni con clic) — selecciónala a mano.\`);
+    console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con clic ni con teclado) — selecciónala a mano.\`);
     return false;
   }
   return true;
