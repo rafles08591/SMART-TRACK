@@ -165,9 +165,14 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   // ahora sí con keyCode/which puestos correctamente, que es lo que
   // Vuetify 2 de verdad revisa para reconocer ArrowDown/Enter.
   if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
+    // OJO: NO se vuelve a hacer clic aquí — eso borraba lo ya escrito y
+    // dejaba la lista completa sin filtrar (por eso agarraba cualquier
+    // opción, la primera alfabética). Se vuelve a escribir el texto para
+    // asegurar que el filtro siga activo justo antes de usar el teclado.
     input.focus();
-    input.click();
-    await esperar(250);
+    setter.call(input, textoBuscado);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await esperar(500);
     dispararTecla(input, "ArrowDown", 40);
     await esperar(400);
     dispararTecla(input, "Enter", 13);
