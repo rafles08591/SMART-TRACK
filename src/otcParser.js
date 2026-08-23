@@ -20,7 +20,19 @@ function parseFechaMX(str) {
 export function aFecha(valor) {
   if (!valor) return null;
   if (valor instanceof Date) return isNaN(valor) ? null : valor;
-  const d = new Date(valor);
+  const str = String(valor).trim();
+  // Fechas tipo "YYYY-MM-DD" (sin hora, como vienen en data.otcDia/otcSemanal)
+  // se interpretan como medianoche LOCAL, no UTC. new Date("2026-08-22")
+  // por sí solo las toma como UTC — como México está detrás de UTC, al
+  // comparar en hora local esa fecha se recorre un día hacia atrás (por
+  // eso "hoy" nunca hacía match con nada). Aquí se arma la fecha a mano
+  // con año/mes/día para que quede en la zona horaria local desde el inicio.
+  const soloFecha = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (soloFecha) {
+    const [, y, m, d] = soloFecha;
+    return new Date(Number(y), Number(m) - 1, Number(d));
+  }
+  const d = new Date(str);
   return isNaN(d) ? null : d;
 }
 
