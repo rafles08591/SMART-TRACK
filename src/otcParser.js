@@ -151,6 +151,16 @@ export function filtrarSemanaActual(registros) {
   });
 }
 
+// Solo lo vendido HOY (el día calendario actual), no toda la semana — para
+// la pestaña de detalle diario que siempre se alimenta de OTC DEL DÍA.
+export function filtrarHoy(registros) {
+  const hoy = new Date();
+  return registros.filter((r) => {
+    const f = aFecha(r.fecha);
+    return f && f.toDateString() === hoy.toDateString();
+  });
+}
+
 export function adaptarOtcCargado(registrosCargados) {
   return (registrosCargados || []).map((r) => {
     const rutaCompleta = String(r.vendedor || "").trim(); // "RUTA J201"
