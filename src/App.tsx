@@ -23,6 +23,8 @@ import {
   normalizarDia, creditosPendientes,
 } from "./utils";
 
+import { parseVisitasNurRaw } from "./visitasNurParser";
+
 import { supabase } from "./supabaseClient";
 import { paquetesACajetillas, infoProducto } from "./productosFacturables";
 import Login from "./components/Login";
@@ -237,6 +239,52 @@ function fusionarVisitasSemanaDesdeAvanceDia(historialActual, registrosAvanceDia
           ultimaFecha: r.fecha > (clienteExistente.ultimaFecha || "") ? r.fecha : clienteExistente.ultimaFecha,
           fechasVistas: (clienteExistente.fechasVistas || []).includes(r.fecha) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), r.fecha],
           fechasVisitado: (clienteExistente.fechasVisitado || []).includes(r.fecha) ? (clienteExistente.fechasVisitado || []) : [...(clienteExistente.fechasVisitado || []), r.fecha],
+        },
+      },
+    };
+  });
+  return resultado;
+}
+
+// Cruce automático "sin visita" contra el reporte de clientes visitados
+// por NUR — se combina con Mesa de Control y Avance del Día en la MISMA
+// estructura semanal (visitasSemana): cualquiera de los tres puede
+// "salvar" a un cliente de aparecer como sin visita, sin importar el
+// orden en que se suban. Igual que Avance del Día, este reporte no trae
+// nombre de cliente por separado (solo código), así que el cruce es por
+// código normalizado contra clientes_ruta.
+//
+// OJO: este reporte se sube DIARIO y es ACUMULADO — cada día trae a
+// TODOS los visitados hasta ese momento, no solo los de ese día. Por
+// eso, si un cliente ya tenía una fecha de visita registrada de un día
+// anterior, no se le vuelve a agregar la fecha de hoy también (seguiría
+// apareciendo en el reporte de hoy aunque ya no lo hayan visitado de
+// nuevo) — solo se anota la fecha la PRIMERA vez que aparece, que es su
+// día real de visita.
+function fusionarVisitasSemanaDesdeNur(historialActual, registrosNur, fechaCarga) {
+  const resultado = { ...(historialActual || {}) };
+  registrosNur.forEach((r) => {
+    if (!r.rutaCodigo || !r.codigoCliente) return;
+    const vendedor = `RUTA ${r.rutaCodigo}`;
+    const semanaInicio = lunesDeSemana(fechaCarga);
+    const clave = `${vendedor}|${semanaInicio}`;
+    const entradaExistente = resultado[clave] || { ruta: vendedor, semanaInicio, clientes: {}, fechasMesaControl: [] };
+
+    const codigoNorm = normalizarCodigo(r.codigoCliente);
+    const claveCliente = codigoNorm || r.codigoCliente;
+    const clienteExistente = entradaExistente.clientes[claveCliente] || { codigo: codigoNorm || null, nombre: "", visitado: false, ultimaFecha: fechaCarga, fechasVistas: [], fechasVisitado: [] };
+    const yaTeniaFechaVisitado = (clienteExistente.fechasVisitado || []).length > 0;
+    resultado[clave] = {
+      ...entradaExistente,
+      clientes: {
+        ...entradaExistente.clientes,
+        [claveCliente]: {
+          ...clienteExistente,
+          codigo: codigoNorm || clienteExistente.codigo || null,
+          visitado: true,
+          ultimaFecha: fechaCarga > (clienteExistente.ultimaFecha || "") ? fechaCarga : clienteExistente.ultimaFecha,
+          fechasVistas: (clienteExistente.fechasVistas || []).includes(fechaCarga) ? (clienteExistente.fechasVistas || []) : [...(clienteExistente.fechasVistas || []), fechaCarga],
+          fechasVisitado: yaTeniaFechaVisitado ? clienteExistente.fechasVisitado : [...(clienteExistente.fechasVisitado || []), fechaCarga],
         },
       },
     };
@@ -2782,6 +2830,32 @@ export default function App() {
     }
   }
 
+  const [visitasNurStatus, setVisitasNurStatus] = useState("");
+  async function handleVisitasNurTexto(texto) {
+    try {
+      const registros = parseVisitasNurRaw(texto);
+      if (registros.length === 0) {
+        setVisitasNurStatus("No se pudo interpretar el texto pegado. Verifica que traiga el reporte de clientes visitados por NUR.");
+        return;
+      }
+      const sinRuta = registros.filter((r) => !r.rutaCodigo).length;
+      const fechaCarga = fechaHoyISO();
+      await persistParcialFresco((fresca) => {
+        const visitasSemanaMerged = podarVisitasSemanaAntiguas(
+          fusionarVisitasSemanaDesdeNur(fresca.visitasSemana || {}, registros, fechaCarga)
+        );
+        return { visitasSemana: visitasSemanaMerged };
+      });
+      setVisitasNurStatus(
+        `Visitas NUR cargadas: ${registros.length} registros para ${fechaCarga}.` +
+        (sinRuta > 0 ? ` (${sinRuta} con NUR sin mapear a ninguna ruta — revisa RUTA_POR_NUR)` : "")
+      );
+    } catch (err) {
+      console.error("Error guardando visitas NUR:", err);
+      setVisitasNurStatus(`Error al guardar en la nube: ${err?.message || "error desconocido"}`);
+    }
+  }
+
   if (!data) return <div style={{ padding: 40, color: "#9AA7BD" }}>Cargando…</div>;
 
   return (
@@ -2807,6 +2881,20 @@ export default function App() {
         }
         .card-alerta-intensa { border: 2px solid #FF0000 !important; animation: parpadeoRojoIntensoCard 0.7s ease-in-out infinite; }
       `}</style>
+
+      {/* Indicador de versión — chiquito, en una esquina, visible en
+          cualquier pantalla (login, vendedor, staff) sin abrir la consola.
+          Sirve para revisar rápido en un celular si esa pestaña ya tiene
+          lo último o se quedó vieja — solo compáralo contra el valor de
+          "build" en public/version.json. */}
+      <div
+        style={{
+          position: "fixed", bottom: 4, right: 6, fontSize: 9, color: "#3A4A66",
+          fontFamily: "monospace", zIndex: 9999, pointerEvents: "none", userSelect: "text",
+        }}
+      >
+        v{BUILD_VERSION}
+      </div>
 
       {estadoGuardado && (
         <div
@@ -2907,6 +2995,8 @@ export default function App() {
           mesaControlFileInputRef={mesaControlFileInputRef}
           mesaControlStatus={mesaControlStatus}
           onMesaControlTexto={handleMesaControlTexto}
+          onVisitasNurTexto={handleVisitasNurTexto}
+          visitasNurStatus={visitasNurStatus}
           onOtcSemanalTexto={handleOtcSemanalTexto}
           onCargasFile={handleCargasFile}
           cargasFileInputRef={cargasFileInputRef}
