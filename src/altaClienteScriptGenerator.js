@@ -171,7 +171,13 @@ async function procesarSiguienteAlta() {
   llenarTexto(CAMPOS.coordY, alta.coord_y);
   llenarTexto(CAMPOS.comentario, alta.comentario);
 
-  if (alta.estado) await seleccionarAutocomplete(CAMPOS.estado, alta.estado);
+  // Municipio depende de Estado (igual que NUR dependía de CLO) — sin
+  // esperar a que Estado termine de aplicarse, la lista de Municipio
+  // puede salir vacía o desactualizada.
+  if (alta.estado) {
+    await seleccionarAutocomplete(CAMPOS.estado, alta.estado);
+    await esperar(900);
+  }
   if (alta.municipio) await seleccionarAutocomplete(CAMPOS.municipio, alta.municipio);
 
   await llenarArchivo(CAMPOS.foto, alta.foto_url, "foto.jpg");
@@ -195,8 +201,14 @@ async function marcarAltaComoEnviada() {
   if (!resp.ok) { console.error(\`No se pudo marcar como enviada (\${resp.status}).\`); return; }
   console.log(\`✅ Marcada como enviada: \${alta.nombre_negocio} — Folio RP: \${folio.trim()}\`);
   window.__altaClienteEnProceso = null;
+
+  // Pasa sola a la siguiente alta pendiente — así en toda la sesión solo
+  // hace falta escribir marcarAltaComoEnviada() cada vez, nunca
+  // procesarSiguienteAlta().
+  await procesarSiguienteAlta();
 }
 
-console.log("Script de Alta de Cliente cargado. Corre procesarSiguienteAlta() para empezar.");
+console.log("Script de Alta de Cliente cargado — arrancando solo, sin necesidad de escribir nada.");
+procesarSiguienteAlta();
 `;
 }
