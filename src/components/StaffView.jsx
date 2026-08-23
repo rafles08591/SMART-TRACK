@@ -43,7 +43,7 @@ import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
 import AltasClienteStaffView from "./AltasClienteStaffView";
 import OtcVentasView from "./OtcVentasView";
 
-export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
+export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
@@ -1021,6 +1021,19 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+
+          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
+            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>VISITAS NUR</div>
+            <PegarTextoBox onProcesar={onVisitasNurTexto} placeholder="Pega aquí el reporte de clientes visitados por NUR (columnas NUR, Cliente, Nombre, Direccion, Colonia, Potencial, Estado, Municipio, Localidad)." />
+            {visitasNurStatus && (
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? "#3DDC97" : "#FF6B6B" }}>
+                {visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {visitasNurStatus}
+              </span>
+            )}
+          </div>
+          <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 0 }}>
+            Se sube todos los días con lo visitado hasta ese momento — se combina con Mesa de Control en "Sin Visita", cualquiera de los dos cuenta.
+          </p>
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>PEDIDOS DEL DÍA</div>
