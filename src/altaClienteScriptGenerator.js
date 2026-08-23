@@ -294,7 +294,28 @@ async function marcarAltaComoEnviada() {
   await procesarSiguienteAlta();
 }
 
+// Doble Enter (dos toques seguidos, en menos de 700ms) en la página del RP
+// marca la alta actual como enviada — sin tener que volver a la consola a
+// escribir marcarAltaComoEnviada(). Se ignora si el Enter fue dentro de un
+// campo de texto/select (para no chocar con la selección de CLO, NUR,
+// Estado o Municipio, que también usan Enter para elegir la opción).
+let __ultimoEnterAlta = 0;
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const activo = document.activeElement;
+  const enCampo = activo && ["INPUT", "TEXTAREA", "SELECT"].includes(activo.tagName);
+  if (enCampo) { __ultimoEnterAlta = 0; return; }
+  const ahora = Date.now();
+  if (ahora - __ultimoEnterAlta < 700) {
+    __ultimoEnterAlta = 0;
+    marcarAltaComoEnviada();
+  } else {
+    __ultimoEnterAlta = ahora;
+  }
+});
+
 console.log("Script de Alta de Cliente cargado — arrancando solo, sin necesidad de escribir nada.");
+console.log("Tip: doble Enter (fuera de un campo) marca la alta actual como enviada, sin escribir nada.");
 procesarSiguienteAlta();
 `;
 }
