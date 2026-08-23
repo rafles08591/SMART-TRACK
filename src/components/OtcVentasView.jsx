@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { Package, DollarSign, Percent, Target } from "lucide-react";
 import { money } from "../utils";
-import { NOMBRES, RUTAS } from "../constants";
+import { NOMBRES, RUTAS, CODIGOS_OTC_SIN_VUALA } from "../constants";
 import { KpiCard } from "./ui";
 import {
   adaptarOtcCargado,
@@ -16,6 +16,7 @@ import {
   tasaComisionOtc,
   cubreObjetivoOtc,
   comisionOtc,
+  aFecha,
   OBJETIVO_OTC_SEMANAL,
 } from "../otcParser";
 
@@ -54,6 +55,10 @@ function formatDia(d) {
   return d.toLocaleDateString("es-MX", { weekday: "short", day: "2-digit" }).replace(".", "");
 }
 
+function esSinVuala(codigo) {
+  return CODIGOS_OTC_SIN_VUALA.includes(String(codigo || "").trim());
+}
+
 function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
   if (filas.length === 0) {
     return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>Sin datos.</div>;
@@ -67,22 +72,33 @@ function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
         <span style={{ flex: "0 0 56px", textAlign: "right" }}>Pz</span>
         <span style={{ flex: "0 0 78px", textAlign: "right" }}>$</span>
       </div>
-      {filas.map((f) => (
-        <div
-          key={f.codigo}
-          onClick={onClickFila ? () => onClickFila(f) : undefined}
-          style={{
-            display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8,
-            background: "#0F172A", cursor: onClickFila ? "pointer" : "default",
-          }}
-        >
-          <span style={{ flex: "0 0 62px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.codigo}</span>
-          <span style={{ flex: 1, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }}>{f.articulo || "—"}</span>
-          {mostrarRutas && <span style={{ flex: "0 0 46px", textAlign: "right", fontFamily: "monospace", color: COLOR_MUTED }}>{f.numRutas}</span>}
-          <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
-          <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
-        </div>
-      ))}
+      {filas.map((f) => {
+        const sinVuala = esSinVuala(f.codigo);
+        return (
+          <div
+            key={f.codigo}
+            onClick={onClickFila ? () => onClickFila(f) : undefined}
+            style={{
+              display: "flex", alignItems: "center", fontSize: 12.5, padding: "6px 4px", borderRadius: 8,
+              background: "#0F172A", cursor: onClickFila ? "pointer" : "default",
+              borderLeft: sinVuala ? `3px solid ${COLOR_VERDE}` : "3px solid transparent",
+            }}
+          >
+            <span style={{ flex: "0 0 62px", color: COLOR_MUTED, fontFamily: "monospace" }}>{f.codigo}</span>
+            <span style={{ flex: 1, overflow: "hidden", paddingRight: 6 }}>
+              <div style={{ color: sinVuala ? COLOR_VERDE : "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {f.articulo || "—"}
+              </div>
+              <div style={{ fontSize: 10, color: sinVuala ? COLOR_VERDE : COLOR_MUTED, opacity: sinVuala ? 0.85 : 0.7 }}>
+                {sinVuala ? "Sin Vuala" : "Vuala"}
+              </div>
+            </span>
+            {mostrarRutas && <span style={{ flex: "0 0 46px", textAlign: "right", fontFamily: "monospace", color: COLOR_MUTED }}>{f.numRutas}</span>}
+            <span style={{ flex: "0 0 56px", textAlign: "right", fontFamily: "monospace" }}>{f.piezas % 1 === 0 ? f.piezas : f.piezas.toFixed(1)}</span>
+            <span style={{ flex: "0 0 78px", textAlign: "right", fontFamily: "monospace", color: COLOR_VERDE }}>{money(f.pesos)}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -173,6 +189,7 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
   const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
   const [productoSeleccionado, setProductoSeleccionado] = useState(null); // {codigo, articulo}
+  const [vistaProductos, setVistaProductos] = useState("semana"); // "semana" | ISO date string del día
 
   // Fuente de datos: lo que ya carga el botón "OTC SEMANAL" (y, como
   // respaldo por si esa semana no se ha vuelto a subir, se completa con
@@ -193,10 +210,27 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
     return base.filter((r) => RUTAS.includes(r.rutaCompleta));
   }, [data?.otcSemanal, data?.otcDia]);
 
+  // Para las pestañas de día en "Por producto" — a diferencia de
+  // registrosTodos (que prioriza OTC SEMANAL), este SIEMPRE se alimenta
+  // de OTC DEL DÍA, que es el feed que de verdad se actualiza a diario.
+  const registrosPorDia = useMemo(() => {
+    return filtrarSemanaActual(adaptarOtcCargado(data?.otcDia)).filter((r) => RUTAS.includes(r.rutaCompleta));
+  }, [data?.otcDia]);
+  const diasProductos = useMemo(() => diasDisponibles(registrosPorDia), [registrosPorDia]);
+
   const hayDatos = registrosTodos.length > 0;
 
   const resumenRutas = useMemo(() => resumenSemanaPorRuta(registrosTodos), [registrosTodos]);
-  const resumenProductos = useMemo(() => detallePorProductoGlobal(registrosTodos), [registrosTodos]);
+  const resumenProductos = useMemo(() => {
+    if (vistaProductos === "semana") return detallePorProductoGlobal(registrosTodos);
+    const dia = diasProductos.find((d) => d.toISOString().slice(0, 10) === vistaProductos);
+    if (!dia) return [];
+    const filtrados = registrosPorDia.filter((r) => {
+      const f = aFecha(r.fecha);
+      return f && f.toDateString() === dia.toDateString();
+    });
+    return detallePorProductoGlobal(filtrados);
+  }, [registrosTodos, registrosPorDia, vistaProductos, diasProductos]);
   const rutasDelProducto = useMemo(
     () => (productoSeleccionado ? ventasPorRutaDeProducto(registrosTodos, productoSeleccionado.codigo) : []),
     [registrosTodos, productoSeleccionado]
@@ -306,8 +340,35 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
       {modoStaff === "productos" && (
         !productoSeleccionado ? (
           <div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              <button
+                onClick={() => setVistaProductos("semana")}
+                className={vistaProductos === "semana" ? "btn" : "btn-ghost"}
+                style={{ fontSize: 12.5, padding: "6px 12px" }}
+              >
+                Semana completa
+              </button>
+              {diasProductos.map((d) => {
+                const key = d.toISOString().slice(0, 10);
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setVistaProductos(key)}
+                    className={vistaProductos === key ? "btn" : "btn-ghost"}
+                    style={{ fontSize: 12.5, padding: "6px 12px" }}
+                  >
+                    {formatDia(d)}
+                  </button>
+                );
+              })}
+            </div>
             <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 10 }}>
-              TODOS LOS PRODUCTOS {resumenProductos.length > 0 && `(${resumenProductos.length})`}
+              {vistaProductos === "semana" ? "TODOS LOS PRODUCTOS" : `PRODUCTOS DEL ${formatDia(diasProductos.find((d) => d.toISOString().slice(0, 10) === vistaProductos)).toUpperCase()}`}
+              {resumenProductos.length > 0 && ` (${resumenProductos.length})`}
+            </div>
+            <div style={{ fontSize: 11, color: COLOR_MUTED, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: COLOR_VERDE }} /> Sin Vuala
+              <span style={{ marginLeft: 10, display: "inline-block", width: 10, height: 10, borderRadius: 3, background: COLOR_MUTED, opacity: 0.4 }} /> Vuala
             </div>
             <div className="card" style={{ padding: 12 }}>
               <TablaCodigos filas={resumenProductos} mostrarRutas onClickFila={(f) => setProductoSeleccionado(f)} />
