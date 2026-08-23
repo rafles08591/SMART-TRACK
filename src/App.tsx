@@ -247,7 +247,43 @@ import TabsLiquidacion from "./components/TabsLiquidacion";
 import TabsMerch from "./components/TabsMerch";
 import FacturasAdminView from "./components/FacturasAdminView";
 
+// -------------------------------------------------------------------
+// Chequeo de versión — evita el caso "alguien tiene una pestaña vieja
+// abierta y hace algo que pisa datos nuevos". Un tab abierto se queda
+// corriendo el código de cuando se abrió sin importar cuánto tiempo pase
+// ni cuántas veces se despliegue algo nuevo — la única forma de que se
+// entere de que hay una versión más nueva es preguntando activamente.
+//
+// version.json vive en /public (se sirve tal cual, sin hashear) y se
+// actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
+// el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
+const BUILD_VERSION = "2026-08-22T22-00";
+const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
+
+function useChequeoDeVersion() {
+  useEffect(() => {
+    let cancelado = false;
+    async function chequear() {
+      try {
+        const resp = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!resp.ok) return;
+        const { build } = await resp.json();
+        if (!cancelado && build && build !== BUILD_VERSION) {
+          window.alert("Hay una versión más nueva de SMART-TRACK. La página se va a recargar para que no se pierda ni se pise ningún dato.");
+          window.location.reload();
+        }
+      } catch {
+        // Sin internet o el archivo no existe todavía — no pasa nada,
+        // se reintenta en el siguiente ciclo.
+      }
+    }
+    const intervalo = setInterval(chequear, INTERVALO_CHEQUEO_VERSION_MS);
+    return () => { cancelado = true; clearInterval(intervalo); };
+  }, []);
+}
+
 export default function App() {
+  useChequeoDeVersion();
   const [data, setData] = useState(null);
   const [showSplash, setShowSplash] = useState(true);
   const [role, setRole] = useState(null); // 'staff' | 'vendedor'
