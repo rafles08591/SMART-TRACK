@@ -125,7 +125,11 @@ function campoConError(input) {
   return !!(mensaje && mensaje.textContent.trim());
 }
 
-async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
+// permitirTeclado: SOLO se pone en true para Municipio. Para CLO/NUR/
+// Estado el clic solo ya funcionaba bien y de forma consistente — el
+// respaldo de teclado ahí metía inconsistencia (a veces sí, a veces no),
+// así que se quita para todos menos Municipio.
+async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600, permitirTeclado = false) {
   if (!textoBuscado) return false;
   const input = document.getElementById(inputId);
   if (!input) { console.warn(\`Campo no encontrado: \${inputId}\`); return false; }
@@ -171,10 +175,12 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
 
   const primeraPalabra = objetivo.split(" ")[0];
 
-  // 2) Si después del clic el campo SIGUE mostrando el mensaje de error
-  // (no es lo mismo que "el texto no coincide" — puede coincidir y aun
-  // así no estar seleccionado de verdad), se intenta por teclado.
-  if (campoConError(input)) {
+  // 2) Solo si permitirTeclado === true (Municipio) y el campo SIGUE
+  // mostrando el mensaje de error después del clic, se intenta por
+  // teclado. Para CLO/NUR/Estado esto ni se intenta — se quedan tal cual
+  // dejó el clic, aunque a veces no coincida perfecto, para no meterles
+  // la inconsistencia que traía el teclado ahí.
+  if (permitirTeclado && campoConError(input)) {
     // OJO: NO se vuelve a hacer clic aquí — eso borraba lo ya escrito y
     // dejaba la lista completa sin filtrar (por eso agarraba cualquier
     // opción, la primera alfabética). Se vuelve a escribir el texto para
@@ -274,7 +280,7 @@ async function procesarSiguienteAlta() {
     await seleccionarAutocomplete(CAMPOS.estado, alta.estado);
     await esperar(900);
   }
-  if (alta.municipio) await seleccionarAutocomplete(CAMPOS.municipio, alta.municipio);
+  if (alta.municipio) await seleccionarAutocomplete(CAMPOS.municipio, alta.municipio, 600, true);
 
   await llenarArchivo(CAMPOS.foto, alta.foto_url, "foto.jpg");
   if (alta.archivo_url) await llenarArchivo(CAMPOS.archivo, alta.archivo_url, "archivo");
