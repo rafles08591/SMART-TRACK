@@ -113,6 +113,18 @@ function dispararTecla(el, key, keyCode) {
   }
 }
 
+// El texto que se ve en la caja NO sirve para saber si Vuetify de verdad
+// tomó la selección — ese texto se escribe desde el principio para poder
+// buscarlo en la lista, así que se ve "lleno" aunque nunca se haya
+// seleccionado nada. La señal real es si sigue apareciendo el mensaje de
+// error ("El campo es obligatorio") en el contenedor del campo.
+function campoConError(input) {
+  const contenedor = input.closest(".v-input") || input.closest(".v-text-field") || input.parentElement?.parentElement;
+  if (!contenedor) return false;
+  const mensaje = contenedor.querySelector(".v-messages__message");
+  return !!(mensaje && mensaje.textContent.trim());
+}
+
 async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   if (!textoBuscado) return false;
   const input = document.getElementById(inputId);
@@ -158,13 +170,11 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   await esperar(250);
 
   const primeraPalabra = objetivo.split(" ")[0];
-  let valorFinal = String(input.value || "").trim().toUpperCase();
 
-  // 2) Si el clic no dejó nada seleccionado (pasaba con Municipio: la
-  // lista se cerraba sin tomar la opción), se intenta por teclado —
-  // ahora sí con keyCode/which puestos correctamente, que es lo que
-  // Vuetify 2 de verdad revisa para reconocer ArrowDown/Enter.
-  if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
+  // 2) Si después del clic el campo SIGUE mostrando el mensaje de error
+  // (no es lo mismo que "el texto no coincide" — puede coincidir y aun
+  // así no estar seleccionado de verdad), se intenta por teclado.
+  if (campoConError(input)) {
     // OJO: NO se vuelve a hacer clic aquí — eso borraba lo ya escrito y
     // dejaba la lista completa sin filtrar (por eso agarraba cualquier
     // opción, la primera alfabética). Se vuelve a escribir el texto para
@@ -177,10 +187,10 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
     await esperar(400);
     dispararTecla(input, "Enter", 13);
     await esperar(400);
-    valorFinal = String(input.value || "").trim().toUpperCase();
   }
 
-  if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
+  const valorFinal = String(input.value || "").trim().toUpperCase();
+  if (campoConError(input) || !valorFinal || !valorFinal.includes(primeraPalabra)) {
     console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con clic ni con teclado) — selecciónala a mano.\`);
     return false;
   }
