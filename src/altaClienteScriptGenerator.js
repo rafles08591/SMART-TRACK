@@ -79,6 +79,25 @@ function llenarTexto(inputId, valor) {
   return true;
 }
 
+function buscarCoincidencia(objetivo) {
+  const candidatos = Array.from(document.querySelectorAll(".v-list-item, .v-list-item__title"));
+  return (
+    candidatos.find((el) => el.textContent.trim().toUpperCase() === objetivo)
+    || candidatos.find((el) => el.textContent.trim().toUpperCase().includes(objetivo))
+  );
+}
+
+// Busca el contenedor con scroll de la lista desplegable abierta (Vuetify
+// usa distintas clases según la versión/tipo de campo — se prueban las
+// más comunes).
+function contenedorListaAbierta() {
+  return (
+    document.querySelector(".v-menu__content.menuable__content__active .v-select-list")
+    || document.querySelector(".v-menu__content.menuable__content__active")
+    || document.querySelector(".v-select-list")
+  );
+}
+
 async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   if (!textoBuscado) return false;
   const input = document.getElementById(inputId);
@@ -89,11 +108,32 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   setter.call(input, textoBuscado);
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await esperar(esperaMs);
-  const candidatos = Array.from(document.querySelectorAll(".v-list-item, .v-list-item__title"));
+
   const objetivo = String(textoBuscado).trim().toUpperCase();
-  let match = candidatos.find((el) => el.textContent.trim().toUpperCase() === objetivo)
-    || candidatos.find((el) => el.textContent.trim().toUpperCase().includes(objetivo));
+  let match = buscarCoincidencia(objetivo);
+
+  // Si no aparece en lo que ya está renderizado, puede ser una lista larga
+  // que Vuetify va cargando por partes conforme haces scroll (pasa con
+  // catálogos grandes como Municipio). Se hace scroll dentro de la lista
+  // buscando la opción, hasta encontrarla o hasta que ya no avance más.
+  if (!match) {
+    const contenedor = contenedorListaAbierta();
+    if (contenedor) {
+      let scrollAnterior = -1;
+      for (let intento = 0; intento < 25 && !match; intento++) {
+        contenedor.scrollTop += contenedor.clientHeight;
+        await esperar(150);
+        match = buscarCoincidencia(objetivo);
+        if (match) break;
+        if (contenedor.scrollTop === scrollAnterior) break; // ya no se puede bajar más
+        scrollAnterior = contenedor.scrollTop;
+      }
+    }
+  }
+
   if (!match) { console.warn(\`No se encontró la opción "\${textoBuscado}" para \${inputId} — selecciónala a mano.\`); return false; }
+  match.scrollIntoView({ block: "center" });
+  await esperar(100);
   const clickable = match.closest(".v-list-item") || match;
   clickable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   clickable.dispatchEvent(new MouseEvent("click", { bubbles: true }));
