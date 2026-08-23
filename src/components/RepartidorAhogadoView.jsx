@@ -9,7 +9,7 @@ import { useCapturaImagen } from "./hooks";
 // assets (por ejemplo el mismo "promociones") y pega aquí la URL pública.
 // Así el archivo del componente no se llena de SVG/base64.
 const IMAGEN_REPARTIDOR_AHOGADO =
-  "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/IMG_0534.jpeg";
+  "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/IMG_0571.jpeg";
 
 export default function RepartidorAhogadoView({ stats }) {
   const captura = useCapturaImagen();
@@ -17,7 +17,7 @@ export default function RepartidorAhogadoView({ stats }) {
     .filter((v) => v.hoy.volumen.objetivo > 0)
     .slice()
     .sort((a, b) => a.hoy.efectividadPct - b.hoy.efectividadPct);
-  const ultimos3 = ranking.slice(0, 3).map((v) => v.name);
+  const peor = ranking.slice(0, 1).map((v) => v.name);
 
   return (
     <div>
@@ -34,26 +34,26 @@ export default function RepartidorAhogadoView({ stats }) {
 
         <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 8 }}>
           {ranking.map((v, i) => {
-            const esUltimos3 = i < 3;
+            const esUltimo = i === 0;
             return (
               <div
                 key={v.id}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 10,
-                  background: esUltimos3 ? "#2a1414" : "#131C30",
-                  border: `1px solid ${esUltimos3 ? "#FF6B6B" : "#1E2A42"}`,
+                  background: esUltimo ? "#2a1414" : "#131C30",
+                  border: `1px solid ${esUltimo ? "#FF6B6B" : "#1E2A42"}`,
                 }}
               >
                 <div style={{
                   width: 26, height: 26, borderRadius: 13, display: "flex", alignItems: "center", justifyContent: "center",
-                  background: esUltimos3 ? "#FF6B6B" : "#1E2A42", color: esUltimos3 ? "#2a1414" : "#9AA7BD", fontWeight: 700, fontSize: 12, flexShrink: 0,
+                  background: esUltimo ? "#FF6B6B" : "#1E2A42", color: esUltimo ? "#2a1414" : "#9AA7BD", fontWeight: 700, fontSize: 12, flexShrink: 0,
                 }}>
                   {i + 1}
                 </div>
                 <div style={{ flex: 1, fontSize: 13, color: "#E8EDF5" }}>
                   {v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
                 </div>
-                <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: esUltimos3 ? "#FF6B6B" : v.hoy.efectividadPct >= 80 ? "#3DDC97" : "#F2B134" }}>
+                <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: esUltimo ? "#FF6B6B" : v.hoy.efectividadPct >= 80 ? "#3DDC97" : "#F2B134" }}>
                   {v.hoy.efectividadPct.toFixed(0)}%
                 </div>
               </div>
@@ -61,12 +61,12 @@ export default function RepartidorAhogadoView({ stats }) {
           })}
         </div>
 
-        {ultimos3.length > 0 && (
+        {peor.length > 0 && (
           <div style={{ marginTop: 24 }}>
             <div style={{ textAlign: "center", fontSize: 12, color: "#FF6B6B", fontWeight: 700, marginBottom: 8 }}>
-              ÚLTIMOS 3 LUGARES · EN LA MIRA
+              ÚLTIMO LUGAR · EN LA MIRA
             </div>
-            <IlustracionTiburones nombres={ultimos3.map((n) => `${n}${NOMBRES[n] ? " · " + NOMBRES[n] : ""}`)} />
+            <IlustracionRepartidorAhogado nombres={peor.map((n) => `${n}${NOMBRES[n] ? " · " + NOMBRES[n] : ""}`)} />
           </div>
         )}
       </div>
@@ -74,15 +74,15 @@ export default function RepartidorAhogadoView({ stats }) {
   );
 }
 
-// Ilustración: la imagen que subiste a Supabase Storage, con los nombres de
-// los últimos 3 lugares superpuestos y centrados sobre ella, como si
-// flotaran bajo el agua — bien notorios, con glow y contraste fuerte.
-function IlustracionTiburones({ nombres }) {
+// Ilustración: la imagen que subiste a Supabase Storage, con el nombre del
+// último lugar superpuesto y centrado sobre ella — bien notorio, con glow
+// y contraste fuerte.
+function IlustracionRepartidorAhogado({ nombres }) {
   return (
     <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", background: "#020c12" }}>
       <img
         src={IMAGEN_REPARTIDOR_AHOGADO}
-        alt="Repartidor ahogado — últimos lugares"
+        alt="Repartidor ahogado — último lugar"
         style={{ width: "100%", display: "block", objectFit: "cover" }}
       />
       <div
