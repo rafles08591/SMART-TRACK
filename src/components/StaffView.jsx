@@ -515,7 +515,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           ) : objTab === "cartera_vencida" ? (
             <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
           ) : objTab === "altas_cliente" ? (
-            <AltasClienteStaffView revisorNombre={revisorNombre} />
+            <AltasClienteStaffView revisorNombre={revisorNombre} puesto={puesto} />
           ) : objTab === "otc_ventas" ? (
             <OtcVentasView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "rutas" ? (
