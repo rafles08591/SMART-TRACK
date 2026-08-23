@@ -103,10 +103,14 @@ function contenedorListaAbierta() {
 // reconocer ArrowDown/Enter, no e.key. Sin esto, un keydown sintético de
 // "Enter" no significa nada para Vuetify aunque el navegador lo mande bien.
 function dispararTecla(el, key, keyCode) {
-  const evento = new KeyboardEvent("keydown", { key, code: key, bubbles: true, cancelable: true });
-  Object.defineProperty(evento, "keyCode", { get: () => keyCode });
-  Object.defineProperty(evento, "which", { get: () => keyCode });
-  el.dispatchEvent(evento);
+  // Un tecleo real siempre manda keydown Y keyup — algunos componentes de
+  // Vuetify solo reaccionan completo con ambos, no solo con keydown.
+  for (const tipo of ["keydown", "keyup"]) {
+    const evento = new KeyboardEvent(tipo, { key, code: key, bubbles: true, cancelable: true });
+    Object.defineProperty(evento, "keyCode", { get: () => keyCode });
+    Object.defineProperty(evento, "which", { get: () => keyCode });
+    el.dispatchEvent(evento);
+  }
 }
 
 async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
@@ -162,10 +166,12 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   // Vuetify 2 de verdad revisa para reconocer ArrowDown/Enter.
   if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
     input.focus();
+    input.click();
+    await esperar(250);
     dispararTecla(input, "ArrowDown", 40);
-    await esperar(200);
+    await esperar(400);
     dispararTecla(input, "Enter", 13);
-    await esperar(300);
+    await esperar(400);
     valorFinal = String(input.value || "").trim().toUpperCase();
   }
 
