@@ -149,7 +149,9 @@ function ObjetivosManualesPanel({ data, persistFresco, revisorNombre, stats }) {
     if (!window.confirm(`¿Reiniciar el avance de "${o.nombre}" a 0 para todas las rutas donde aplica? Esto no borra ni altera ninguna venta real, solo el contador que ve el vendedor en su Escalera.`)) return;
     const todasLasRutas = (stats?.porVendedor || []).map((v) => v.name);
     const rutasAplicables = o.rutas === "todas" ? todasLasRutas : o.rutas;
-    const nuevosReinicios = { ...(o.reinicios || {}) };
+    // Los avances de HOY sí se capturan ahora mismo (son una foto del
+    // momento del clic, no dependen de qué tan fresco esté lo demás).
+    const avancesActuales = {};
     rutasAplicables.forEach((rutaNombre) => {
       const v = (stats?.porVendedor || []).find((vv) => vv.name === rutaNombre);
       const entradaHoy = v?.hoy?.objetivosManuales?.find((om) => om.id === o.id);
@@ -157,13 +159,22 @@ function ObjetivosManualesPanel({ data, persistFresco, revisorNombre, stats }) {
       // reinicios previos) — así, sin importar cuántas veces se reinicie,
       // el cálculo (avance real - punto de reinicio) siempre da 0 justo
       // después de reiniciar.
-      nuevosReinicios[rutaNombre] = entradaHoy ? entradaHoy.avance : 0;
+      avancesActuales[rutaNombre] = entradaHoy ? entradaHoy.avance : 0;
     });
-    persistFresco((fresca) => ({
-      escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).map((x) =>
-        x.id === o.id ? { ...x, reinicios: nuevosReinicios } : x
-      ),
-    }));
+    // Pero los reinicios que YA EXISTÍAN para otras rutas de este mismo
+    // objetivo (los pudo haber puesto otro Supervisor-1/Gerente hace un
+    // segundo) se leen de la versión FRESCA justo antes de guardar, no de
+    // lo que esta pantalla ya tenía cargado — así nunca se pisa el
+    // reinicio de alguien más si dos personas usan esto casi a la vez.
+    persistFresco((fresca) => {
+      const actual = (fresca.escaleraObjetivosManuales || []).find((x) => x.id === o.id);
+      const reiniciosFrescos = { ...(actual?.reinicios || {}), ...avancesActuales };
+      return {
+        escaleraObjetivosManuales: (fresca.escaleraObjetivosManuales || []).map((x) =>
+          x.id === o.id ? { ...x, reinicios: reiniciosFrescos } : x
+        ),
+      };
+    });
   }
 
   return (
