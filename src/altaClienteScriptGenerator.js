@@ -15,13 +15,16 @@ export function generarScriptAltaClienteFase2({ supabaseUrl, supabaseAnonKey, st
 // 1. En jmdresources, entra a Gestión de Clientes y abre el formulario
 //    "ALTA CLIENTE" (botón "+ NUEVO").
 // 2. Abre DevTools → Console, pega TODO este bloque y da Enter.
-// 3. Corre: procesarSiguienteAlta()
-//    Revisa los campos (sobre todo NUR, Estado y Municipio), corrige
-//    si algo no cuadra, y presiona GUARDAR tú mismo — el script no
-//    envía el formulario solo, a propósito.
-// 4. Cuando ya haya quedado guardado en jmdresources, corre:
-//    marcarAltaComoEnviada()
-// 5. Repite el paso 3 para la siguiente alta pendiente.
+//    Arranca solo — llena la primera alta pendiente sin que escribas nada.
+// 3. Revisa los campos (sobre todo NUR, Estado y Municipio — este último
+//    a veces no se selecciona solo, corrígelo tú mismo si hace falta) y
+//    presiona GUARDAR tú mismo — el script no envía el formulario solo,
+//    a propósito.
+// 4. En cuanto salga el recuadro "Completado... con número de folio",
+//    el script lo detecta, guarda el folio y pasa a la siguiente alta
+//    SOLO — no hace falta escribir nada más en toda la sesión.
+//    (Si por algo no lo detectara, hay un respaldo: doble Enter fuera de
+//    un campo de texto, o escribir marcarAltaComoEnviada() a mano.)
 // =============================================================
 
 const SUPABASE_URL = "${supabaseUrl}";
@@ -195,11 +198,17 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600, pe
     await esperar(400);
   }
 
-  const valorFinal = String(input.value || "").trim().toUpperCase();
-  if (campoConError(input) || !valorFinal || !valorFinal.includes(primeraPalabra)) {
+  // El chequeo de "sigue con error" solo bloquea/avisa cuando SÍ se activó
+  // el respaldo de teclado (Municipio). Para CLO/NUR/Estado no se vuelve
+  // a comprobar nada después del clic — el mensaje de error a veces tarda
+  // en desaparecer del DOM aunque el clic sí haya funcionado, y eso
+  // generaba advertencias falsas en campos que en realidad sí quedaban
+  // bien (la alta se guardaba bien en jmdresources de todas formas).
+  if (permitirTeclado && campoConError(input)) {
     console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con clic ni con teclado) — selecciónala a mano.\`);
     return false;
   }
+
   return true;
 }
 
@@ -287,27 +296,75 @@ async function procesarSiguienteAlta() {
 
   window.__altaClienteEnProceso = alta;
   console.log("✅ Formulario llenado. Revisa los campos y presiona GUARDAR tú mismo.");
-  console.log('Cuando el RP te dé el folio de confirmación, corre: marcarAltaComoEnviada()');
+  console.log('Cuando le des GUARDAR, en cuanto salga el recuadro "Completado" con el folio, se marca sola — no hace falta escribir nada.');
+
+  // Deja listo el detector del recuadro de confirmación de jmdresources
+  // ANTES de que el humano le dé GUARDAR — así lo agarra apenas aparezca.
+  observarConfirmacionYMarcarEnviada();
 }
 
+// Saca el número de folio de un texto tipo "...con numero de folio 501696"
+// sin importar acentos ni mayúsculas/minúsculas exactas.
+function extraerFolio(texto) {
+  const m = String(texto || "").match(/folio\D{0,10}(\d{4,})/i);
+  return m ? m[1] : null;
+}
+
+// PATCH real a Supabase — lo usan tanto la detección automática del folio
+// como el respaldo manual (marcarAltaComoEnviada / doble Enter), para no
+// repetir la lógica dos veces.
+async function marcarComoEnviadaConFolio(folio) {
+  const alta = window.__altaClienteEnProceso;
+  if (!alta) { console.warn("No hay ninguna alta en proceso (corre procesarSiguienteAlta() primero)."); return; }
+  const resp = await fetch(\`\${SUPABASE_URL}/rest/v1/altas_cliente?id=eq.\${alta.id}\`, {
+    method: "PATCH",
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: \`Bearer \${SUPABASE_ANON_KEY}\`, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ estatus: "enviado", enviado_por: STAFF_USERNAME, enviado_en: new Date().toISOString(), folio_rp: folio }),
+  });
+  if (!resp.ok) { console.error(\`No se pudo marcar como enviada (\${resp.status}).\`); return; }
+  console.log(\`✅ Marcada como enviada: \${alta.nombre_negocio} — Folio RP: \${folio}\`);
+  window.__altaClienteEnProceso = null;
+
+  // Pasa sola a la siguiente alta pendiente — así en toda la sesión no
+  // hace falta escribir ni procesarSiguienteAlta() ni marcarAltaComoEnviada().
+  await procesarSiguienteAlta();
+}
+
+// Observa la página esperando a que aparezca el recuadro "Completado...
+// con número de folio XXXXXX" que jmdresources muestra después de darle
+// GUARDAR. En cuanto lo detecta, saca el folio solo, marca la alta como
+// enviada, le da clic a OK para cerrar el recuadro, y pasa a la siguiente
+// — sin que el humano tenga que escribir ni tocar nada después de GUARDAR.
+function observarConfirmacionYMarcarEnviada() {
+  const observer = new MutationObserver(async (mutaciones) => {
+    for (const mut of mutaciones) {
+      for (const nodo of mut.addedNodes) {
+        if (nodo.nodeType !== 1) continue;
+        const folio = extraerFolio(nodo.textContent);
+        if (!folio) continue;
+        observer.disconnect();
+        console.log(\`✅ Folio detectado automáticamente: \${folio}\`);
+        await marcarComoEnviadaConFolio(folio);
+        // Cierra el recuadro de confirmación dándole a OK, por si se
+        // queda estorbando para abrir la siguiente alta.
+        await esperar(200);
+        const btnOk = buscarBotonPorTexto("OK");
+        if (btnOk) btnOk.click();
+        return;
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+// Respaldo manual — por si por alguna razón no apareciera el recuadro de
+// confirmación (o cambia de texto) y la detección automática no lo agarra.
 async function marcarAltaComoEnviada() {
   const alta = window.__altaClienteEnProceso;
   if (!alta) { console.warn("No hay ninguna alta en proceso (corre procesarSiguienteAlta() primero)."); return; }
   const folio = window.prompt(\`Folio que dio el RP para "\${alta.nombre_negocio}":\`);
   if (!folio || !folio.trim()) { console.warn("No se marcó como enviada — se canceló o no se dio un folio."); return; }
-  const resp = await fetch(\`\${SUPABASE_URL}/rest/v1/altas_cliente?id=eq.\${alta.id}\`, {
-    method: "PATCH",
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: \`Bearer \${SUPABASE_ANON_KEY}\`, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ estatus: "enviado", enviado_por: STAFF_USERNAME, enviado_en: new Date().toISOString(), folio_rp: folio.trim() }),
-  });
-  if (!resp.ok) { console.error(\`No se pudo marcar como enviada (\${resp.status}).\`); return; }
-  console.log(\`✅ Marcada como enviada: \${alta.nombre_negocio} — Folio RP: \${folio.trim()}\`);
-  window.__altaClienteEnProceso = null;
-
-  // Pasa sola a la siguiente alta pendiente — así en toda la sesión solo
-  // hace falta escribir marcarAltaComoEnviada() cada vez, nunca
-  // procesarSiguienteAlta().
-  await procesarSiguienteAlta();
+  await marcarComoEnviadaConFolio(folio.trim());
 }
 
 // Doble Enter (dos toques seguidos, en menos de 700ms) en la página del RP
@@ -331,7 +388,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 console.log("Script de Alta de Cliente cargado — arrancando solo, sin necesidad de escribir nada.");
-console.log("Tip: doble Enter (fuera de un campo) marca la alta actual como enviada, sin escribir nada.");
+console.log('Tip: cuando le des GUARDAR, en cuanto salga el recuadro de "Completado" con el folio, se marca sola y pasa a la siguiente.');
 procesarSiguienteAlta();
 `;
 }
