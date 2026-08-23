@@ -134,10 +134,35 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600) {
   if (!match) { console.warn(\`No se encontró la opción "\${textoBuscado}" para \${inputId} — selecciónala a mano.\`); return false; }
   match.scrollIntoView({ block: "center" });
   await esperar(100);
-  const clickable = match.closest(".v-list-item") || match;
-  clickable.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  clickable.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  await esperar(200);
+
+  // El clic sintético (mousedown/mouseup/click) puede terminar cerrando
+  // el menú SIN seleccionar nada — pasa con algunos campos de Vuetify.
+  // Por eso la selección real va por teclado: flecha abajo resalta la
+  // primera opción visible de la lista ya filtrada, Enter la selecciona.
+  // Esto es justo lo que Vuetify espera de un usuario tecleando, así que
+  // es más confiable que imitar el clic del mouse.
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
+  await esperar(150);
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+  await esperar(250);
+
+  // Si el teclado no lo dejó seleccionado, se intenta con el clic como
+  // respaldo (por si algún campo sí lo necesita al revés).
+  let valorFinal = String(input.value || "").trim().toUpperCase();
+  const primeraPalabra = objetivo.split(" ")[0];
+  if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
+    match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    await esperar(60);
+    match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    match.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    await esperar(200);
+    valorFinal = String(input.value || "").trim().toUpperCase();
+  }
+
+  if (!valorFinal || !valorFinal.includes(primeraPalabra)) {
+    console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con teclado ni con clic) — selecciónala a mano.\`);
+    return false;
+  }
   return true;
 }
 
