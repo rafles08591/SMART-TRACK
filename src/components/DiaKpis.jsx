@@ -72,8 +72,17 @@ export default function DiaKpis({ hoy, mensajeDia, rutaCodigo, esPeor, esBottom3
       )}
 
       {esPeor && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, border: "1px solid #FF6B6B" }}>
-          <div style={{ fontSize: 12, color: "#FF6B6B", fontWeight: 700 }}>PROPUESTO PARA: "LA TERCERA MANO DEL PACHUCO" (menor efectividad de todas las rutas hoy)</div>
+        <div className="card" style={{ padding: 0, marginBottom: 16, border: "1px solid #FF6B6B", overflow: "hidden" }}>
+          <img
+            src="https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/IMG_0571.jpeg"
+            alt="Repartidor Ahogado"
+            style={{ width: "100%", display: "block" }}
+          />
+          <div style={{ padding: 12 }}>
+            <div style={{ fontSize: 12, color: "#FF6B6B", fontWeight: 700 }}>
+              PROPUESTO PARA: "REPARTIDOR AHOGADO" (menor efectividad de todas las rutas hoy)
+            </div>
+          </div>
         </div>
       )}
 
@@ -131,4 +140,3 @@ export default function DiaKpis({ hoy, mensajeDia, rutaCodigo, esPeor, esBottom3
     </>
   );
 }
-
