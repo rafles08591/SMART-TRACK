@@ -4,10 +4,10 @@ import {
   Fingerprint, Delete, LoaderCircle, Crown, Users, Wallet, Route,
   ChevronLeft, MapPin, Settings, ShieldCheck
 } from "lucide-react";
-import { supabase } from "../supabaseClient"; // ← Ruta corregida
+import { supabase } from "../supabaseClient";
 
 // ============================================================
-// MAPEO DE USUARIOS → EMAIL (Supabase Auth)
+// MAPEO DE USUARIOS → EMAIL
 // ============================================================
 const USER_EMAIL_MAP = {
   "RUTA J201": "j201@smarttrack.local",
@@ -33,9 +33,6 @@ const USER_EMAIL_MAP = {
   "MERCH63": "merch63@smarttrack.local",
 };
 
-// ============================================================
-// CONSTANTES VISUALES
-// ============================================================
 const COLOR = {
   fondoDe: "#0f172a",
   fondoA: "#020617",
@@ -48,16 +45,12 @@ const COLOR = {
   slate700: "#334155",
   slate600: "#475569",
   slate400: "#94a3b8",
-  slate300: "#cbd5e1",
   slate100: "#f1f5f9",
 };
 
 const PIN_LENGTH = 4;
 const RECORDADO_KEY = "smarttrack_ultimo_usuario";
 
-// ============================================================
-// HELPERS
-// ============================================================
 function leerUsuarioRecordado() {
   try { return localStorage.getItem(RECORDADO_KEY) || null; } catch { return null; }
 }
@@ -68,9 +61,6 @@ function borrarUsuarioRecordado() {
   try { localStorage.removeItem(RECORDADO_KEY); } catch {}
 }
 
-// ============================================================
-// COMPONENTE PRINCIPAL
-// ============================================================
 export default function Login({ onLogin }) {
   useEffect(() => {
     let meta = document.querySelector('meta[name="viewport"]');
@@ -92,6 +82,7 @@ export default function Login({ onLogin }) {
   const [success, setSuccess] = useState(false);
   const [recordado, setRecordado] = useState(null);
 
+  // Al montar: ir directo al PIN si hay usuario recordado
   useEffect(() => {
     const username = leerUsuarioRecordado();
     if (username && USER_EMAIL_MAP[username]) {
@@ -120,10 +111,10 @@ export default function Login({ onLogin }) {
   }, [resetPin]);
 
   // ======================
-  // LOGIN REAL CON SUPABASE
+  // LOGIN OPTIMIZADO
   // ======================
   const verify = useCallback(async (pinValue) => {
-    if (!objetivo?.username) return;
+    if (!objetivo?.username || loading) return;
 
     setLoading(true);
     setError("");
@@ -132,11 +123,11 @@ export default function Login({ onLogin }) {
     if (!email) {
       setError("Usuario no configurado");
       setLoading(false);
-      resetPin();
       return;
     }
 
     try {
+      // 1. Autenticar
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password: pinValue,
@@ -145,10 +136,11 @@ export default function Login({ onLogin }) {
       if (authError) {
         setError("PIN incorrecto");
         setLoading(false);
-        resetPin();
+        setPin("");
         return;
       }
 
+      // 2. Cargar perfil
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
@@ -159,7 +151,7 @@ export default function Login({ onLogin }) {
         await supabase.auth.signOut();
         setError("Perfil no encontrado");
         setLoading(false);
-        resetPin();
+        setPin("");
         return;
       }
 
@@ -167,24 +159,22 @@ export default function Login({ onLogin }) {
         await supabase.auth.signOut();
         setError("Usuario desactivado");
         setLoading(false);
-        resetPin();
+        setPin("");
         return;
       }
 
+      // 3. Éxito → entrar inmediatamente
       setSuccess(true);
       guardarUsuarioRecordado(objetivo.username);
-
-      setTimeout(() => {
-        onLogin?.(profile);
-      }, 600);
+      onLogin?.(profile);
 
     } catch (err) {
       console.error(err);
       setError("Error de conexión");
       setLoading(false);
-      resetPin();
+      setPin("");
     }
-  }, [objetivo, onLogin, resetPin]);
+  }, [objetivo, onLogin, loading]);
 
   // ======================
   // MANEJO DEL PIN
@@ -195,7 +185,8 @@ export default function Login({ onLogin }) {
     setPin((prev) => {
       const next = (prev + d).slice(0, PIN_LENGTH);
       if (next.length === PIN_LENGTH) {
-        setTimeout(() => verify(next), 80);
+        // Pequeño delay solo para que se vea el último dígito
+        setTimeout(() => verify(next), 60);
       }
       return next;
     });
@@ -303,12 +294,12 @@ export default function Login({ onLogin }) {
     pin: objetivo?.label,
   }[step];
 
-  const estiloBotonCuadro = (activo = false) => ({
+  const estiloBotonCuadro = () => ({
     aspectRatio: "1 / 1",
     borderRadius: 18,
     background: COLOR.slate800,
-    border: `1px solid ${activo ? COLOR.amber : "rgba(255,255,255,0.06)"}`,
-    boxShadow: activo ? `0 0 20px ${COLOR.amber}40` : "0 4px 12px rgba(0,0,0,0.25)",
+    border: "1px solid rgba(255,255,255,0.06)",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -316,7 +307,6 @@ export default function Login({ onLogin }) {
     gap: 6,
     cursor: "pointer",
     color: COLOR.slate100,
-    transition: "all 0.2s ease",
   });
 
   return (
@@ -330,107 +320,63 @@ export default function Login({ onLogin }) {
       flexDirection: "column",
     }}>
       <style>{`
-        @keyframes float {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-12px); }
-        }
-        @keyframes pulse-glow {
-          0%, 100% { opacity: 0.4; transform: scale(1); }
-          50% { opacity: 0.7; transform: scale(1.05); }
-        }
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes fadeInUp {
-          from { opacity: 0; transform: translateY(16px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes scaleIn {
-          from { opacity: 0; transform: scale(0.92); }
-          to { opacity: 1; transform: scale(1); }
-        }
-        @keyframes successPop {
-          0% { transform: scale(0.6); opacity: 0; }
-          60% { transform: scale(1.15); }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        .pin-btn {
-          -webkit-tap-highlight-color: transparent;
-          touch-action: manipulation;
-          transition: all 0.15s ease;
-        }
-        .pin-btn:active {
-          transform: scale(0.92);
-          border-color: ${COLOR.amber} !important;
-          box-shadow: 0 0 18px ${COLOR.amber}50 !important;
-        }
-        .card-btn {
-          -webkit-tap-highlight-color: transparent;
-          touch-action: manipulation;
-          transition: all 0.2s ease;
-        }
-        .card-btn:active {
-          transform: scale(0.97);
-        }
-        .fade-in {
-          animation: fadeInUp 0.35s ease both;
-        }
-        .scale-in {
-          animation: scaleIn 0.3s ease both;
-        }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes scaleIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+        .pin-btn { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform 0.12s ease; }
+        .pin-btn:active { transform: scale(0.92); }
+        .card-btn { -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform 0.15s ease; }
+        .card-btn:active { transform: scale(0.97); }
+        .fade-in { animation: fadeInUp 0.25s ease both; }
+        .scale-in { animation: scaleIn 0.2s ease both; }
       `}</style>
 
-      {/* Fondo animado */}
+      {/* Fondos suaves */}
       <div style={{
         position: "absolute", top: -140, left: -100,
-        height: 460, width: 460, borderRadius: "50%",
-        background: `radial-gradient(circle, ${COLOR.amber}28 0%, transparent 70%)`,
+        height: 420, width: 420, borderRadius: "50%",
+        background: `radial-gradient(circle, ${COLOR.amber}22 0%, transparent 70%)`,
         pointerEvents: "none",
-        animation: "pulse-glow 8s ease-in-out infinite",
       }} />
       <div style={{
-        position: "absolute", bottom: -180, right: -80,
-        height: 520, width: 520, borderRadius: "50%",
-        background: `radial-gradient(circle, ${COLOR.emerald}22 0%, transparent 70%)`,
+        position: "absolute", bottom: -160, right: -80,
+        height: 480, width: 480, borderRadius: "50%",
+        background: `radial-gradient(circle, ${COLOR.emerald}18 0%, transparent 70%)`,
         pointerEvents: "none",
-        animation: "pulse-glow 10s ease-in-out infinite 1.5s",
       }} />
 
       <div style={{
         flex: 1, display: "flex", flexDirection: "column",
         alignItems: "center", justifyContent: "center",
-        padding: "36px 20px", position: "relative", zIndex: 1,
+        padding: "32px 20px", position: "relative", zIndex: 1,
       }}>
         <div style={{ width: "100%", maxWidth: 380 }} className="fade-in">
 
           {/* Header */}
-          <div style={{ marginBottom: 28, textAlign: "center" }}>
+          <div style={{ marginBottom: 26, textAlign: "center" }}>
             <div style={{
               display: "inline-flex", alignItems: "center", justifyContent: "center",
-              height: 52, width: 52, borderRadius: "50%",
+              height: 50, width: 50, borderRadius: "50%",
               background: `linear-gradient(145deg, ${COLOR.fondoDe}, #1a2336)`,
-              border: `1.5px solid ${COLOR.amber}90`,
-              boxShadow: `0 0 24px ${COLOR.amber}35, inset 0 1px 0 rgba(255,255,255,0.08)`,
-              marginBottom: 16,
-              animation: "float 5s ease-in-out infinite",
+              border: `1.5px solid ${COLOR.amber}80`,
+              boxShadow: `0 0 20px ${COLOR.amber}30`,
+              marginBottom: 14,
+              animation: "float 4.5s ease-in-out infinite",
             }}>
-              <Fingerprint size={22} color={COLOR.amber} />
+              <Fingerprint size={20} color={COLOR.amber} />
             </div>
             <p style={{
-              fontSize: 11, letterSpacing: 3.5, color: COLOR.emerald,
-              fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6,
+              fontSize: 11, letterSpacing: 3.2, color: COLOR.emerald,
+              fontFamily: "monospace", textTransform: "uppercase", marginBottom: 5,
             }}>
               SMART-TRACK · JMD
             </p>
-            <h1 style={{
-              fontSize: 26, fontWeight: 700, letterSpacing: -0.4,
-              color: "#fff", margin: 0,
-            }}>
+            <h1 style={{ fontSize: 25, fontWeight: 700, color: "#fff", margin: 0 }}>
               {tituloPorPaso}
             </h1>
             {step === "pin" && (
-              <p style={{ fontSize: 13, color: COLOR.slate400, marginTop: 4 }}>
+              <p style={{ fontSize: 13, color: COLOR.slate400, marginTop: 3 }}>
                 {objetivo?.sub} · ingresa tu PIN
               </p>
             )}
@@ -448,50 +394,40 @@ export default function Login({ onLogin }) {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {RUTAS_BOTONES.map((r) => (
                   <button key={r.full} className="card-btn" onClick={() => pickRuta(r.full, r.corto)} style={estiloBotonCuadro()}>
-                    <Route size={16} color={COLOR.amber} />
+                    <Route size={15} color={COLOR.amber} />
                     <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>{r.corto}</span>
                   </button>
                 ))}
                 <button className="card-btn" onClick={pickGerente} style={estiloBotonCuadro()}>
-                  <Crown size={16} color={COLOR.amber} />
+                  <Crown size={15} color={COLOR.amber} />
                   <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>Gerente</span>
                 </button>
                 <button className="card-btn" onClick={pickSupervisor1} style={estiloBotonCuadro()}>
-                  <Users size={16} color={COLOR.amber} />
-                  <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, lineHeight: 1.2, textAlign: "center" }}>Supervisor 1</span>
+                  <Users size={15} color={COLOR.amber} />
+                  <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, textAlign: "center", lineHeight: 1.2 }}>Supervisor 1</span>
                 </button>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                <button
-                  className="card-btn"
-                  onClick={() => setStep("staff")}
-                  style={{
-                    borderRadius: 16,
-                    background: `linear-gradient(135deg, ${COLOR.amber}, ${COLOR.amberOscuro})`,
-                    border: "none",
-                    padding: "15px 0",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                    fontWeight: 600, color: "#0f172a", cursor: "pointer",
-                    boxShadow: `0 6px 20px ${COLOR.amber}40`,
-                  }}
-                >
-                  <Settings size={16} /> Staff
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <button className="card-btn" onClick={() => setStep("staff")} style={{
+                  borderRadius: 16,
+                  background: `linear-gradient(135deg, ${COLOR.amber}, ${COLOR.amberOscuro})`,
+                  border: "none", padding: "14px 0",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                  fontWeight: 600, color: "#0f172a", cursor: "pointer",
+                  boxShadow: `0 5px 16px ${COLOR.amber}35`,
+                }}>
+                  <Settings size={15} /> Staff
                 </button>
-                <button
-                  className="card-btn"
-                  onClick={() => setStep("clo")}
-                  style={{
-                    borderRadius: 16,
-                    background: `linear-gradient(135deg, ${COLOR.emerald}, ${COLOR.emeraldOscuro})`,
-                    border: "none",
-                    padding: "15px 0",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                    fontWeight: 600, color: "#0f172a", cursor: "pointer",
-                    boxShadow: `0 6px 20px ${COLOR.emerald}40`,
-                  }}
-                >
-                  <MapPin size={16} /> Merch
+                <button className="card-btn" onClick={() => setStep("clo")} style={{
+                  borderRadius: 16,
+                  background: `linear-gradient(135deg, ${COLOR.emerald}, ${COLOR.emeraldOscuro})`,
+                  border: "none", padding: "14px 0",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                  fontWeight: 600, color: "#0f172a", cursor: "pointer",
+                  boxShadow: `0 5px 16px ${COLOR.emerald}35`,
+                }}>
+                  <MapPin size={15} /> Merch
                 </button>
               </div>
             </div>
@@ -502,30 +438,23 @@ export default function Login({ onLogin }) {
             <div className="scale-in">
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
                 {STAFF_LISTA.map((s) => (
-                  <button
-                    key={s.username}
-                    className="card-btn"
-                    onClick={() => pickStaff(s)}
-                    style={{
-                      width: "100%", display: "flex", alignItems: "center", gap: 14,
-                      borderRadius: 16, background: COLOR.slate800,
-                      border: "1px solid rgba(255,255,255,0.06)",
-                      padding: "14px 16px", cursor: "pointer", textAlign: "left",
-                    }}
-                  >
+                  <button key={s.username} className="card-btn" onClick={() => pickStaff(s)} style={{
+                    width: "100%", display: "flex", alignItems: "center", gap: 14,
+                    borderRadius: 16, background: COLOR.slate800,
+                    border: "1px solid rgba(255,255,255,0.06)",
+                    padding: "13px 15px", cursor: "pointer", textAlign: "left",
+                  }}>
                     <div style={{
-                      height: 42, width: 42, borderRadius: 12,
+                      height: 40, width: 40, borderRadius: 11,
                       background: "rgba(251,191,36,0.1)",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       color: COLOR.amber, flexShrink: 0,
                     }}>
-                      <s.Icon size={18} />
+                      <s.Icon size={17} />
                     </div>
                     <div>
                       <p style={{ fontSize: 14, fontWeight: 600, margin: 0, color: "#fff" }}>{s.nombre}</p>
-                      <p style={{ fontSize: 11, color: COLOR.slate400, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 0.5, margin: 0 }}>
-                        {s.rolLabel}
-                      </p>
+                      <p style={{ fontSize: 11, color: COLOR.slate400, margin: 0 }}>{s.rolLabel}</p>
                     </div>
                   </button>
                 ))}
@@ -545,17 +474,12 @@ export default function Login({ onLogin }) {
             <div className="scale-in">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                 {MERCH_CLOS.map((c) => (
-                  <button
-                    key={c.nombre}
-                    className="card-btn"
-                    onClick={() => pickClo(c)}
-                    style={{ ...estiloBotonCuadro(), aspectRatio: "auto", padding: "28px 0" }}
-                  >
-                    <MapPin size={20} color={COLOR.amber} />
-                    <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 18 }}>{c.nombre}</span>
-                    <span style={{ fontSize: 10, color: COLOR.slate400, fontFamily: "monospace" }}>
-                      {c.usuarios.length} usuarios
-                    </span>
+                  <button key={c.nombre} className="card-btn" onClick={() => pickClo(c)} style={{
+                    ...estiloBotonCuadro(), aspectRatio: "auto", padding: "26px 0",
+                  }}>
+                    <MapPin size={18} color={COLOR.amber} />
+                    <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 17 }}>{c.nombre}</span>
+                    <span style={{ fontSize: 10, color: COLOR.slate400 }}>{c.usuarios.length} usuarios</span>
                   </button>
                 ))}
               </div>
@@ -574,13 +498,8 @@ export default function Login({ onLogin }) {
             <div className="scale-in">
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
                 {clo.usuarios.map((username) => (
-                  <button
-                    key={username}
-                    className="card-btn"
-                    onClick={() => pickMerch(username)}
-                    style={estiloBotonCuadro()}
-                  >
-                    <Route size={16} color={COLOR.amber} />
+                  <button key={username} className="card-btn" onClick={() => pickMerch(username)} style={estiloBotonCuadro()}>
+                    <Route size={15} color={COLOR.amber} />
                     <span style={{ fontSize: 12, fontFamily: "monospace", fontWeight: 600 }}>{username}</span>
                   </button>
                 ))}
@@ -598,55 +517,48 @@ export default function Login({ onLogin }) {
           {/* PIN */}
           {step === "pin" && (
             <div className="scale-in">
+              {/* Dots */}
               <div style={{
                 display: "flex", justifyContent: "center", gap: 14,
-                marginBottom: 28, height: 36, alignItems: "center",
+                marginBottom: 26, height: 34, alignItems: "center",
               }}>
                 {Array.from({ length: PIN_LENGTH }).map((_, i) => {
                   const lleno = i < pin.length;
                   const colorActivo = error ? COLOR.rose : success ? COLOR.emerald : COLOR.amber;
                   return (
-                    <div
-                      key={i}
-                      style={{
-                        height: 14, width: 14, borderRadius: "50%",
-                        background: lleno ? colorActivo : "transparent",
-                        border: `2px solid ${lleno ? colorActivo : COLOR.slate700}`,
-                        boxShadow: lleno ? `0 0 12px ${colorActivo}80` : "none",
-                        transition: "all 0.2s ease",
-                        transform: lleno ? "scale(1.15)" : "scale(1)",
-                      }}
-                    />
+                    <div key={i} style={{
+                      height: 13, width: 13, borderRadius: "50%",
+                      background: lleno ? colorActivo : "transparent",
+                      border: `2px solid ${lleno ? colorActivo : COLOR.slate700}`,
+                      boxShadow: lleno ? `0 0 10px ${colorActivo}70` : "none",
+                      transition: "all 0.15s ease",
+                    }} />
                   );
                 })}
               </div>
 
               {error && (
-                <p style={{
-                  textAlign: "center", color: COLOR.rose, fontSize: 14,
-                  marginBottom: 14, fontWeight: 600,
-                  animation: "fadeInUp 0.25s ease",
-                }}>
+                <p style={{ textAlign: "center", color: COLOR.rose, fontSize: 14, marginBottom: 12, fontWeight: 600 }}>
                   {error}
                 </p>
               )}
               {success && (
                 <div style={{
                   display: "flex", justifyContent: "center", alignItems: "center",
-                  gap: 8, marginBottom: 14, color: COLOR.emerald,
-                  animation: "successPop 0.4s ease",
+                  gap: 8, marginBottom: 12, color: COLOR.emerald, fontWeight: 600, fontSize: 14,
                 }}>
-                  <ShieldCheck size={18} />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>Acceso correcto</span>
+                  <ShieldCheck size={17} />
+                  Acceso correcto
                 </div>
               )}
               {loading && !success && (
-                <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-                  <LoaderCircle size={20} color={COLOR.amber} style={{ animation: "spin 0.9s linear infinite" }} />
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+                  <LoaderCircle size={18} color={COLOR.amber} style={{ animation: "spin 0.8s linear infinite" }} />
                 </div>
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {/* Teclado */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 11 }}>
                 {["1","2","3","4","5","6","7","8","9"].map((d) => (
                   <button
                     key={d}
@@ -654,14 +566,13 @@ export default function Login({ onLogin }) {
                     onClick={() => pressDigit(d)}
                     disabled={loading || success}
                     style={{
-                      height: 66, borderRadius: "50%",
+                      height: 64, borderRadius: "50%",
                       background: COLOR.slate800,
                       border: "1px solid rgba(255,255,255,0.06)",
-                      fontSize: 22, fontFamily: "monospace", fontWeight: 600,
+                      fontSize: 21, fontFamily: "monospace", fontWeight: 600,
                       color: COLOR.slate100,
                       opacity: (loading || success) ? 0.4 : 1,
                       cursor: (loading || success) ? "default" : "pointer",
-                      boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
                     }}
                   >
                     {d}
@@ -672,7 +583,7 @@ export default function Login({ onLogin }) {
                   onClick={backFromPin}
                   disabled={loading || success}
                   style={{
-                    height: 66, borderRadius: "50%", background: "none", border: "none",
+                    height: 64, borderRadius: "50%", background: "none", border: "none",
                     fontSize: 13, color: COLOR.slate400, fontWeight: 500, cursor: "pointer",
                   }}
                 >
@@ -684,14 +595,13 @@ export default function Login({ onLogin }) {
                   onClick={() => pressDigit("0")}
                   disabled={loading || success}
                   style={{
-                    height: 66, borderRadius: "50%",
+                    height: 64, borderRadius: "50%",
                     background: COLOR.slate800,
                     border: "1px solid rgba(255,255,255,0.06)",
-                    fontSize: 22, fontFamily: "monospace", fontWeight: 600,
+                    fontSize: 21, fontFamily: "monospace", fontWeight: 600,
                     color: COLOR.slate100,
                     opacity: (loading || success) ? 0.4 : 1,
                     cursor: (loading || success) ? "default" : "pointer",
-                    boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
                   }}
                 >
                   0
@@ -702,14 +612,14 @@ export default function Login({ onLogin }) {
                   onClick={pressDelete}
                   disabled={loading || success}
                   style={{
-                    height: 66, borderRadius: "50%", background: "none", border: "none",
+                    height: 64, borderRadius: "50%", background: "none", border: "none",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     color: COLOR.slate400,
                     opacity: (loading || success) ? 0.4 : 1,
                     cursor: (loading || success) ? "default" : "pointer",
                   }}
                 >
-                  <Delete size={20} />
+                  <Delete size={19} />
                 </button>
               </div>
 
@@ -717,7 +627,7 @@ export default function Login({ onLogin }) {
                 <button
                   onClick={cambiarUsuario}
                   style={{
-                    display: "block", margin: "20px auto 0",
+                    display: "block", margin: "18px auto 0",
                     background: "none", border: "none",
                     color: COLOR.slate400, fontSize: 12,
                     textDecoration: "underline", cursor: "pointer",
@@ -733,8 +643,7 @@ export default function Login({ onLogin }) {
 
       <p style={{
         textAlign: "center", fontSize: 10, color: COLOR.slate600,
-        fontFamily: "monospace", paddingBottom: 22, letterSpacing: 3,
-        position: "relative", zIndex: 1,
+        fontFamily: "monospace", paddingBottom: 20, letterSpacing: 3,
       }}>
         PVR · TEPIC
       </p>
