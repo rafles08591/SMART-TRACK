@@ -1,10 +1,10 @@
 // @ts-nocheck
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   Fingerprint, Delete, LoaderCircle, Crown, Users, Wallet, Route,
   ChevronLeft, MapPin, Settings, ShieldCheck
 } from "lucide-react";
-import { supabase } from "../lib/supabase"; // ← ajusta la ruta de tu cliente
+import { supabase } from "../supabaseClient"; // ← Ruta corregida
 
 // ============================================================
 // MAPEO DE USUARIOS → EMAIL (Supabase Auth)
@@ -72,7 +72,6 @@ function borrarUsuarioRecordado() {
 // COMPONENTE PRINCIPAL
 // ============================================================
 export default function Login({ onLogin }) {
-  // Forzar viewport móvil (evita delay de 300ms)
   useEffect(() => {
     let meta = document.querySelector('meta[name="viewport"]');
     if (!meta) {
@@ -83,7 +82,7 @@ export default function Login({ onLogin }) {
     meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
   }, []);
 
-  const [step, setStep] = useState("root"); // root | staff | clo | merch | pin
+  const [step, setStep] = useState("root");
   const [origin, setOrigin] = useState("root");
   const [clo, setClo] = useState(null);
   const [objetivo, setObjetivo] = useState(null);
@@ -93,7 +92,6 @@ export default function Login({ onLogin }) {
   const [success, setSuccess] = useState(false);
   const [recordado, setRecordado] = useState(null);
 
-  // Al montar: si hay usuario recordado, ir directo al PIN
   useEffect(() => {
     const username = leerUsuarioRecordado();
     if (username && USER_EMAIL_MAP[username]) {
@@ -151,7 +149,6 @@ export default function Login({ onLogin }) {
         return;
       }
 
-      // Cargar perfil
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
@@ -174,11 +171,9 @@ export default function Login({ onLogin }) {
         return;
       }
 
-      // Éxito visual
       setSuccess(true);
       guardarUsuarioRecordado(objetivo.username);
 
-      // Pequeña pausa para que se vea la animación de éxito
       setTimeout(() => {
         onLogin?.(profile);
       }, 600);
@@ -200,7 +195,6 @@ export default function Login({ onLogin }) {
     setPin((prev) => {
       const next = (prev + d).slice(0, PIN_LENGTH);
       if (next.length === PIN_LENGTH) {
-        // Pequeño delay para que se vea el último dígito
         setTimeout(() => verify(next), 80);
       }
       return next;
@@ -283,16 +277,9 @@ export default function Login({ onLogin }) {
     resetPin();
   };
 
-  // Merch agrupado por CLO (password original)
   const MERCH_CLOS = [
-    {
-      nombre: "PVR",
-      usuarios: ["MERCH07", "MERCH28", "MERCH29", "MERCH30"],
-    },
-    {
-      nombre: "TEPIC",
-      usuarios: ["MERCH04", "MERCH31", "MERCH32", "MERCH62", "MERCH63"],
-    },
+    { nombre: "PVR", usuarios: ["MERCH07", "MERCH28", "MERCH29", "MERCH30"] },
+    { nombre: "TEPIC", usuarios: ["MERCH04", "MERCH31", "MERCH32", "MERCH62", "MERCH63"] },
   ];
 
   const pickClo = (c) => {
@@ -316,9 +303,6 @@ export default function Login({ onLogin }) {
     pin: objetivo?.label,
   }[step];
 
-  // ======================
-  // ESTILOS REUTILIZABLES
-  // ======================
   const estiloBotonCuadro = (activo = false) => ({
     aspectRatio: "1 / 1",
     borderRadius: 18,
@@ -345,7 +329,6 @@ export default function Login({ onLogin }) {
       display: "flex",
       flexDirection: "column",
     }}>
-      {/* Animaciones CSS */}
       <style>{`
         @keyframes float {
           0%, 100% { transform: translateY(0px); }
@@ -414,7 +397,6 @@ export default function Login({ onLogin }) {
         animation: "pulse-glow 10s ease-in-out infinite 1.5s",
       }} />
 
-      {/* Contenido */}
       <div style={{
         flex: 1, display: "flex", flexDirection: "column",
         alignItems: "center", justifyContent: "center",
@@ -454,7 +436,7 @@ export default function Login({ onLogin }) {
             )}
           </div>
 
-          {/* ========== ROOT ========== */}
+          {/* ROOT */}
           {step === "root" && (
             <div className="scale-in">
               <p style={{
@@ -465,12 +447,7 @@ export default function Login({ onLogin }) {
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {RUTAS_BOTONES.map((r) => (
-                  <button
-                    key={r.full}
-                    className="card-btn"
-                    onClick={() => pickRuta(r.full, r.corto)}
-                    style={estiloBotonCuadro()}
-                  >
+                  <button key={r.full} className="card-btn" onClick={() => pickRuta(r.full, r.corto)} style={estiloBotonCuadro()}>
                     <Route size={16} color={COLOR.amber} />
                     <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>{r.corto}</span>
                   </button>
@@ -481,9 +458,7 @@ export default function Login({ onLogin }) {
                 </button>
                 <button className="card-btn" onClick={pickSupervisor1} style={estiloBotonCuadro()}>
                   <Users size={16} color={COLOR.amber} />
-                  <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, lineHeight: 1.2, textAlign: "center" }}>
-                    Supervisor 1
-                  </span>
+                  <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, lineHeight: 1.2, textAlign: "center" }}>Supervisor 1</span>
                 </button>
               </div>
 
@@ -522,7 +497,7 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ========== STAFF ========== */}
+          {/* STAFF */}
           {step === "staff" && (
             <div className="scale-in">
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
@@ -565,7 +540,7 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ========== CLO ========== */}
+          {/* CLO */}
           {step === "clo" && (
             <div className="scale-in">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
@@ -574,11 +549,7 @@ export default function Login({ onLogin }) {
                     key={c.nombre}
                     className="card-btn"
                     onClick={() => pickClo(c)}
-                    style={{
-                      ...estiloBotonCuadro(),
-                      aspectRatio: "auto",
-                      padding: "28px 0",
-                    }}
+                    style={{ ...estiloBotonCuadro(), aspectRatio: "auto", padding: "28px 0" }}
                   >
                     <MapPin size={20} color={COLOR.amber} />
                     <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 18 }}>{c.nombre}</span>
@@ -598,7 +569,7 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ========== MERCH ========== */}
+          {/* MERCH */}
           {step === "merch" && clo && (
             <div className="scale-in">
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
@@ -624,10 +595,9 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ========== PIN ========== */}
+          {/* PIN */}
           {step === "pin" && (
             <div className="scale-in">
-              {/* Dots del PIN */}
               <div style={{
                 display: "flex", justifyContent: "center", gap: 14,
                 marginBottom: 28, height: 36, alignItems: "center",
@@ -651,7 +621,6 @@ export default function Login({ onLogin }) {
                 })}
               </div>
 
-              {/* Mensaje de error / éxito */}
               {error && (
                 <p style={{
                   textAlign: "center", color: COLOR.rose, fontSize: 14,
@@ -677,7 +646,6 @@ export default function Login({ onLogin }) {
                 </div>
               )}
 
-              {/* Teclado numérico */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
                 {["1","2","3","4","5","6","7","8","9"].map((d) => (
                   <button
@@ -763,7 +731,6 @@ export default function Login({ onLogin }) {
         </div>
       </div>
 
-      {/* Footer */}
       <p style={{
         textAlign: "center", fontSize: 10, color: COLOR.slate600,
         fontFamily: "monospace", paddingBottom: 22, letterSpacing: 3,
