@@ -64,6 +64,42 @@ const CLOS = Object.keys(MERCH_POR_CLO).map((pass) => ({
   usuarios: MERCH_POR_CLO[pass],
 }));
 const PIN_LENGTH = 4;
+
+// Etiqueta ("Manuel", "Gerente"...) y subtítulo ("Ruta de venta",
+// "Supervisor 1"...) para un username guardado, reconstruidos igual que
+// como se arman al elegirlo manualmente desde la pantalla principal — así
+// el login recordado se ve idéntico a como si se hubiera elegido a mano.
+function armarObjetivoDesdeUsername(username) {
+  const user = userDe(username);
+  if (!user) return null;
+  if (RUTAS.includes(username)) {
+    return { user, label: username.replace("RUTA ", ""), sub: NOMBRES[username] || "Ruta de venta" };
+  }
+  if (username === "GERENTE") return { user, label: NOMBRES["GERENTE"] || "Gerente", sub: "Gerente" };
+  if (username === "SUPERVISOR-1") return { user, label: NOMBRES["SUPERVISOR-1"] || "Supervisor 1", sub: "Supervisor 1" };
+  const staff = STAFF_LISTA.find((s) => s.user.username === username);
+  if (staff) return { user, label: staff.nombre, sub: staff.rolLabel };
+  if (user.role === "merch") {
+    const cloDeEste = CLOS.find((c) => c.password === user.password);
+    return { user, label: user.username, sub: `CLO ${cloDeEste?.nombre || ""}` };
+  }
+  return { user, label: username, sub: "" };
+}
+
+// Guarda/lee el último usuario que inició sesión EN ESTE dispositivo — para
+// saltar directo a su pantalla de PIN la próxima vez, sin tener que buscarlo
+// entre las 11 tarjetas cada vez que se abre la app.
+const RECORDADO_KEY = "smarttrack_ultimo_usuario";
+function leerUsuarioRecordado() {
+  try { return localStorage.getItem(RECORDADO_KEY) || null; } catch { return null; }
+}
+function guardarUsuarioRecordado(username) {
+  try { localStorage.setItem(RECORDADO_KEY, username); } catch { /* si el navegador bloquea localStorage, no pasa nada grave */ }
+}
+function borrarUsuarioRecordado() {
+  try { localStorage.removeItem(RECORDADO_KEY); } catch { /* nada que hacer */ }
+}
+
 function estiloBotonCuadro(activo, colorActivo) {
   return {
     aspectRatio: "1 / 1",
@@ -95,11 +131,21 @@ export default function Login({ onLogin }) {
     }
     meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
   }, []);
+
+  // Si este dispositivo ya recuerda a alguien, se arranca DIRECTO en su
+  // pantalla de PIN (sin pasar por la grilla de 11 tarjetas). Se calcula
+  // una sola vez al montar, con useState(() => ...), para que no truene si
+  // por alguna razón el username guardado ya no existe en USERS.
+  const [recordado, setRecordado] = useState(() => {
+    const username = leerUsuarioRecordado();
+    return username ? armarObjetivoDesdeUsername(username) : null;
+  });
+
   // step: 'root' | 'staff' | 'clo' | 'merch' | 'pin'
-  const [step, setStep] = useState("root");
+  const [step, setStep] = useState(recordado ? "pin" : "root");
   const [origin, setOrigin] = useState("root");
   const [clo, setClo] = useState(null);
-  const [objetivo, setObjetivo] = useState(null); // { user, label, sub }
+  const [objetivo, setObjetivo] = useState(recordado);
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -153,6 +199,9 @@ export default function Login({ onLogin }) {
         resetPin();
         return;
       }
+      // Login correcto: se recuerda este usuario en el dispositivo para la
+      // próxima vez que se abra la app (salta directo a su PIN).
+      guardarUsuarioRecordado(objetivo.user.username);
       onLogin?.(objetivo.user);
     }, 150);
   }, [objetivo, onLogin, resetPin]);
@@ -180,6 +229,15 @@ export default function Login({ onLogin }) {
     if (origin === "staff") { setStep("staff"); return; }
     setStep("root");
   }, [origin, resetPin]);
+
+  // "¿No eres tú? Cambiar usuario" — solo aparece cuando se llegó al PIN
+  // por el atajo del dispositivo recordado (no cuando se eligió a mano).
+  // Olvida al usuario guardado y regresa a la grilla completa.
+  const cambiarUsuario = useCallback(() => {
+    borrarUsuarioRecordado();
+    setRecordado(null);
+    goRoot();
+  }, [goRoot]);
 
   // Teclado físico de la computadora: números 0-9, Backspace/Delete y Escape.
   // Solo activo cuando se está en la pantalla de PIN.
@@ -409,6 +467,14 @@ export default function Login({ onLogin }) {
               <p style={{ textAlign: "center", fontSize: 11, color: COLOR.slate400, marginTop: 16 }}>
                 También puedes usar el teclado: 0-9 · ⌫ borrar · Esc cancelar
               </p>
+              {recordado && (
+                <button
+                  onClick={cambiarUsuario}
+                  style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", color: COLOR.slate400, fontSize: 12, textDecoration: "underline", cursor: "pointer" }}
+                >
+                  ¿No eres tú? Cambiar usuario
+                </button>
+              )}
             </div>
           )}
         </div>
