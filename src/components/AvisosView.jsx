@@ -1,10 +1,13 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Ban, CheckCircle2, AlertCircle, MessageSquare, Download } from "lucide-react";
-import { NOMBRES, RUTAS, USERS } from "../constants";
+import { NOMBRES, RUTAS } from "../constants";
 import { fechaHoyISO } from "../utils";
 
-const USUARIOS_MERCH = USERS.filter((u) => u.role === "merch").map((u) => u.username);
+const USUARIOS_MERCH = [
+  "MERCH07", "MERCH28", "MERCH29", "MERCH30", // PVR
+  "MERCH04", "MERCH31", "MERCH32", "MERCH62", "MERCH63" // TEPIC
+];
 const DESTINO_EQUIPO_MERCH = "equipo_merch";
 
 export function avisosRelevantesPara(data, viewerKey, verComoRuta) {
