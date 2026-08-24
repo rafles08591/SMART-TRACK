@@ -1,5 +1,6 @@
 // @ts-nocheck
 // Constantes compartidas de SMART-TRACK
+// ⚠️ Ya no contiene contraseñas. La autenticación se maneja 100% con Supabase Auth.
 
 export const STATE_ID = "main";
 export const SPLASH_IMAGE = "/splash.jpg";
@@ -105,25 +106,11 @@ export const CODIGOS_OTC_SIN_VUALA = [
 ];
 export const OTC_SIN_VUALA_MINIMO = 2;
 
-export const USERS = [
-  ...RUTAS.map((u) => ({ username: u, password: "1234", role: "vendedor" })),
-  { username: "SUPERVISOR-1", password: "3030", role: "staff", puesto: "supervisor" },
-  { username: "SUPERVISOR-2", password: "4545", role: "staff", puesto: "supervisor2" },
-  { username: "GERENTE", password: "1547", role: "staff", puesto: "gerente" },
-  { username: "LIQUIDACION- SULEMA PONCE", password: "7625", role: "liquidacion" },
-  { username: "MERCH07", password: "2220", role: "merch" },
-  { username: "MERCH28", password: "2220", role: "merch" },
-  { username: "MERCH29", password: "2220", role: "merch" },
-  { username: "MERCH30", password: "2220", role: "merch" },
-  // --- CLO TEPIC ---
-  { username: "MERCH04", password: "3049", role: "merch" },
-  { username: "MERCH31", password: "3049", role: "merch" },
-  { username: "MERCH32", password: "3049", role: "merch" },
-  { username: "MERCH62", password: "3049", role: "merch" },
-  { username: "MERCH63", password: "3049", role: "merch" },
-  // --- FACTURACIÓN ---
-  { username: "ADMIN", password: "6748", role: "admin" },
-];
+// ============================================================
+// USERS ELIMINADO
+// Las contraseñas ya no viven en el frontend.
+// La autenticación se hace exclusivamente con Supabase Auth.
+// ============================================================
 
 export const TABLA_COMISION_SUPERVISOR = [
   { desde: 2000, mult: 2.0 },
