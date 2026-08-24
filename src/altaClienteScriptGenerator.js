@@ -198,17 +198,6 @@ async function seleccionarAutocomplete(inputId, textoBuscado, esperaMs = 600, pe
     await esperar(400);
   }
 
-  // El chequeo de "sigue con error" solo bloquea/avisa cuando SÍ se activó
-  // el respaldo de teclado (Municipio). Para CLO/NUR/Estado no se vuelve
-  // a comprobar nada después del clic — el mensaje de error a veces tarda
-  // en desaparecer del DOM aunque el clic sí haya funcionado, y eso
-  // generaba advertencias falsas en campos que en realidad sí quedaban
-  // bien (la alta se guardaba bien en jmdresources de todas formas).
-  if (permitirTeclado && campoConError(input)) {
-    console.warn(\`No se pudo seleccionar "\${textoBuscado}" para \${inputId} (ni con clic ni con teclado) — selecciónala a mano.\`);
-    return false;
-  }
-
   return true;
 }
 
@@ -335,26 +324,42 @@ async function marcarComoEnviadaConFolio(folio) {
 // GUARDAR. En cuanto lo detecta, saca el folio solo, marca la alta como
 // enviada, le da clic a OK para cerrar el recuadro, y pasa a la siguiente
 // — sin que el humano tenga que escribir ni tocar nada después de GUARDAR.
+// Se usa un chequeo periódico (revisa el texto visible de la página cada
+// 400ms) en vez de MutationObserver — el recuadro "Completado" de
+// jmdresources probablemente ya existe escondido en el HTML desde que
+// carga la página y solo se hace visible al guardar (común en Vuetify),
+// no se "agrega" como elemento nuevo, así que MutationObserver nunca lo
+// veía aparecer. Revisando el texto completo cada momento no importa
+// CÓMO aparezca el recuadro — solo que en algún momento el folio esté
+// visible en la página.
 function observarConfirmacionYMarcarEnviada() {
-  const observer = new MutationObserver(async (mutaciones) => {
-    for (const mut of mutaciones) {
-      for (const nodo of mut.addedNodes) {
-        if (nodo.nodeType !== 1) continue;
-        const folio = extraerFolio(nodo.textContent);
-        if (!folio) continue;
-        observer.disconnect();
-        console.log(\`✅ Folio detectado automáticamente: \${folio}\`);
-        await marcarComoEnviadaConFolio(folio);
-        // Cierra el recuadro de confirmación dándole a OK, por si se
-        // queda estorbando para abrir la siguiente alta.
-        await esperar(200);
-        const btnOk = buscarBotonPorTexto("OK");
-        if (btnOk) btnOk.click();
-        return;
-      }
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  const altaAlEmpezar = window.__altaClienteEnProceso;
+  // Por si el recuadro de la alta ANTERIOR no se alcanzó a cerrar bien y
+  // su folio se quedó pegado en la pantalla — así no se confunde ese
+  // folio viejo con el de esta alta nueva. Solo reacciona ante un folio
+  // DISTINTO al que ya estaba visible al empezar a buscar.
+  const folioYaVisibleAlEmpezar = extraerFolio(document.body.innerText);
+  let intentos = 0;
+  const intervalo = setInterval(async () => {
+    intentos++;
+    // Si mientras tanto cambió la alta en proceso (por ejemplo se corrió
+    // procesarSiguienteAlta() de nuevo a mano), se deja de buscar esta
+    // confirmación vieja.
+    if (window.__altaClienteEnProceso !== altaAlEmpezar) { clearInterval(intervalo); return; }
+    // Se rinde después de 15 minutos (2250 intentos) para no dejar un
+    // intervalo corriendo para siempre si algo salió mal.
+    if (intentos > 2250) { clearInterval(intervalo); console.warn("Dejé de buscar el recuadro de confirmación (pasaron 15 min) — usa marcarAltaComoEnviada() a mano si hace falta."); return; }
+    const folio = extraerFolio(document.body.innerText);
+    if (!folio || folio === folioYaVisibleAlEmpezar) return;
+    clearInterval(intervalo);
+    console.log(\`✅ Folio detectado automáticamente: \${folio}\`);
+    await marcarComoEnviadaConFolio(folio);
+    // Cierra el recuadro de confirmación dándole a OK, por si se
+    // queda estorbando para abrir la siguiente alta.
+    await esperar(200);
+    const btnOk = buscarBotonPorTexto("OK");
+    if (btnOk) btnOk.click();
+  }, 400);
 }
 
 // Respaldo manual — por si por alguna razón no apareciera el recuadro de
