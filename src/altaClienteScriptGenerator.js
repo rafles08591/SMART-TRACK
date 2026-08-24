@@ -295,7 +295,7 @@ async function procesarSiguienteAlta() {
 // Saca el número de folio de un texto tipo "...con numero de folio 501696"
 // sin importar acentos ni mayúsculas/minúsculas exactas.
 function extraerFolio(texto) {
-  const m = String(texto || "").match(/folio\D{0,10}(\d{4,})/i);
+  const m = String(texto || "").match(/folio\\\D{0,10}(\\\d{4,})/i);
   return m ? m[1] : null;
 }
 
