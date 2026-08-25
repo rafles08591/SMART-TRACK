@@ -12,6 +12,7 @@ import {
 import { supabase } from "../supabaseClient";
 import { RoadProgress, KpiCard, MarcasBreakdown } from "./ui";
 import NeonObjetivoTabs from "./NeonObjetivoTabs";
+import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
 import MesaControlView from "./MesaControlView";
@@ -39,6 +40,9 @@ const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
 export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
+  // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
+  // pantalla completa en vez del grid.
+  const [pantallaAbierta, setPantallaAbierta] = useState(false);
 
   // Registro de uso: mismo mecanismo que en StaffView.
   useEffect(() => {
@@ -100,23 +104,30 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         refrescando={refrescando}
       />
 
-      <NeonObjetivoTabs
-        tab={tab}
-        setTab={setTab}
-        tabs={OBJETIVO_TABS.filter((t) => {
-          if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
-          return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
-        })}
-        estadoTabs={{
-          rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
-          avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
-          unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
-          facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
-          escalera: !data.escaleraProgreso?.[rutaCodigo]?.orden ? "aviso_nuevo" : undefined,
-          cartera_vencida: hayCarteraVencidaPara(data, rutaCodigo) ? "pendiente_urgente" : undefined,
-        }}
-      />
+      {!pantallaAbierta && (
+        <NeonObjetivoTabs
+          tab={tab}
+          setTab={(k) => { setTab(k); setPantallaAbierta(true); }}
+          tabs={OBJETIVO_TABS.filter((t) => {
+            if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
+            return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
+          })}
+          estadoTabs={{
+            rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
+            avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
+            unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+            facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
+            escalera: !data.escaleraProgreso?.[rutaCodigo]?.orden ? "aviso_nuevo" : undefined,
+            cartera_vencida: hayCarteraVencidaPara(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+          }}
+        />
+      )}
 
+      {pantallaAbierta && (
+        <SwipeBackScreen
+          title={OBJETIVO_TABS.find((t) => t.key === tab)?.label || tab}
+          onBack={() => setPantallaAbierta(false)}
+        >
       {tab === "dia" ? (
         <DiaKpis
           hoy={vendedor.hoy}
@@ -202,6 +213,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
             </div>
           </div>
         </>
+      )}
+        </SwipeBackScreen>
       )}
     </div>
   );
