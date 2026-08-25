@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { AlertCircle, Calendar, CheckCircle2, Clock, CreditCard, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
+import { AlertCircle, Calendar, CheckCircle2, ChevronDown, ChevronUp, Clock, CreditCard, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import html2canvas from "html2canvas";
 import {
@@ -11,7 +11,7 @@ import {
   calcularVisitasVsObjetivo, calcularClientesFaltantes, todayISO,
   formatCrono,
 } from "../utils";
-import { esDeEsteAno, esVencido } from "../carteraVencidaParser";
+import { esDeEsteAno, esVencido, diasParaVencer } from "../carteraVencidaParser";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 import TiemposView, { supabaseTiempos } from "./TiemposView";
@@ -61,6 +61,16 @@ function sanearColoresParaCaptura(nodoOriginal, nodoClon) {
 function formatHoraTiempos(ts) {
   if (!ts) return null;
   return new Date(ts).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// Día de visita probable = el día de la semana en que se generó el
+// documento (ej. si el documento es de lunes, la visita fue un lunes).
+function diaDeVisita(fecha) {
+  if (!fecha) return "—";
+  const d = fecha instanceof Date ? fecha : new Date(fecha);
+  if (isNaN(d)) return "—";
+  const dias = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+  return dias[d.getDay()];
 }
 
 // Convierte una hora en texto ("HH:MM", "HH:MM:SS", o 12h con "a.m."/"p.m.")
@@ -376,6 +386,9 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
   }, [nombreRuta, mesaControl, analisis?.fecha]);
   const capturaRef = useRef(null);
 
+  const [mostrarDetalleSalida, setMostrarDetalleSalida] = useState(false);
+  const [mostrarDetalleCreditos, setMostrarDetalleCreditos] = useState(false);
+
   // Créditos vencidos de ESTA ruta — se calcula del mismo archivo de
   // cartera que ya carga el Staff en la pestaña "Créditos" (data.carteraVencida),
   // filtrado al código de esta ruta (ej. "J201").
@@ -385,14 +398,17 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
     const registros = data?.carteraVencida?.registros || [];
     let cantidad = 0;
     let monto = 0;
+    const detalle = [];
     for (const r of registros) {
       if (r.rutaCodigo !== codigoRutaCredito) continue;
       if (!esDeEsteAno(r, hoy)) continue;
       if (!esVencido(r)) continue;
       cantidad += 1;
       monto += r.saldo;
+      detalle.push(r);
     }
-    return { cantidad, monto };
+    detalle.sort((a, b) => a.vence - b.vence);
+    return { cantidad, monto, detalle };
   }, [data?.carteraVencida?.registros, codigoRutaCredito]);
 
 
@@ -564,12 +580,22 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
         <KpiCard icon={<Target size={14} />} label="Volumen total" value={unidades(volumenTotal)} accent="#F2B134" />
         <KpiCard icon={<AlertCircle size={14} />} label="Visitas < 3 min" value={menores3.length} accent={menores3.length > 0 ? "#FF6B6B" : "#3DDC97"} />
         <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={visitasEfectivas} />
-        <KpiCard
-          icon={<CreditCard size={14} />}
-          label="Créditos vencidos"
-          value={`${creditosVencidos.cantidad} · ${money(creditosVencidos.monto)}`}
-          accent={creditosVencidos.cantidad > 0 ? "#FF6B6B" : "#3DDC97"}
-        />
+        <div
+          onClick={() => creditosVencidos.detalle.length > 0 && setMostrarDetalleCreditos((m) => !m)}
+          style={{ cursor: creditosVencidos.detalle.length > 0 ? "pointer" : "default", position: "relative" }}
+        >
+          <KpiCard
+            icon={<CreditCard size={14} />}
+            label="Créditos vencidos"
+            value={`${creditosVencidos.cantidad} · ${money(creditosVencidos.monto)}`}
+            accent={creditosVencidos.cantidad > 0 ? "#FF6B6B" : "#3DDC97"}
+          />
+          {creditosVencidos.detalle.length > 0 && (
+            <span style={{ position: "absolute", top: 8, right: 8 }}>
+              {mostrarDetalleCreditos ? <ChevronUp size={13} color="#9AA7BD" /> : <ChevronDown size={13} color="#9AA7BD" />}
+            </span>
+          )}
+        </div>
         {vendedorStats?.hoy && (
           <KpiCard
             icon={<Star size={14} />}
@@ -579,6 +605,41 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
           />
         )}
       </div>
+
+      {mostrarDetalleCreditos && creditosVencidos.detalle.length > 0 && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 13, marginBottom: 10, color: "#9AA7BD" }}>
+            DETALLE · CRÉDITOS VENCIDOS ({creditosVencidos.detalle.length})
+          </div>
+          {creditosVencidos.detalle.map((r, i) => {
+            const dias = diasParaVencer(r.vence);
+            return (
+              <div
+                key={i}
+                style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                  padding: "8px 0", borderTop: i > 0 ? "1px solid #1E2A42" : "none", fontSize: 12.5,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: "#E8EDF5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.clienteNombre}
+                  </div>
+                  <div style={{ color: "#9AA7BD", fontSize: 11 }}>
+                    {r.documento} · Día de visita: {diaDeVisita(r.fecha)} ({r.fecha ? r.fecha.toLocaleDateString("es-MX") : "—"}) · Vence {r.vence ? r.vence.toLocaleDateString("es-MX") : "—"}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div className="mono" style={{ color: "#FF6B6B", fontWeight: 700 }}>{money(r.saldo)}</div>
+                  <div style={{ fontSize: 10.5, color: "#FF6B6B" }}>
+                    {dias != null ? `${Math.abs(dias)} día${Math.abs(dias) === 1 ? "" : "s"} vencido` : "—"}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {vendedorStats?.hoy && (
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
@@ -632,20 +693,60 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
         ) : (() => {
           const horaIngresoClo = formatHoraTiempos(tiempos.ingreso_clo?.ts);
           const horaSalidaRuta = formatHoraTiempos(tiempos.salida_ruta?.ts);
-          const diffMin = diferenciaMinutos(horaInicio, horaSalidaRuta);
           const msEnRutaDetalle = tiempos?.salida_ruta?.ts && tiempos?.ingreso_clo_fin?.ts
             ? tiempos.ingreso_clo_fin.ts - tiempos.salida_ruta.ts
             : null;
+
+          // Positivo = la primera visita se registró DESPUÉS de salida a
+          // ruta (orden normal — el número son los minutos que tardó en
+          // llegar/registrar). Negativo = la primera visita se registró
+          // ANTES de que se marcara salida a ruta (anómalo: el vendedor
+          // abrió una visita sin haber salido a ruta todavía).
+          const minDespuesDeSalida = diferenciaMinutos(horaSalidaRuta, horaInicio);
+          const esAntesDeSalida = minDespuesDeSalida != null && minDespuesDeSalida < 0;
+          const magnitudMin = minDespuesDeSalida != null ? Math.abs(minDespuesDeSalida) : null;
+          // Antes de salida a ruta: alerta desde el minuto 1 (no debería
+          // pasar nunca). Después de salida a ruta: margen de 45 min.
+          const salidaEnAlerta = minDespuesDeSalida == null ? false : esAntesDeSalida ? true : magnitudMin > 45;
+
+          const minutosSalida = horaAMinutos(horaSalidaRuta);
+          // Visitas registradas antes de que se marcara "salida a ruta" —
+          // esto es lo que dispara la alerta "antes" (puede ser más de una).
+          const visitasAntesDeSalida = minutosSalida != null
+            ? todos
+                .filter((r) => { const m = horaAMinutos(r.inicio); return m != null && m < minutosSalida; })
+                .sort((a, b) => horaAMinutos(a.inicio) - horaAMinutos(b.inicio))
+            : [];
+          const primeraVisita = todos.length > 0
+            ? todos.slice().sort((a, b) => (horaAMinutos(a.inicio) ?? 99999) - (horaAMinutos(b.inicio) ?? 99999))[0]
+            : null;
+          const visitasParaDetalle = visitasAntesDeSalida.length > 0 ? visitasAntesDeSalida : (primeraVisita ? [primeraVisita] : []);
+
           return (
+            <>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               <KpiCard icon={<Truck size={14} />} label="Ingreso a CLO" value={horaIngresoClo || "—"} />
               <KpiCard icon={<Clock size={14} />} label="Salida a ruta" value={horaSalidaRuta || "—"} />
-              <KpiCard
-                icon={<AlertCircle size={14} />}
-                label="Salida a ruta vs. inicio de ruta"
-                value={diffMin == null ? "—" : `${diffMin > 0 ? "+" : ""}${diffMin} min`}
-                accent={diffMin == null ? undefined : diffMin > 10 ? "#FF6B6B" : "#3DDC97"}
-              />
+              <div
+                onClick={() => visitasParaDetalle.length > 0 && setMostrarDetalleSalida((m) => !m)}
+                style={{
+                  cursor: visitasParaDetalle.length > 0 ? "pointer" : "default",
+                  position: "relative",
+                  ...(salidaEnAlerta ? { border: "1.5px solid #FF6B6B", borderRadius: 14, boxShadow: "0 0 0 1px #FF6B6B33" } : {}),
+                }}
+              >
+                <KpiCard
+                  icon={<AlertCircle size={14} />}
+                  label="Salida a ruta vs. inicio de ruta"
+                  value={magnitudMin == null ? "—" : `${magnitudMin} min ${esAntesDeSalida ? "antes" : "después"}`}
+                  accent={magnitudMin == null ? undefined : salidaEnAlerta ? "#FF6B6B" : "#3DDC97"}
+                />
+                {visitasParaDetalle.length > 0 && (
+                  <span style={{ position: "absolute", top: 8, right: 8 }}>
+                    {mostrarDetalleSalida ? <ChevronUp size={13} color="#9AA7BD" /> : <ChevronDown size={13} color="#9AA7BD" />}
+                  </span>
+                )}
+              </div>
               <KpiCard
                 icon={<Clock size={14} />}
                 label="Tiempo total en ruta"
@@ -653,10 +754,43 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
                 accent={msEnRutaDetalle == null ? undefined : msEnRutaDetalle > UMBRAL_MS_EN_RUTA ? "#FF6B6B" : "#3DDC97"}
               />
             </div>
+
+            {mostrarDetalleSalida && visitasParaDetalle.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="display" style={{ fontSize: 12.5, marginBottom: 8, color: "#9AA7BD" }}>
+                  {visitasAntesDeSalida.length > 0
+                    ? `DETALLE · VISITAS ABIERTAS ANTES DE SALIDA A RUTA (${visitasAntesDeSalida.length})`
+                    : "DETALLE · PRIMERA VISITA DEL DÍA"}
+                </div>
+                {visitasParaDetalle.map((r, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                      padding: "8px 0", borderTop: i > 0 ? "1px solid #1E2A42" : "none", fontSize: 12.5,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: "#E8EDF5" }}>{r.cliente}</div>
+                      <div style={{ color: "#9AA7BD", fontSize: 11 }}>
+                        Apertura: {r.inicio || "—"} · Tipo de apertura: {r.tipoInicio || "SIN DATO"}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div className="mono" style={{ color: r.volumen > 0 ? "#3DDC97" : "#FF6B6B", fontWeight: 700 }}>
+                        {r.volumen > 0 ? "Con venta" : "Sin venta"}
+                      </div>
+                      {r.volumen > 0 && <div style={{ fontSize: 10.5, color: "#9AA7BD" }}>{unidades(r.volumen)}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            </>
           );
         })()}
         <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
-          El número de la comparación es cuántos minutos después (positivo) o antes (negativo) de "Salida a ruta" se registró la primera visita del día.
+          "Antes" = se registró una visita sin haber marcado salida a ruta todavía (alerta inmediata). "Después" = orden normal; se marca en rojo solo si pasaron más de 45 min entre la salida y la primera visita.
         </div>
       </div>
 
