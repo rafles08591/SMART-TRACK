@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
-import { Camera, Image as ImageIcon, Ban, CheckCircle2, Trash2, Download, Plus } from "lucide-react";
+import { Camera, Image as ImageIcon, Ban, CheckCircle2, Trash2, Download, Plus, X, ZoomIn } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
@@ -56,10 +56,49 @@ function LectorQR({ onResult, onClose }) {
 }
 
 /**
+ * Visor de imagen a pantalla completa — se abre al tocar cualquier imagen
+ * de la cuponera (miniatura, expandida, vista previa, o la del cupón
+ * leído) para ver el detalle (ej. tablas de combos con letra chica).
+ * Toca afuera de la imagen, o la X, para cerrar.
+ */
+function Lightbox({ src, onClose }) {
+  if (!src) return null;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 200,
+        background: "rgba(5,8,15,0.94)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <button
+        onClick={onClose}
+        style={{
+          position: "absolute", top: 16, right: 16,
+          background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "50%",
+          width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer",
+        }}
+      >
+        <X size={20} color="#fff" />
+      </button>
+      <img
+        src={src}
+        alt="Imagen ampliada"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8 }}
+      />
+    </div>
+  );
+}
+
+/**
  * Tarjeta de una promoción dentro del listado. Todos los roles la ven;
  * solo gerente tiene el botón de eliminar.
  */
-function TarjetaPromocion({ promo, expandida, onToggle, puedeEliminar, onEliminar }) {
+function TarjetaPromocion({ promo, expandida, onToggle, puedeEliminar, onEliminar, onAmpliar }) {
   return (
     <div className="card" style={{ padding: 14, marginBottom: 10 }}>
       <div
@@ -70,7 +109,8 @@ function TarjetaPromocion({ promo, expandida, onToggle, puedeEliminar, onElimina
           <img
             src={promo.imagen}
             alt={promo.descripcion || "Promoción"}
-            style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, flexShrink: 0 }}
+            onClick={(e) => { e.stopPropagation(); onAmpliar(promo.imagen); }}
+            style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, flexShrink: 0, cursor: "zoom-in" }}
           />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -93,7 +133,26 @@ function TarjetaPromocion({ promo, expandida, onToggle, puedeEliminar, onElimina
       </div>
       {expandida && (
         <div style={{ marginTop: 12 }}>
-          {promo.imagen && <img src={promo.imagen} alt={promo.descripcion} style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 8 }} />}
+          {promo.imagen && (
+            <div style={{ position: "relative", display: "inline-block", marginBottom: 8 }}>
+              <img
+                src={promo.imagen}
+                alt={promo.descripcion}
+                onClick={() => onAmpliar(promo.imagen)}
+                style={{ maxWidth: "100%", borderRadius: 10, cursor: "zoom-in", display: "block" }}
+              />
+              <span
+                style={{
+                  position: "absolute", bottom: 8, right: 8,
+                  background: "rgba(0,0,0,0.55)", borderRadius: 999,
+                  width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                  pointerEvents: "none",
+                }}
+              >
+                <ZoomIn size={14} color="#fff" />
+              </span>
+            </div>
+          )}
           {promo.descripcion && <p style={{ fontSize: 13, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{promo.descripcion}</p>}
           {puedeEliminar && (
             <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>Código: <span className="mono">{promo.codigo}</span></div>
@@ -121,6 +180,7 @@ export default function CuponeraView({ data, persist, persistFresco, puesto, rol
   const [escaneando, setEscaneando] = useState(false);
   const [cuponLeido, setCuponLeido] = useState(null); // { valido, texto, promo?, motivo? }
   const [promoExpandidaId, setPromoExpandidaId] = useState(null);
+  const [imagenAmpliada, setImagenAmpliada] = useState(null); // URL de la imagen abierta en el visor a pantalla completa
   const fileRef = useRef(null);
 
   // Formulario para nueva promoción (solo gerente)
@@ -304,7 +364,12 @@ export default function CuponeraView({ data, persist, persistFresco, puesto, rol
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImagenNuevaPromo} />
           {nuevaImagenPreview && (
-            <img src={nuevaImagenPreview} alt="Vista previa" style={{ maxWidth: 200, borderRadius: 10, marginBottom: 10, display: "block" }} />
+            <img
+              src={nuevaImagenPreview}
+              alt="Vista previa"
+              onClick={() => setImagenAmpliada(nuevaImagenPreview)}
+              style={{ maxWidth: 200, borderRadius: 10, marginBottom: 10, display: "block", cursor: "zoom-in" }}
+            />
           )}
           <textarea
             value={nuevaDescripcion}
@@ -349,6 +414,7 @@ export default function CuponeraView({ data, persist, persistFresco, puesto, rol
               onToggle={() => setPromoExpandidaId((id) => (id === p.id ? null : p.id))}
               puedeEliminar={esGerente}
               onEliminar={eliminarPromocion}
+              onAmpliar={setImagenAmpliada}
             />
           ))
         )}
@@ -383,7 +449,12 @@ export default function CuponeraView({ data, persist, persistFresco, puesto, rol
               </span>
             </div>
             {cuponLeido.valido && cuponLeido.promo?.imagen && (
-              <img src={cuponLeido.promo.imagen} alt="Promoción" style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 8 }} />
+              <img
+                src={cuponLeido.promo.imagen}
+                alt="Promoción"
+                onClick={() => setImagenAmpliada(cuponLeido.promo.imagen)}
+                style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 8, cursor: "zoom-in" }}
+              />
             )}
             {cuponLeido.valido && cuponLeido.promo?.descripcion && (
               <p style={{ fontSize: 13, color: "#E8EDF5" }}>{cuponLeido.promo.descripcion}</p>
@@ -424,6 +495,8 @@ export default function CuponeraView({ data, persist, persistFresco, puesto, rol
           </table>
         </div>
       )}
+
+      <Lightbox src={imagenAmpliada} onClose={() => setImagenAmpliada(null)} />
     </div>
   );
 }
