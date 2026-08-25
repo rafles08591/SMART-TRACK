@@ -466,10 +466,22 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const rutasVisibles = useMemo(() => {
     const delClo = cloFiltro === "todos" ? RUTAS_UNIDADES : RUTAS_UNIDADES.filter((r) => r.clo === cloFiltro);
     if (esLiquidacion) return delClo;
-    if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") return delClo.filter((r) => r.grupo === grupoFijo);
+    if (grupoFijo === "supervisor" || grupoFijo === "supervisor2") {
+      // Un Suplente puede activarse temporalmente dentro de la plantilla de
+      // Supervisor-1 (data.suplentesEnPlantillaSupervisor1) — mientras está
+      // activo, Supervisor-1 lo ve aquí igual que a sus rutas normales,
+      // aunque su "grupo" fijo en RUTAS_UNIDADES sea "gerente".
+      const suplentesActivos = grupoFijo === "supervisor"
+        ? delClo.filter((r) =>
+            (r.id === "SUPLENTE-1" && data?.suplentesEnPlantillaSupervisor1?.suplente1) ||
+            (r.id === "SUPLENTE-2" && data?.suplentesEnPlantillaSupervisor1?.suplente2)
+          )
+        : [];
+      return [...delClo.filter((r) => r.grupo === grupoFijo), ...suplentesActivos];
+    }
     if (esGerente && scopeGerente !== "todos") return delClo.filter((r) => r.grupo === scopeGerente);
     return delClo;
-  }, [grupoFijo, esGerente, scopeGerente, esLiquidacion, cloFiltro]);
+  }, [grupoFijo, esGerente, scopeGerente, esLiquidacion, cloFiltro, data?.suplentesEnPlantillaSupervisor1]);
 
   const unidadesVisibles = useMemo(() => {
     if (alcanceIrrestricto && cloFiltro === "todos") return unidades;
@@ -2335,6 +2347,8 @@ function AsignarUnidades({ esGerente, puesto, data, persistFresco, rutasVisibles
           <tbody>
             {rutasVisibles.map((r) => {
               const valorMostrado = seleccionLocal[r.id] !== undefined ? seleccionLocal[r.id] : (asignaciones[r.id] || "");
+              const claveSuplente = r.id === "SUPLENTE-1" ? "suplente1" : r.id === "SUPLENTE-2" ? "suplente2" : null;
+              const actividad = claveSuplente ? data?.actividadSuplentes?.[claveSuplente] : null;
               return (
                 <tr key={r.id} style={{ borderTop: `1px solid ${T.border}` }}>
                   <td style={{ padding: "8px 12px", fontWeight: 500 }}>{r.id}</td>
@@ -2354,6 +2368,9 @@ function AsignarUnidades({ esGerente, puesto, data, persistFresco, rutasVisibles
                       </select>
                       {guardandoPorRuta[r.id] && <span style={{ fontSize: 11, color: T.muted, whiteSpace: "nowrap" }}>Guardando…</span>}
                     </div>
+                    {actividad && (
+                      <div style={{ fontSize: 11, color: T.primary, marginTop: 4, fontStyle: "italic" }}>{actividad}</div>
+                    )}
                   </td>
                 </tr>
               );
@@ -2404,6 +2421,9 @@ function PermisosSuplentesPanel({ data, persistFresco }) {
   const [nombreCargando, setNombreCargando] = useState(false);
   const [nombreGuardando, setNombreGuardando] = useState(false);
   const [nombreStatus, setNombreStatus] = useState("");
+  const [actividadInput, setActividadInput] = useState("");
+  const [actividadGuardando, setActividadGuardando] = useState(false);
+  const [actividadStatus, setActividadStatus] = useState("");
 
   const permisos = data?.permisosSuplentes?.[suplenteActivo] || [];
   const usernameSuplente = suplenteActivo === "suplente1" ? "SUPLENTE-1" : "SUPLENTE-2";
@@ -2452,6 +2472,38 @@ function PermisosSuplentesPanel({ data, persistFresco }) {
     setGuardando(false);
   }
 
+  const enPlantillaSupervisor1 = !!data?.suplentesEnPlantillaSupervisor1?.[suplenteActivo];
+
+  function alternarPlantillaSupervisor1() {
+    persistFresco((fresca) => ({
+      suplentesEnPlantillaSupervisor1: {
+        ...(fresca.suplentesEnPlantillaSupervisor1 || {}),
+        [suplenteActivo]: !enPlantillaSupervisor1,
+      },
+    }));
+  }
+
+  // Trae el texto de actividad guardado cada vez que se cambia de Suplente,
+  // para no pisarlo sin querer al escribir.
+  useEffect(() => {
+    setActividadInput(data?.actividadSuplentes?.[suplenteActivo] || "");
+    setActividadStatus("");
+  }, [suplenteActivo, data?.actividadSuplentes]);
+
+  async function guardarActividad() {
+    setActividadGuardando(true);
+    setActividadStatus("");
+    await persistFresco((fresca) => ({
+      actividadSuplentes: {
+        ...(fresca.actividadSuplentes || {}),
+        [suplenteActivo]: actividadInput.trim(),
+      },
+    }));
+    setActividadGuardando(false);
+    setActividadStatus("Guardado ✓");
+    setTimeout(() => setActividadStatus(""), 3000);
+  }
+
   return (
     <div className="ru-card" style={{ padding: 16, marginTop: 16 }}>
       <div className="ru-h" style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 4 }}>
@@ -2474,6 +2526,46 @@ function PermisosSuplentesPanel({ data, persistFresco }) {
           SUPLENTE-2
         </button>
         {guardando && <span style={{ fontSize: 11, color: T.muted, alignSelf: "center" }}>Guardando…</span>}
+      </div>
+
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: T.muted, marginBottom: 6, textTransform: "uppercase" }}>
+          Plantilla de Supervisor-1
+        </div>
+        <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+          Actívalo mientras {suplenteActivo === "suplente1" ? "SUPLENTE-1" : "SUPLENTE-2"} esté cubriendo una ruta de venta u otro
+          encargo, para que Supervisor-1 y Gerente lo tengan en la mira en "Asignar unidades" — sin darle el rol de Supervisor.
+          Desactívalo cuando termine el encargo.
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", width: "fit-content" }}>
+          <input type="checkbox" checked={enPlantillaSupervisor1} onChange={alternarPlantillaSupervisor1} style={{ margin: 0 }} />
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: enPlantillaSupervisor1 ? T.primary : T.ink }}>
+            {enPlantillaSupervisor1 ? "Activo — visible para Supervisor-1" : "Inactivo"}
+          </span>
+        </label>
+      </div>
+
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: T.muted, marginBottom: 6, textTransform: "uppercase" }}>
+          Actividad actual
+        </div>
+        <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>
+          Anota qué encargo está cubriendo (ej. "Cubriendo ruta J202", "Entregando pedido a Cliente X", "Visitando Cliente Y").
+        </div>
+        <textarea
+          className="ru-input"
+          rows={2}
+          value={actividadInput}
+          onChange={(e) => setActividadInput(e.target.value)}
+          placeholder="Sin actividad registrada"
+          style={{ width: "100%", boxSizing: "border-box", resize: "vertical", marginBottom: 8 }}
+        />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="ru-btn active" onClick={guardarActividad} disabled={actividadGuardando}>
+            {actividadGuardando ? "Guardando..." : "Guardar actividad"}
+          </button>
+          {actividadStatus && <span style={{ fontSize: 11.5, color: T.ok }}>{actividadStatus}</span>}
+        </div>
       </div>
 
       <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: `1px solid ${T.border}` }}>
