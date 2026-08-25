@@ -2316,6 +2316,15 @@ function AsignarUnidades({ esGerente, puesto, data, persistFresco, rutasVisibles
     setGuardandoPorRuta((prev) => ({ ...prev, [rutaId]: true }));
     try {
       await setAsignaciones((prev) => ({ ...prev, [rutaId]: unidadId }));
+      // Practicidad: además de la asignación "rápida" (la que usa el
+      // conductor para confirmar su unidad al iniciar sesión), sincroniza
+      // también el campo propio `ruta` de la unidad — el que usan "Salida
+      // de hoy", el historial de checklists y el resto de los reportes.
+      // Así un solo cambio aquí ya se refleja en todos lados, sin tener
+      // que ir también a "Todas las unidades" a editarlo aparte.
+      if (unidadId) {
+        setUnidades((prev) => prev.map((u) => (u.id === unidadId ? { ...u, ruta: rutaId } : u)));
+      }
     } finally {
       setGuardandoPorRuta((prev) => {
         const next = { ...prev };
