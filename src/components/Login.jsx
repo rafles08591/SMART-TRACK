@@ -347,14 +347,35 @@ export default function Login({ onLogin }) {
           100% { transform: scale(1.1); }
         }
         .pin-btn {
+          position: relative;
           -webkit-tap-highlight-color: transparent;
           touch-action: manipulation;
-          transition: all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+          transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+          will-change: transform;
         }
         .pin-btn:active {
           transform: scale(0.88);
-          border-color: ${COLOR.amber} !important;
-          box-shadow: 0 0 18px ${COLOR.amber}55 !important;
+        }
+        /* Aro de brillo en su propia capa: solo anima opacity/transform
+           (GPU/compositor, sin repintar) en vez de animar box-shadow o
+           border-color directamente sobre el botón en cada toque — eso
+           es lo que hacía que Android se atrasara al marcar el PIN rápido. */
+        .pin-btn::after {
+          content: "";
+          position: absolute;
+          inset: -5px;
+          border-radius: 50%;
+          border: 1.5px solid ${COLOR.amber};
+          box-shadow: 0 0 18px ${COLOR.amber}80;
+          opacity: 0;
+          transform: scale(0.7);
+          transition: opacity 0.15s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+          pointer-events: none;
+          will-change: opacity, transform;
+        }
+        .pin-btn:active::after {
+          opacity: 1;
+          transform: scale(1);
         }
         .card-btn {
           -webkit-tap-highlight-color: transparent;
