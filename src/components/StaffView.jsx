@@ -480,6 +480,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 </div>
               )}
               <MesaControlView
+                data={data}
                 analisis={analizarMesaControl(data.mesaControl || [], rutaMesaSeleccionada)}
                 nombreRuta={rutaMesaSeleccionada}
                 nombreVendedor={NOMBRES[rutaMesaSeleccionada]}
