@@ -137,7 +137,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
           esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
         />
       ) : tab === "mesa" ? (
-        <MesaControlView analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} mesaControl={data.mesaControl || []} />
+        <MesaControlView data={data} analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} mesaControl={data.mesaControl || []} />
       ) : tab === "cuponera" ? (
         <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
       ) : tab === "rally_otc" ? (
