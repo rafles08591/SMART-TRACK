@@ -552,6 +552,9 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
       )}
       <VistaPanel
         esGerente={esGerente}
+        puesto={puesto}
+        data={data}
+        persistFresco={persistFresco}
         esLiquidacion={esLiquidacion}
         scopeGerente={scopeGerente}
         setScopeGerente={setScopeGerente}
@@ -1588,7 +1591,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   );
 }
 
-function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, clavesGasolina, setClavesGasolina, puedeReporteCombinado }) {
+function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, clavesGasolina, setClavesGasolina, puedeReporteCombinado }) {
   const [gestion, setGestion] = useState("tablero");
   const mostrarGestion = esGerente;
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
