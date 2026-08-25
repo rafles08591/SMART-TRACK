@@ -159,7 +159,19 @@ function normalizarAreas(areas) {
 
 const EMPTY_ACTIVO = { fecha: todayStr(), rutas: {} };
 
-export default function TiemposView({ identidad, misAreas = [], onLogout }) {
+// Suplente-1/2 no son "rutas" fijas como J201-J207: solo deben poder
+// registrarse aquí (salida a ruta, km, y una actividad libre) mientras el
+// Gerente/Supervisor-1 los tenga marcados con la pestaña "Tiempos" activa en
+// permisosSuplentes (mismo mecanismo de permisos por pestaña que ya usa
+// StaffView para decidir qué ve cada Suplente). Ese dato vive en el blob
+// `data` de smart-track (otro proyecto de Supabase), así que llega aquí como
+// prop — TiemposView sigue funcionando igual si no se le pasa (data=null).
+const PUESTO_POR_RUTA_SUPLENTE = { "SUPLENTE-1": "suplente1", "SUPLENTE-2": "suplente2" };
+function esRutaSuplente(ruta) {
+  return ruta === "SUPLENTE-1" || ruta === "SUPLENTE-2";
+}
+
+export default function TiemposView({ identidad, misAreas = [], onLogout, data = null, persistFresco = null }) {
   const [activo, setActivo] = useState(EMPTY_ACTIVO);
   const [historial, setHistorial] = useState([]);
   const [now, setNow] = useState(Date.now());
@@ -174,6 +186,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const [selectedAccion, setSelectedAccion] = useState("");
   const [registrando, setRegistrando] = useState(false);
   const [kmSalida, setKmSalida] = useState("");
+  const [actividadInput, setActividadInput] = useState("");
 
   const activoRef = useRef(activo);
   const historialRef = useRef(historial);
@@ -341,9 +354,31 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: nuevaRuta } });
   };
 
+  // Guarda la actividad libre de un Suplente en el mismo lugar donde ya la
+  // lee/edita el panel de Unidades (data.actividadSuplentes, en el blob
+  // principal de smart-track) — no en el Supabase propio de Tiempos.
+  const guardarActividadSuplente = async (ruta, texto) => {
+    if (!data || !persistFresco || !esRutaSuplente(ruta)) return;
+    const puestoKey = PUESTO_POR_RUTA_SUPLENTE[ruta];
+    await persistFresco((fresca) => ({
+      actividadSuplentes: {
+        ...(fresca.actividadSuplentes || {}),
+        [puestoKey]: texto.trim(),
+      },
+    }));
+  };
+
   const hoy = todayStr();
   const rutasHoy = activo.fecha === hoy ? activo.rutas : {};
   const segundosDesdeSync = lastSync ? Math.max(0, Math.floor((now - lastSync) / 1000)) : null;
+
+  // Un Suplente cuenta como "activo" aquí si tiene la pestaña "tiempos"
+  // marcada en sus permisos (data.permisosSuplentes) — el mismo criterio que
+  // ya decide si el propio Suplente ve esta pestaña al iniciar sesión.
+  const rutasSuplentesActivas = Object.entries(PUESTO_POR_RUTA_SUPLENTE)
+    .filter(([, puestoKey]) => (data?.permisosSuplentes?.[puestoKey] || []).includes("tiempos"))
+    .map(([rutaId]) => rutaId);
+  const rutasEfectivas = [...RUTAS_TIEMPOS, ...rutasSuplentesActivas];
 
   const accionesDisponibles = (ruta) => {
     const r = normalizarRuta(rutasHoy[ruta], ruta);
@@ -366,9 +401,12 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   // que la ruta se complete, y sigue disponible aunque "Salida a ruta" ya
   // se haya marcado (para poder corregirlo después si hace falta).
   const puedeMarcarKm = misAreas.includes("Salida a ruta");
-  const opcionesAccion = puedeMarcarKm
-    ? [...opcionesAccionBase, { value: "km|standalone", label: "Marcar / corregir KM de salida" }]
-    : opcionesAccionBase;
+  const puedeRegistrarActividad = puedeMarcarKm && esRutaSuplente(selectedRuta) && !!data && !!persistFresco;
+  const opcionesAccion = [
+    ...opcionesAccionBase,
+    ...(puedeMarcarKm ? [{ value: "km|standalone", label: "Marcar / corregir KM de salida" }] : []),
+    ...(puedeRegistrarActividad ? [{ value: "actividad|standalone", label: "Registrar actividad del Suplente" }] : []),
+  ];
 
   useEffect(() => {
     if (!opcionesAccion.some((o) => o.value === selectedAccion)) {
@@ -380,6 +418,17 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   const esSalidaARuta = selectedAccion === "salida_ruta|instante";
   const esKmStandalone = selectedAccion === "km|standalone";
   const mostrarCampoKm = esSalidaARuta || esKmStandalone;
+  const esActividadStandalone = selectedAccion === "actividad|standalone";
+
+  // Al cambiar de ruta o de acción, refleja en el campo la actividad ya
+  // guardada para ese Suplente (si la hay), para no pisarla sin querer.
+  useEffect(() => {
+    if (esActividadStandalone && esRutaSuplente(selectedRuta)) {
+      const puestoKey = PUESTO_POR_RUTA_SUPLENTE[selectedRuta];
+      setActividadInput(data?.actividadSuplentes?.[puestoKey] || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [esActividadStandalone, selectedRuta]);
 
   const registrarAccionSeleccionada = async () => {
     if (!selectedAccion) return;
@@ -392,6 +441,15 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
       try {
         await marcarKmSalida(selectedRuta, kmSalida);
         setKmSalida("");
+      } finally {
+        setRegistrando(false);
+      }
+      return;
+    }
+    if (esActividadStandalone) {
+      setRegistrando(true);
+      try {
+        await guardarActividadSuplente(selectedRuta, actividadInput);
       } finally {
         setRegistrando(false);
       }
@@ -468,7 +526,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         return fila;
       };
 
-      const filasHoy = RUTAS_TIEMPOS.map((ruta) => construirFila(ruta, normalizarRuta(rutasHoy[ruta], ruta)));
+      const filasHoy = rutasEfectivas.map((ruta) => construirFila(ruta, normalizarRuta(rutasHoy[ruta], ruta)));
       const filasHistorial = historialOrdenado.map((reg) => construirFila(reg.ruta, { areas: normalizarAreas(reg.areas), __fecha: reg.fecha, finalizado: true }));
 
       const wb = XLSX.utils.book_new();
@@ -543,6 +601,9 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
               {RUTAS_TIEMPOS.map((ruta) => (
                 <option key={ruta} value={ruta}>{ruta}</option>
               ))}
+              {rutasSuplentesActivas.map((ruta) => (
+                <option key={ruta} value={ruta}>{ruta} (Suplente)</option>
+              ))}
             </select>
             <select
               value={selectedAccion}
@@ -585,6 +646,21 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
               />
             </div>
           )}
+
+          {esActividadStandalone && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
+                Actividad que está cubriendo {selectedRuta} (ej. "Cubriendo ruta J202") — se guarda en el mismo lugar que ya muestra Unidades
+              </div>
+              <input
+                type="text"
+                value={actividadInput}
+                onChange={(e) => setActividadInput(e.target.value)}
+                placeholder="Ej. Cubriendo ruta J202"
+                style={{ width: "100%", maxWidth: 320, boxSizing: "border-box" }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -601,17 +677,24 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         <p style={{ fontSize: 13, color: "#9AA7BD" }}>Cargando panel...</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-          {RUTAS_TIEMPOS.map((ruta) => {
+          {rutasEfectivas.map((ruta) => {
             const r = normalizarRuta(rutasHoy[ruta], ruta);
             const iniciada = AREAS.some((a) => (a.tipo === "instante" ? r.areas[a.key].ts : r.areas[a.key].entrada));
             const minEnCLO = r.areas.ingreso_clo.ts && r.areas.salida_ruta.ts
               ? Math.round((r.areas.salida_ruta.ts - r.areas.ingreso_clo.ts) / 60000) : null;
             const minEnRuta = r.areas.salida_ruta.ts && r.areas.ingreso_clo_fin.ts
               ? Math.round((r.areas.ingreso_clo_fin.ts - r.areas.salida_ruta.ts) / 60000) : null;
+            const esSuplente = esRutaSuplente(ruta);
+            const actividadActual = esSuplente ? data?.actividadSuplentes?.[PUESTO_POR_RUTA_SUPLENTE[ruta]] : null;
             return (
               <div key={ruta} className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid #1E2A42", flexWrap: "wrap" }}>
                   <span className="mono" style={{ fontWeight: 700, fontSize: 15 }}>{ruta}</span>
+                  {esSuplente && (
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#a78bfa", background: "#221a3a", border: "1px solid #a78bfa", borderRadius: 6, padding: "2px 8px" }}>
+                      SUPLENTE
+                    </span>
+                  )}
                   {r.finalizado ? (
                     <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: "#3DDC97", background: "#0f2a20", border: "1px solid #3DDC97", borderRadius: 6, padding: "2px 8px" }}>
                       <CheckCircle2 size={11} /> COMPLETA
@@ -622,6 +705,9 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
                     </span>
                   ) : (
                     <span style={{ fontSize: 10, color: "#9AA7BD" }}>SIN REGISTRAR HOY</span>
+                  )}
+                  {actividadActual && (
+                    <span style={{ fontSize: 10, color: "#9AA7BD" }}>· {actividadActual}</span>
                   )}
                   {(minEnCLO != null || minEnRuta != null) && (
                     <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 10, color: "#9AA7BD" }}>
@@ -719,10 +805,10 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
         </button>
       </div>
 
-      <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
+      <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} rutas={rutasEfectivas} />
 
       {timelineFull && (
-        <TimelineFullscreen now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} onClose={() => setTimelineFull(false)} hoy={hoy} />
+        <TimelineFullscreen now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} onClose={() => setTimelineFull(false)} hoy={hoy} rutas={rutasEfectivas} />
       )}
 
       {confirmReset && (
@@ -796,7 +882,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   );
 }
 
-function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
+function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy, rutas }) {
   const contenidoRef = useRef(null);
   const [escala, setEscala] = useState(1);
   const [dimensiones, setDimensiones] = useState({ ancho: 0, alto: 0 });
@@ -863,7 +949,7 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
       <div style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center" }}>
         <div style={{ width: dimensiones.ancho || "auto", height: dimensiones.alto || "auto" }}>
           <div ref={contenidoRef} style={{ transform: `scale(${escala})`, transformOrigin: "top left", width: 1300 }}>
-            <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} />
+            <TimelineBloque now={now} rutasHoy={rutasHoy} calcularPistas={calcularPistas} rutas={rutas} />
           </div>
         </div>
       </div>
@@ -871,9 +957,9 @@ function TimelineFullscreen({ now, rutasHoy, calcularPistas, onClose, hoy }) {
   );
 }
 
-function TimelineBloque({ now, rutasHoy, calcularPistas }) {
+function TimelineBloque({ now, rutasHoy, calcularPistas, rutas = RUTAS_TIEMPOS }) {
   const areasDuracion = AREAS.filter((a) => a.tipo === "duracion");
-  const rutasActivas = RUTAS_TIEMPOS.map((ruta) => ({ ruta, r: normalizarRuta(rutasHoy[ruta], ruta) }))
+  const rutasActivas = rutas.map((ruta) => ({ ruta, r: normalizarRuta(rutasHoy[ruta], ruta) }))
     .map(({ ruta, r }) => ({ ruta, ...calcularPistas(r) }))
     .filter((x) => x.hayActividad);
 
