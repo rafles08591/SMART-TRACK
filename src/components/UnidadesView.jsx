@@ -479,7 +479,19 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
         : [];
       return [...delClo.filter((r) => r.grupo === grupoFijo), ...suplentesActivos];
     }
-    if (esGerente && scopeGerente !== "todos") return delClo.filter((r) => r.grupo === scopeGerente);
+    if (esGerente && scopeGerente !== "todos") {
+      // Mismo criterio que cuando Supervisor-1 entra directamente: si el
+      // Gerente está viendo el alcance "supervisor", también debe ver a los
+      // Suplentes que estén activos en la plantilla de Supervisor-1 — de lo
+      // contrario esta vista y la de Supervisor-1 no coinciden.
+      const suplentesActivos = scopeGerente === "supervisor"
+        ? delClo.filter((r) =>
+            (r.id === "SUPLENTE-1" && data?.suplentesEnPlantillaSupervisor1?.suplente1) ||
+            (r.id === "SUPLENTE-2" && data?.suplentesEnPlantillaSupervisor1?.suplente2)
+          )
+        : [];
+      return [...delClo.filter((r) => r.grupo === scopeGerente), ...suplentesActivos];
+    }
     return delClo;
   }, [grupoFijo, esGerente, scopeGerente, esLiquidacion, cloFiltro, data?.suplentesEnPlantillaSupervisor1]);
 
