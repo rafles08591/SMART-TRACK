@@ -326,6 +326,21 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     }
   };
 
+  // Marca/corrige el kilometraje de salida en CUALQUIER momento (antes,
+  // durante o después de marcar "Salida a ruta"), sin tocar su timestamp
+  // ni el flujo de "ruta completa" — es el mismo dato que ya se pedía
+  // como campo extra al marcar Salida a ruta, solo que ahora también se
+  // puede capturar/corregir como su propia acción, opcional.
+  const marcarKmSalida = async (ruta, kmValor) => {
+    if (!misAreas.includes("Salida a ruta")) return;
+    const hoy = todayStr();
+    let fresh = await fetchLatestActivo();
+    if (fresh.fecha !== hoy) fresh = { fecha: hoy, rutas: {} };
+    const r = normalizarRuta(fresh.rutas[ruta], ruta);
+    const nuevaRuta = { ...r, areas: { ...r.areas, salida_ruta: { ...r.areas.salida_ruta, km: Number(kmValor) } } };
+    await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: nuevaRuta } });
+  };
+
   const hoy = todayStr();
   const rutasHoy = activo.fecha === hoy ? activo.rutas : {};
   const segundosDesdeSync = lastSync ? Math.max(0, Math.floor((now - lastSync) / 1000)) : null;
@@ -346,7 +361,14 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
     return opciones;
   };
 
-  const opcionesAccion = accionesDisponibles(selectedRuta);
+  const opcionesAccionBase = accionesDisponibles(selectedRuta);
+  // "Marcar / corregir KM" es independiente del flujo de AREAS: no bloquea
+  // que la ruta se complete, y sigue disponible aunque "Salida a ruta" ya
+  // se haya marcado (para poder corregirlo después si hace falta).
+  const puedeMarcarKm = misAreas.includes("Salida a ruta");
+  const opcionesAccion = puedeMarcarKm
+    ? [...opcionesAccionBase, { value: "km|standalone", label: "Marcar / corregir KM de salida" }]
+    : opcionesAccionBase;
 
   useEffect(() => {
     if (!opcionesAccion.some((o) => o.value === selectedAccion)) {
@@ -356,16 +378,28 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
   }, [selectedRuta, JSON.stringify(opcionesAccion)]);
 
   const esSalidaARuta = selectedAccion === "salida_ruta|instante";
+  const esKmStandalone = selectedAccion === "km|standalone";
+  const mostrarCampoKm = esSalidaARuta || esKmStandalone;
 
   const registrarAccionSeleccionada = async () => {
     if (!selectedAccion) return;
+    if (mostrarCampoKm && !String(kmSalida).trim()) {
+      alert("Captura el kilometraje.");
+      return;
+    }
+    if (esKmStandalone) {
+      setRegistrando(true);
+      try {
+        await marcarKmSalida(selectedRuta, kmSalida);
+        setKmSalida("");
+      } finally {
+        setRegistrando(false);
+      }
+      return;
+    }
     const [areaKey, modo] = selectedAccion.split("|");
     const area = AREAS.find((a) => a.key === areaKey);
     if (!area) return;
-    if (esSalidaARuta && !String(kmSalida).trim()) {
-      alert("Captura el kilometraje con el que sale la unidad del CLO.");
-      return;
-    }
     setRegistrando(true);
     try {
       if (modo === "instante") {
@@ -534,10 +568,12 @@ export default function TiemposView({ identidad, misAreas = [], onLogout }) {
             </button>
           </div>
 
-          {esSalidaARuta && (
+          {mostrarCampoKm && (
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
-                Kilometraje con el que sale la unidad del CLO (obligatorio)
+                {esSalidaARuta
+                  ? "Kilometraje con el que sale la unidad del CLO (obligatorio)"
+                  : "Kilometraje de salida — puedes capturarlo o corregirlo aunque \"Salida a ruta\" ya esté marcada"}
               </div>
               <input
                 type="number"
