@@ -10,7 +10,8 @@ import {
   calcularResumenPedidos, calcularVisitasVsObjetivo, todayISO,
 } from "../utils";
 import { supabase } from "../supabaseClient";
-import { RoadProgress, KpiCard, MarcasBreakdown, ObjetivoTabs } from "./ui";
+import { RoadProgress, KpiCard, MarcasBreakdown } from "./ui";
+import NeonObjetivoTabs from "./NeonObjetivoTabs";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
 import MesaControlView from "./MesaControlView";
@@ -99,7 +100,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         refrescando={refrescando}
       />
 
-      <ObjetivoTabs
+      <NeonObjetivoTabs
         tab={tab}
         setTab={setTab}
         tabs={OBJETIVO_TABS.filter((t) => {
