@@ -501,7 +501,7 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
       </div>
     );
   }
-  const { fecha, horaInicio, top5, menores3, tipoInicioConteo, tipoFinConteo, volumenTotal, clientesVolumen03, clientesConDescuento, todos } = analisis;
+  const { fecha, horaInicio, top5, menores3, tipoInicioConteo, tipoFinConteo, volumenTotal, clientesVolumen03, clientesConDescuento, todos, visitasEfectivas } = analisis;
 
   return (
     <div>
@@ -542,6 +542,7 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
         <KpiCard icon={<Clock size={14} />} label="Hora de inicio" value={horaInicio || "—"} />
         <KpiCard icon={<Target size={14} />} label="Volumen total" value={unidades(volumenTotal)} accent="#F2B134" />
         <KpiCard icon={<AlertCircle size={14} />} label="Visitas < 3 min" value={menores3.length} accent={menores3.length > 0 ? "#FF6B6B" : "#3DDC97"} />
+        <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={visitasEfectivas} />
         {vendedorStats?.hoy && (
           <KpiCard
             icon={<Star size={14} />}
@@ -551,6 +552,49 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
           />
         )}
       </div>
+
+      {vendedorStats?.hoy && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTAS DEL DÍA (ESTA RUTA)</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            {vendedorStats.hoy.volumen && (
+              <KpiCard
+                icon={<Target size={14} />}
+                label="Volumen (hoy)"
+                value={`${unidades(vendedorStats.hoy.volumen.vendido)} / ${unidades(vendedorStats.hoy.volumen.objetivo)}`}
+                accent={metaColor(vendedorStats.hoy.volumen.vendido, vendedorStats.hoy.volumen.objetivo)}
+              />
+            )}
+            {MARCAS_DIA.map((m) => {
+              const marca = vendedorStats.hoy.marcas?.[m.key];
+              if (!marca) return null;
+              return (
+                <KpiCard
+                  key={m.key}
+                  icon={<Star size={14} />}
+                  label={m.label || m.key}
+                  value={`${unidades(marca.vendido)} / ${unidades(marca.objetivo)}`}
+                  accent={metaColor(marca.vendido, marca.objetivo)}
+                />
+              );
+            })}
+            <KpiCard
+              icon={<Star size={14} />}
+              label="OTC"
+              value={`${money(vendedorStats.hoy.otc?.vendido)} / ${money(vendedorStats.hoy.otc?.objetivo)}`}
+              accent={metaColor(vendedorStats.hoy.otc?.vendido, vendedorStats.hoy.otc?.objetivo)}
+            />
+            {vendedorStats.hoy.otcSinVuala && (
+              <KpiCard
+                icon={<Star size={14} />}
+                label="¿Vendió sin Vuala?"
+                value={`${vendedorStats.hoy.otcSinVuala.cumple ? "Sí" : "No"} · ${vendedorStats.hoy.otcSinVuala.piezas} pza.`}
+                accent={vendedorStats.hoy.otcSinVuala.cumple ? "#3DDC97" : "#FF6B6B"}
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ padding: 16, marginBottom: 20 }}>
         <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>TIEMPOS · INGRESO Y SALIDA A RUTA</div>
