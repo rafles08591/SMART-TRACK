@@ -16,6 +16,7 @@ import {
 } from "../utils";
 import { RoadProgress, KpiCard, MarcasBreakdown, PegarTextoBox, BotonGuardarImagen, ModalTablaCompleta } from "./ui";
 import NeonObjetivoTabs from "./NeonObjetivoTabs";
+import SwipeBackScreen from "./SwipeBackScreen";
 import { useCapturaImagen } from "./hooks";
 import { supabase } from "../supabaseClient";
 import TopBar from "./TopBar";
@@ -50,6 +51,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
+  // true cuando se abrió una tarjeta del grid (DÍA, ESCALERA, MAX...) y se
+  // debe mostrar esa vista a pantalla completa en vez del grid.
+  const [pantallaAbierta, setPantallaAbierta] = useState(false);
   const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
   const [newName, setNewName] = useState("");
 
@@ -278,19 +282,26 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
 
       {tab === "resumen" && (
         <>
-          <NeonObjetivoTabs
-            tab={objTab}
-            setTab={setObjTab}
-            tabs={
-              esSupervisor2
-                ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
-                : esSupervisor1
-                ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
-                : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
-            }
-            estadoTabs={estadoTabsActividades}
-          />
+          {!pantallaAbierta && (
+            <NeonObjetivoTabs
+              tab={objTab}
+              setTab={(k) => { setObjTab(k); setPantallaAbierta(true); }}
+              tabs={
+                esSupervisor2
+                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
+                  : esSupervisor1
+                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
+                  : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
+              }
+              estadoTabs={estadoTabsActividades}
+            />
+          )}
 
+          {pantallaAbierta && (
+            <SwipeBackScreen
+              title={OBJETIVO_TABS.find((t) => t.key === objTab)?.label || objTab}
+              onBack={() => setPantallaAbierta(false)}
+            >
           {objTab === "dia" ? (
             <div ref={capturaDiaCompleto.capturaRef}>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
@@ -737,6 +748,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 </div>
               </div>
             </>
+          )}
+            </SwipeBackScreen>
           )}
         </>
       )}
