@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import {
   Fingerprint, Delete, LoaderCircle, Crown, Users, Wallet, Route,
-  ChevronLeft, MapPin, Settings, ShieldCheck
+  ChevronLeft, MapPin, Settings, ShieldCheck, UserCog
 } from "lucide-react";
 import { supabase } from "../supabaseClient";
 
@@ -19,6 +19,8 @@ const USER_EMAIL_MAP = {
   "GERENTE": "gerente@smarttrack.local",
   "LIQUIDACION- SULEMA PONCE": "liquidacion@smarttrack.local",
   "ADMIN": "admin@smarttrack.local",
+  "SUPLENTE-1": "suplente1@smarttrack.local",
+  "SUPLENTE-2": "suplente2@smarttrack.local",
   "MERCH07": "merch07@smarttrack.local",
   "MERCH28": "merch28@smarttrack.local",
   "MERCH29": "merch29@smarttrack.local",
@@ -219,6 +221,22 @@ export default function Login({ onLogin }) {
   const RUTAS = ["RUTA J201","RUTA J202","RUTA J203","RUTA J204","RUTA J205","RUTA J206","RUTA J207"];
   const RUTAS_BOTONES = RUTAS.map((full) => ({ full, corto: full.replace("RUTA ", "") }));
 
+  // En Android, esperar al evento "click" sintético a veces se atrasa o se
+  // pierde un toque cuando se marca rápido (ej. el PIN). onTouchEnd +
+  // preventDefault responde en el instante en que se levanta el dedo, y
+  // preventDefault en touchend evita que el navegador dispare además el
+  // click normal (así no se duplica la acción). onClick se deja como
+  // respaldo para mouse/teclado (desktop, accesibilidad).
+  function fastTap(handler) {
+    return {
+      onClick: handler,
+      onTouchEnd: (e) => {
+        e.preventDefault();
+        handler();
+      },
+    };
+  }
+
   const pickRuta = (full, corto) => {
     setObjetivo({ username: full, label: corto, sub: "Ruta de venta" });
     setOrigin("root");
@@ -244,6 +262,8 @@ export default function Login({ onLogin }) {
     { username: "SUPERVISOR-2", nombre: "Supervisor 2", rolLabel: "Supervisor 2", Icon: Users },
     { username: "LIQUIDACION- SULEMA PONCE", nombre: "Sulema Ponce", rolLabel: "Liquidación", Icon: Wallet },
     { username: "ADMIN", nombre: "Admin", rolLabel: "Administrador", Icon: Settings },
+    { username: "SUPLENTE-1", nombre: "Suplente 1", rolLabel: "Suplente 1", Icon: UserCog },
+    { username: "SUPLENTE-2", nombre: "Suplente 2", rolLabel: "Suplente 2", Icon: UserCog },
   ];
 
   const pickStaff = (s) => {
@@ -461,16 +481,16 @@ export default function Login({ onLogin }) {
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {RUTAS_BOTONES.map((r) => (
-                  <button key={r.full} className="card-btn" onClick={() => pickRuta(r.full, r.corto)} style={estiloBotonCuadro()}>
+                  <button key={r.full} className="card-btn" {...fastTap(() => pickRuta(r.full, r.corto))} style={estiloBotonCuadro()}>
                     <Route size={16} color={COLOR.amber} />
                     <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>{r.corto}</span>
                   </button>
                 ))}
-                <button className="card-btn" onClick={pickGerente} style={estiloBotonCuadro()}>
+                <button className="card-btn" {...fastTap(pickGerente)} style={estiloBotonCuadro()}>
                   <Crown size={16} color={COLOR.amber} />
                   <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>Gerente</span>
                 </button>
-                <button className="card-btn" onClick={pickSupervisor1} style={estiloBotonCuadro()}>
+                <button className="card-btn" {...fastTap(pickSupervisor1)} style={estiloBotonCuadro()}>
                   <Users size={16} color={COLOR.amber} />
                   <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, lineHeight: 1.2, textAlign: "center" }}>
                     Supervisor 1
@@ -481,7 +501,7 @@ export default function Login({ onLogin }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 4 }}>
                 <button
                   className="card-btn"
-                  onClick={() => setStep("staff")}
+                  {...fastTap(() => setStep("staff"))}
                   style={{
                     borderRadius: 16,
                     background: `linear-gradient(135deg, ${COLOR.amber}, ${COLOR.amberOscuro})`,
@@ -496,7 +516,7 @@ export default function Login({ onLogin }) {
                 </button>
                 <button
                   className="card-btn"
-                  onClick={() => setStep("clo")}
+                  {...fastTap(() => setStep("clo"))}
                   style={{
                     borderRadius: 16,
                     background: `linear-gradient(135deg, ${COLOR.emerald}, ${COLOR.emeraldOscuro})`,
@@ -520,7 +540,7 @@ export default function Login({ onLogin }) {
                   <button
                     key={s.username}
                     className="card-btn"
-                    onClick={() => pickStaff(s)}
+                    {...fastTap(() => pickStaff(s))}
                     style={{
                       width: "100%", display: "flex", alignItems: "center", gap: 14,
                       borderRadius: 16, background: COLOR.slate800,
@@ -543,7 +563,7 @@ export default function Login({ onLogin }) {
                   </button>
                 ))}
               </div>
-              <button onClick={goRoot} style={{
+              <button {...fastTap(goRoot)} style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "center",
                 gap: 6, fontSize: 14, color: COLOR.slate400, padding: "8px 0",
                 background: "none", border: "none", cursor: "pointer",
@@ -560,7 +580,7 @@ export default function Login({ onLogin }) {
                   <button
                     key={c.nombre}
                     className="card-btn"
-                    onClick={() => pickClo(c)}
+                    {...fastTap(() => pickClo(c))}
                     style={{ ...estiloBotonCuadro(), aspectRatio: "auto", padding: "28px 0" }}
                   >
                     <MapPin size={20} color={COLOR.amber} />
@@ -569,7 +589,7 @@ export default function Login({ onLogin }) {
                   </button>
                 ))}
               </div>
-              <button onClick={goRoot} style={{
+              <button {...fastTap(goRoot)} style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "center",
                 gap: 6, fontSize: 14, color: COLOR.slate400, padding: "8px 0",
                 background: "none", border: "none", cursor: "pointer",
@@ -586,7 +606,7 @@ export default function Login({ onLogin }) {
                   <button
                     key={username}
                     className="card-btn"
-                    onClick={() => pickMerch(username)}
+                    {...fastTap(() => pickMerch(username))}
                     style={estiloBotonCuadro()}
                   >
                     <Route size={16} color={COLOR.amber} />
@@ -594,7 +614,7 @@ export default function Login({ onLogin }) {
                   </button>
                 ))}
               </div>
-              <button onClick={() => setStep("clo")} style={{
+              <button {...fastTap(() => setStep("clo"))} style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "center",
                 gap: 6, fontSize: 14, color: COLOR.slate400, padding: "8px 0",
                 background: "none", border: "none", cursor: "pointer",
@@ -661,7 +681,7 @@ export default function Login({ onLogin }) {
                   <button
                     key={d}
                     className="pin-btn"
-                    onClick={() => pressDigit(d)}
+                    {...fastTap(() => pressDigit(d))}
                     disabled={loading || success}
                     style={{
                       height: 66, borderRadius: "50%",
@@ -679,7 +699,7 @@ export default function Login({ onLogin }) {
                 ))}
 
                 <button
-                  onClick={backFromPin}
+                  {...fastTap(backFromPin)}
                   disabled={loading || success}
                   style={{
                     height: 66, borderRadius: "50%", background: "none", border: "none",
@@ -691,7 +711,7 @@ export default function Login({ onLogin }) {
 
                 <button
                   className="pin-btn"
-                  onClick={() => pressDigit("0")}
+                  {...fastTap(() => pressDigit("0"))}
                   disabled={loading || success}
                   style={{
                     height: 66, borderRadius: "50%",
@@ -709,7 +729,7 @@ export default function Login({ onLogin }) {
 
                 <button
                   className="pin-btn"
-                  onClick={pressDelete}
+                  {...fastTap(pressDelete)}
                   disabled={loading || success}
                   style={{
                     height: 66, borderRadius: "50%", background: "none", border: "none",
@@ -725,7 +745,7 @@ export default function Login({ onLogin }) {
 
               {recordado && (
                 <button
-                  onClick={cambiarUsuario}
+                  {...fastTap(cambiarUsuario)}
                   style={{
                     display: "block", margin: "20px auto 0",
                     background: "none", border: "none",
@@ -739,7 +759,7 @@ export default function Login({ onLogin }) {
 
               {!recordado && (
                 <button
-                  onClick={() => alert("Si olvidaste tu PIN, contacta a Gerente para que te lo reinicie.")}
+                  {...fastTap(() => alert("Si olvidaste tu PIN, contacta a Gerente para que te lo reinicie."))}
                   style={{
                     display: "block",
                     margin: "18px auto 0",
