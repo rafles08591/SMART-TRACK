@@ -59,24 +59,104 @@ function LectorQR({ onResult, onClose }) {
  * Visor de imagen a pantalla completa — se abre al tocar cualquier imagen
  * de la cuponera (miniatura, expandida, vista previa, o la del cupón
  * leído) para ver el detalle (ej. tablas de combos con letra chica).
- * Toca afuera de la imagen, o la X, para cerrar.
+ * Soporta pellizcar para hacer zoom, arrastrar para moverse una vez
+ * ampliada, doble toque/doble clic para acercar-alejar rápido, y rueda
+ * del mouse en escritorio. Toca afuera de la imagen, o la X, para cerrar.
  */
 function Lightbox({ src, onClose }) {
+  const [scale, setScale] = useState(1);
+  const [tx, setTx] = useState(0);
+  const [ty, setTy] = useState(0);
+  const [interactuando, setInteractuando] = useState(false);
+  const pinchRef = useRef({ activo: false, distInicial: 0, escalaInicial: 1 });
+  const panRef = useRef({ activo: false, x: 0, y: 0, txInicial: 0, tyInicial: 0 });
+  const ultimoTapRef = useRef(0);
+
+  // Cada vez que se abre una imagen nueva, empieza sin zoom.
+  useEffect(() => {
+    setScale(1);
+    setTx(0);
+    setTy(0);
+  }, [src]);
+
   if (!src) return null;
+
+  function distanciaEntreDedos(touches) {
+    const [a, b] = touches;
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+
+  function alternarZoom() {
+    if (scale > 1) {
+      setScale(1);
+      setTx(0);
+      setTy(0);
+    } else {
+      setScale(2.5);
+    }
+  }
+
+  function handleTouchStart(e) {
+    if (e.touches.length === 2) {
+      pinchRef.current = { activo: true, distInicial: distanciaEntreDedos(e.touches), escalaInicial: scale };
+      setInteractuando(true);
+    } else if (e.touches.length === 1) {
+      const ahora = Date.now();
+      if (ahora - ultimoTapRef.current < 280) {
+        alternarZoom(); // doble toque
+      }
+      ultimoTapRef.current = ahora;
+      if (scale > 1) {
+        panRef.current = { activo: true, x: e.touches[0].clientX, y: e.touches[0].clientY, txInicial: tx, tyInicial: ty };
+        setInteractuando(true);
+      }
+    }
+  }
+
+  function handleTouchMove(e) {
+    if (pinchRef.current.activo && e.touches.length === 2) {
+      e.preventDefault();
+      const nuevaDist = distanciaEntreDedos(e.touches);
+      const factor = nuevaDist / pinchRef.current.distInicial;
+      setScale(Math.min(4, Math.max(1, pinchRef.current.escalaInicial * factor)));
+    } else if (panRef.current.activo && e.touches.length === 1) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - panRef.current.x;
+      const dy = e.touches[0].clientY - panRef.current.y;
+      setTx(panRef.current.txInicial + dx);
+      setTy(panRef.current.tyInicial + dy);
+    }
+  }
+
+  function handleTouchEnd(e) {
+    if (e.touches.length < 2) pinchRef.current.activo = false;
+    if (e.touches.length === 0) {
+      panRef.current.activo = false;
+      setInteractuando(false);
+      if (scale <= 1) { setScale(1); setTx(0); setTy(0); }
+    }
+  }
+
+  function handleWheel(e) {
+    e.preventDefault();
+    setScale((s) => Math.min(4, Math.max(1, s - e.deltaY * 0.0015)));
+  }
+
   return (
     <div
       onClick={onClose}
+      onWheel={handleWheel}
       style={{
         position: "fixed", inset: 0, zIndex: 200,
         background: "rgba(5,8,15,0.94)",
         display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 16,
+        padding: 16, overflow: "hidden", touchAction: "none",
       }}
     >
       <button
         onClick={onClose}
         style={{
-          position: "absolute", top: 16, right: 16,
+          position: "absolute", top: 16, right: 16, zIndex: 1,
           background: "rgba(255,255,255,0.1)", border: "none", borderRadius: "50%",
           width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center",
           cursor: "pointer",
@@ -88,8 +168,23 @@ function Lightbox({ src, onClose }) {
         src={src}
         alt="Imagen ampliada"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8 }}
+        onDoubleClick={(e) => { e.stopPropagation(); alternarZoom(); }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        draggable={false}
+        style={{
+          maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8,
+          transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+          transition: interactuando ? "none" : "transform 0.2s ease",
+          cursor: scale > 1 ? "grab" : "zoom-in",
+          touchAction: "none",
+          userSelect: "none",
+        }}
       />
+      <div style={{ position: "absolute", bottom: 14, left: 0, right: 0, textAlign: "center", fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+        Pellizca o doble toque para zoom
+      </div>
     </div>
   );
 }
