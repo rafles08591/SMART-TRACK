@@ -30,7 +30,7 @@ import { useRef, useState } from "react";
            </SwipeBackScreen>
          )}
 
-         {/* ...un bloque por cada key definido en LauncherGrid... */}
+         // ...un bloque por cada key definido en LauncherGrid...
        </>
      );
 
