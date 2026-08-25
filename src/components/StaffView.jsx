@@ -498,7 +498,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           ) : objTab === "cuponera" ? (
             <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
           ) : objTab === "tiempos" ? (
-            <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
+            <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} data={data} persistFresco={persistFresco} />
           ) : objTab === "unidades" ? (
             <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_PVR} />
           ) : objTab === "nomina" ? (
