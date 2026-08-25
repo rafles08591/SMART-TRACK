@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, memo } from "react";
 
 /* ============================================================
    NeonObjetivoTabs.jsx
@@ -16,13 +16,15 @@ import { useState } from "react";
      estadoTabs -> objeto { [key]: "aviso_nuevo" | "pendiente_urgente"
                    | "completo" | "parpadeo_verde" | "aviso_azul" }
 
-   INTEGRACIÓN (StaffView.jsx y VendorView.jsx):
-     Cambia únicamente el import:
-       import { ObjetivoTabs, ... } from "./ui";
-     por:
-       import { ... } from "./ui";           // quita ObjetivoTabs de aquí
-       import ObjetivoTabs from "./NeonObjetivoTabs";
-     El resto del archivo (JSX, handlers, filtros de tabs) no cambia.
+   OPTIMIZACIÓN DE RENDIMIENTO (Android):
+     - Sin filter:drop-shadow permanente (carísimo de repintar en
+       Android/Skia) — el glow del ícono y el texto usan box-shadow
+       y text-shadow, mucho más baratos.
+     - El pulso de alertas anima opacity en vez de box-shadow (solo
+       compositor/GPU, no repinta), en una capa aparte.
+     - Cada tarjeta es su propio componente memoizado con su propio
+       estado de "presionado" — tocar una tarjeta ya NO vuelve a
+       renderizar las demás.
    ============================================================ */
 
 const SW = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
@@ -121,9 +123,77 @@ function statusOverride(status) {
   }
 }
 
-export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
-  const [pressedKey, setPressedKey] = useState(null);
+const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, onSelect }) {
+  const [pressed, setPressed] = useState(false);
 
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(tKey)}
+      onTouchStart={() => setPressed(true)}
+      onTouchEnd={() => setPressed(false)}
+      onMouseDown={() => setPressed(true)}
+      onMouseUp={() => setPressed(false)}
+      onMouseLeave={() => setPressed(false)}
+      style={{
+        position: "relative",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        gap: 7, padding: "14px 6px", borderRadius: 14, cursor: "pointer", textAlign: "center",
+        border: `1px solid ${active ? color : color + "38"}`,
+        background: `radial-gradient(120% 140% at 50% -10%, ${color}22, transparent 60%), linear-gradient(155deg, #0e1626 0%, #0a1220 100%)`,
+        boxShadow: active ? `0 0 16px -3px ${color}` : "none",
+        transform: pressed ? "scale(0.93)" : "scale(1)",
+        transition: "transform .12s ease, border-color .2s ease",
+        touchAction: "manipulation",
+      }}
+    >
+      {/* Glow de pulso: capa aparte que solo anima OPACITY (compositor/GPU,
+          no repinta) en vez de animar box-shadow directamente. */}
+      {pulse && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute", inset: -1, borderRadius: 14,
+            boxShadow: `0 0 16px -2px ${color}`,
+            animation: "neonPulse 2.1s ease-in-out infinite",
+            pointerEvents: "none",
+            willChange: "opacity",
+          }}
+        />
+      )}
+
+      {badge && (
+        <span style={{
+          position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
+          background: color, boxShadow: `0 0 6px ${color}`,
+        }} />
+      )}
+
+      {/* Glow del ícono con box-shadow (barato) en vez de filter:drop-shadow
+          (carísimo de repintar en Android). */}
+      <span style={{
+        width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center",
+        color, borderRadius: 8, boxShadow: `0 0 8px -1px ${color}90`,
+      }}>
+        {img ? (
+          <img src={img} alt={label} style={{ width: 24, height: "auto", borderRadius: 4 }} />
+        ) : (
+          <TileIcon name={icon} width={22} height={22} />
+        )}
+      </span>
+
+      {/* Glow del texto con text-shadow (barato) en vez de filter:drop-shadow. */}
+      <span style={{
+        fontSize: 10.5, fontWeight: 700, lineHeight: 1.15, color,
+        textShadow: `0 0 4px ${color}90`,
+      }}>
+        {label}
+      </span>
+    </button>
+  );
+});
+
+export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
   const grouped = FAMILY_ORDER.map((fam) => ({
     fam,
     items: (tabs || []).filter((t) => (META[t.key]?.fam || "📋 Operación") === fam),
@@ -141,49 +211,20 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
               const meta = META[t.key] || { icon: "box", color: "#94a3b8" };
               const status = statusOverride(estadoTabs[t.key]);
               const color = status ? status.color : meta.color;
-              const active = tab === t.key;
-              const pressed = pressedKey === t.key;
 
               return (
-                <button
+                <Tile
                   key={t.key}
-                  type="button"
-                  onClick={() => setTab(t.key)}
-                  onTouchStart={() => setPressedKey(t.key)}
-                  onTouchEnd={() => setPressedKey(null)}
-                  onMouseDown={() => setPressedKey(t.key)}
-                  onMouseUp={() => setPressedKey(null)}
-                  onMouseLeave={() => setPressedKey(null)}
-                  style={{
-                    position: "relative",
-                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                    gap: 7, padding: "14px 6px", borderRadius: 14, cursor: "pointer", textAlign: "center",
-                    border: `1px solid ${active ? color : color + "38"}`,
-                    background: `radial-gradient(120% 140% at 50% -10%, ${color}22, transparent 60%), linear-gradient(155deg, #0e1626 0%, #0a1220 100%)`,
-                    boxShadow: active ? `0 0 16px -3px ${color}` : "none",
-                    transform: pressed ? "scale(0.93)" : "scale(1)",
-                    transition: "transform .12s ease, box-shadow .2s ease, border-color .2s ease",
-                    animation: status?.pulse ? "neonPulse 2.1s ease-in-out infinite" : "none",
-                    ["--pulse-c"]: color,
-                  }}
-                >
-                  {status?.badge && (
-                    <span style={{
-                      position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
-                      background: color, boxShadow: `0 0 6px ${color}`,
-                    }} />
-                  )}
-                  <span style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", color, filter: `drop-shadow(0 0 6px ${color})` }}>
-                    {meta.img ? (
-                      <img src={meta.img} alt={t.label} style={{ width: 24, height: "auto", borderRadius: 4 }} />
-                    ) : (
-                      <TileIcon name={meta.icon} width={22} height={22} />
-                    )}
-                  </span>
-                  <span style={{ fontSize: 10.5, fontWeight: 700, lineHeight: 1.15, color, filter: `drop-shadow(0 0 4px ${color}90)` }}>
-                    {t.label}
-                  </span>
-                </button>
+                  tKey={t.key}
+                  label={t.label}
+                  icon={meta.icon}
+                  img={meta.img}
+                  color={color}
+                  active={tab === t.key}
+                  pulse={!!status?.pulse}
+                  badge={!!status?.badge}
+                  onSelect={setTab}
+                />
               );
             })}
           </div>
@@ -191,8 +232,8 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
       ))}
       <style>{`
         @keyframes neonPulse {
-          0%, 100% { box-shadow: 0 0 0px transparent; }
-          50% { box-shadow: 0 0 16px -2px var(--pulse-c); }
+          0%, 100% { opacity: 0.25; }
+          50% { opacity: 1; }
         }
       `}</style>
     </div>
