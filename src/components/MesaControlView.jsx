@@ -11,7 +11,7 @@ import {
   calcularVisitasVsObjetivo, calcularClientesFaltantes, todayISO,
   formatCrono,
 } from "../utils";
-import { esDeEsteAno, esVencido, diasParaVencer } from "../carteraVencidaParser";
+import { esDeEsteAno, esVencido, diasParaVencer, aFecha } from "../carteraVencidaParser";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 import TiemposView, { supabaseTiempos } from "./TiemposView";
@@ -66,9 +66,8 @@ function formatHoraTiempos(ts) {
 // Día de visita probable = el día de la semana en que se generó el
 // documento (ej. si el documento es de lunes, la visita fue un lunes).
 function diaDeVisita(fecha) {
-  if (!fecha) return "—";
-  const d = fecha instanceof Date ? fecha : new Date(fecha);
-  if (isNaN(d)) return "—";
+  const d = aFecha(fecha);
+  if (!d) return "—";
   const dias = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
   return dias[d.getDay()];
 }
@@ -407,7 +406,7 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
       monto += r.saldo;
       detalle.push(r);
     }
-    detalle.sort((a, b) => a.vence - b.vence);
+    detalle.sort((a, b) => (aFecha(a.vence)?.getTime() || 0) - (aFecha(b.vence)?.getTime() || 0));
     return { cantidad, monto, detalle };
   }, [data?.carteraVencida?.registros, codigoRutaCredito]);
 
@@ -626,7 +625,7 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
                     {r.clienteNombre}
                   </div>
                   <div style={{ color: "#9AA7BD", fontSize: 11 }}>
-                    {r.documento} · Día de visita: {diaDeVisita(r.fecha)} ({r.fecha ? r.fecha.toLocaleDateString("es-MX") : "—"}) · Vence {r.vence ? r.vence.toLocaleDateString("es-MX") : "—"}
+                    {r.documento} · Día de visita: {diaDeVisita(r.fecha)} ({aFecha(r.fecha) ? aFecha(r.fecha).toLocaleDateString("es-MX") : "—"}) · Vence {aFecha(r.vence) ? aFecha(r.vence).toLocaleDateString("es-MX") : "—"}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
