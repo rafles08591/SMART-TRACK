@@ -97,6 +97,8 @@ export const RUTAS_UNIDADES = [
   { id: "SUPERVISOR-1", grupo: "supervisor", clo: CLO_PVR },
   { id: "SUPERVISOR-2", grupo: "supervisor2", clo: CLO_PVR },
   { id: "GERENTE", grupo: "gerente", clo: CLO_PVR },
+  { id: "SUPLENTE-1", grupo: "gerente", clo: CLO_PVR },
+  { id: "SUPLENTE-2", grupo: "gerente", clo: CLO_PVR },
 ];
 
 export function cloDeRuta(rutaId) {
@@ -372,7 +374,7 @@ function DialDias({ dias }) {
   );
 }
 
-export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, rol, puesto, identidad, rutaPropia, cloFiltro = CLO_PVR }) {
+export default function UnidadesView({ data, persistRevisionUnidad, persistConfigUnidades, persistFresco, rol, puesto, identidad, rutaPropia, cloFiltro = CLO_PVR }) {
   useEffect(() => {
     if (!document.getElementById("ru-fonts")) {
       const link = document.createElement("link");
@@ -455,7 +457,7 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
   const esGerente = rol === "staff" && puesto === "gerente";
   const esLiquidacion = rol === "liquidacion";
   const esStaff = rol === "staff";
-  const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
+  const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : puesto === "suplente1" ? "SUPLENTE-1" : puesto === "suplente2" ? "SUPLENTE-2" : null;
   const [modoStaff, setModoStaff] = useState("panel");
 
   const [scopeGerente, setScopeGerente] = useState("todos");
@@ -1621,6 +1623,9 @@ function VistaPanel({ esGerente, esLiquidacion, scopeGerente, setScopeGerente, r
       {mostrarGestion && gestion === "asignar" && (
         <AsignarUnidades
           esGerente={esGerente}
+          puesto={puesto}
+          data={data}
+          persistFresco={persistFresco}
           rutasVisibles={rutasVisibles} unidades={unidades} setUnidades={setUnidades}
           asignaciones={asignaciones} setAsignaciones={setAsignaciones}
         />
@@ -2287,7 +2292,7 @@ function PanelLimpieza({ revisiones, persistConfigUnidades }) {
   );
 }
 
-function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asignaciones, setAsignaciones }) {
+function AsignarUnidades({ esGerente, puesto, data, persistFresco, rutasVisibles, unidades, setUnidades, asignaciones, setAsignaciones }) {
   const [seleccionLocal, setSeleccionLocal] = useState({});
   const [guardandoPorRuta, setGuardandoPorRuta] = useState({});
 
@@ -2364,6 +2369,152 @@ function AsignarUnidades({ esGerente, rutasVisibles, unidades, setUnidades, asig
           Dar de alta unidades nuevas o modificar sus datos es exclusivo del rol Gerente.
         </div>
       )}
+
+      {(esGerente || puesto === "supervisor") && persistFresco && (
+        <PermisosSuplentesPanel data={data} persistFresco={persistFresco} />
+      )}
+    </div>
+  );
+}
+
+// Indicadores/pestañas que se pueden marcar o desmarcar para cada
+// Suplente — mismas familias y keys que usa el grid de pestañas
+// (NeonObjetivoTabs) en StaffView, para que coincidan exactamente.
+const INDICADORES_SUPLENTE = [
+  { fam: "Inicio", items: [{ key: "dia", label: "DÍA" }, { key: "escalera", label: "Escalera" }, { key: "mesa", label: "Mesa de Control" }] },
+  { fam: "Avances", items: [{ key: "max", label: "Max" }, { key: "open", label: "Open" }, { key: "champions", label: "Champions" }, { key: "rally_otc", label: "Rally OTC" }, { key: "otc_ventas", label: "OTC Ventas" }] },
+  { fam: "Ventas", items: [{ key: "facturas", label: "Facturas" }, { key: "creditos", label: "Créditos" }, { key: "cartera_vencida", label: "Cartera Vencida" }, { key: "alta_cliente", label: "Alta Cliente" }] },
+  { fam: "Promociones", items: [{ key: "cuponera", label: "Cuponera" }] },
+  { fam: "Operación", items: [{ key: "unidades", label: "Unidades" }, { key: "nomina", label: "Nómina" }, { key: "reloj_checador", label: "Reloj Checador" }, { key: "cargas", label: "Cargas" }, { key: "km", label: "KM" }, { key: "sin_visita", label: "Sin Visita" }, { key: "rutas", label: "Rutas" }, { key: "tepic", label: "Tepic" }] },
+  { fam: "Avisos", items: [{ key: "avisos", label: "Avisos" }] },
+  { fam: "Configuración", items: [{ key: "mi_fondo", label: "Mi Fondo" }] },
+];
+
+// Panel para que Gerente o Supervisor-1 marquen qué pestañas puede ver
+// cada Suplente (1 y 2). Se guarda en data.permisosSuplentes =
+// { suplente1: [keys...], suplente2: [keys...] }, y StaffView.jsx lo
+// usa para filtrar el grid de pestañas cuando puesto === "suplente1"/"suplente2".
+function PermisosSuplentesPanel({ data, persistFresco }) {
+  const [suplenteActivo, setSuplenteActivo] = useState("suplente1");
+  const [guardando, setGuardando] = useState(false);
+  const [nombreInput, setNombreInput] = useState("");
+  const [nombreCargando, setNombreCargando] = useState(false);
+  const [nombreGuardando, setNombreGuardando] = useState(false);
+  const [nombreStatus, setNombreStatus] = useState("");
+
+  const permisos = data?.permisosSuplentes?.[suplenteActivo] || [];
+  const usernameSuplente = suplenteActivo === "suplente1" ? "SUPLENTE-1" : "SUPLENTE-2";
+
+  // Trae el nombre actual desde profiles cada vez que se cambia de
+  // Suplente (o al abrir el panel), para no pisar lo que ya había.
+  useEffect(() => {
+    let activo = true;
+    setNombreCargando(true);
+    setNombreStatus("");
+    supabase
+      .from("profiles")
+      .select("nombre")
+      .eq("username", usernameSuplente)
+      .single()
+      .then(({ data: fila, error }) => {
+        if (!activo) return;
+        if (!error) setNombreInput(fila?.nombre || "");
+        setNombreCargando(false);
+      });
+    return () => { activo = false; };
+  }, [usernameSuplente]);
+
+  async function guardarNombre() {
+    setNombreGuardando(true);
+    setNombreStatus("");
+    const { error } = await supabase
+      .from("profiles")
+      .update({ nombre: nombreInput.trim() || null })
+      .eq("username", usernameSuplente);
+    setNombreGuardando(false);
+    setNombreStatus(error ? `Error: ${error.message}` : "Nombre guardado ✓");
+    setTimeout(() => setNombreStatus(""), 3000);
+  }
+
+  function alternar(key) {
+    const yaLoTiene = permisos.includes(key);
+    const nuevaLista = yaLoTiene ? permisos.filter((k) => k !== key) : [...permisos, key];
+    setGuardando(true);
+    persistFresco((fresca) => ({
+      permisosSuplentes: {
+        ...(fresca.permisosSuplentes || {}),
+        [suplenteActivo]: nuevaLista,
+      },
+    }));
+    setGuardando(false);
+  }
+
+  return (
+    <div className="ru-card" style={{ padding: 16, marginTop: 16 }}>
+      <div className="ru-h" style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 4 }}>
+        Permisos de Suplente — qué pestañas puede ver
+      </div>
+      <div style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>
+        Marca las pestañas que SUPLENTE-1 o SUPLENTE-2 podrán ver al iniciar sesión. Por defecto no ven ninguna hasta que las marques aquí.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button
+          className={`ru-btn ${suplenteActivo === "suplente1" ? "active" : ""}`}
+          onClick={() => setSuplenteActivo("suplente1")}
+        >
+          SUPLENTE-1
+        </button>
+        <button
+          className={`ru-btn ${suplenteActivo === "suplente2" ? "active" : ""}`}
+          onClick={() => setSuplenteActivo("suplente2")}
+        >
+          SUPLENTE-2
+        </button>
+        {guardando && <span style={{ fontSize: 11, color: T.muted, alignSelf: "center" }}>Guardando…</span>}
+      </div>
+
+      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: T.muted, marginBottom: 6, textTransform: "uppercase" }}>Nombre</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            className="ru-input"
+            style={{ maxWidth: 260 }}
+            value={nombreInput}
+            onChange={(e) => setNombreInput(e.target.value)}
+            placeholder={nombreCargando ? "Cargando..." : "Nombre de la persona"}
+            disabled={nombreCargando || nombreGuardando}
+          />
+          <button className="ru-btn active" onClick={guardarNombre} disabled={nombreCargando || nombreGuardando}>
+            {nombreGuardando ? "Guardando..." : "Guardar nombre"}
+          </button>
+          {nombreStatus && (
+            <span style={{ fontSize: 11.5, color: nombreStatus.startsWith("Error") ? T.late : T.ok }}>{nombreStatus}</span>
+          )}
+        </div>
+      </div>
+      {INDICADORES_SUPLENTE.map((fam) => (
+        <div key={fam.fam} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: T.muted, marginBottom: 6, textTransform: "uppercase" }}>{fam.fam}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {fam.items.map((it) => {
+              const marcado = permisos.includes(it.key);
+              return (
+                <label
+                  key={it.key}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer",
+                    padding: "6px 10px", borderRadius: 8, border: `1px solid ${marcado ? T.primary : T.border}`,
+                    background: marcado ? T.primarySoft : T.surface,
+                  }}
+                >
+                  <input type="checkbox" checked={marcado} onChange={() => alternar(it.key)} style={{ margin: 0 }} />
+                  {it.label}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
