@@ -14,7 +14,8 @@ import {
   calcularVisitasVsObjetivo, todayISO, fechaHoyISO, blankObjetivos,
   normalizarActividades, nuevaActividad, creditosPendientes,
 } from "../utils";
-import { RoadProgress, KpiCard, MarcasBreakdown, ObjetivoTabs, PegarTextoBox, BotonGuardarImagen, ModalTablaCompleta } from "./ui";
+import { RoadProgress, KpiCard, MarcasBreakdown, PegarTextoBox, BotonGuardarImagen, ModalTablaCompleta } from "./ui";
+import NeonObjetivoTabs from "./NeonObjetivoTabs";
 import { useCapturaImagen } from "./hooks";
 import { supabase } from "../supabaseClient";
 import TopBar from "./TopBar";
@@ -277,7 +278,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
 
       {tab === "resumen" && (
         <>
-          <ObjetivoTabs
+          <NeonObjetivoTabs
             tab={objTab}
             setTab={setObjTab}
             tabs={
