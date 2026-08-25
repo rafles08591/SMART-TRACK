@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Package, DollarSign, Percent, Target } from "lucide-react";
+import { Package, DollarSign, Percent, Target, Plus, Trash2 } from "lucide-react";
 import { money } from "../utils";
 import { NOMBRES, RUTAS, CODIGOS_OTC_SIN_VUALA } from "../constants";
 import { KpiCard } from "./ui";
@@ -56,11 +56,14 @@ function formatDia(d) {
   return d.toLocaleDateString("es-MX", { weekday: "short", day: "2-digit" }).replace(".", "");
 }
 
-function esSinVuala(codigo) {
-  return CODIGOS_OTC_SIN_VUALA.includes(String(codigo || "").trim());
+// `codigosSinVuala` es un Set combinado: la lista fija CODIGOS_OTC_SIN_VUALA
+// + lo que el Gerente haya agregado desde el catálogo (data.otcSinVualaExtra).
+// Se arma una sola vez en OtcVentasView y se pasa hacia abajo por props.
+function esSinVuala(codigo, codigosSinVuala) {
+  return codigosSinVuala.has(String(codigo || "").trim());
 }
 
-function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
+function TablaCodigos({ filas, mostrarRutas, onClickFila, codigosSinVuala }) {
   if (filas.length === 0) {
     return <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>Sin datos.</div>;
   }
@@ -74,7 +77,7 @@ function TablaCodigos({ filas, mostrarRutas, onClickFila }) {
         <span style={{ flex: "0 0 78px", textAlign: "right" }}>$</span>
       </div>
       {filas.map((f) => {
-        const sinVuala = esSinVuala(f.codigo);
+        const sinVuala = esSinVuala(f.codigo, codigosSinVuala);
         return (
           <div
             key={f.codigo}
@@ -128,7 +131,7 @@ function TablaRutasDeProducto({ filas }) {
   );
 }
 
-function RutaDetalle({ registros, rutaCodigo, vendedorNombre }) {
+function RutaDetalle({ registros, rutaCodigo, vendedorNombre, codigosSinVuala }) {
   const dias = useMemo(() => diasDisponibles(registros, rutaCodigo), [registros, rutaCodigo]);
   const [vista, setVista] = useState("semana"); // "semana" | ISO date string del día
   const totales = useMemo(() => totalesRuta(registros, rutaCodigo), [registros, rutaCodigo]);
@@ -180,7 +183,7 @@ function RutaDetalle({ registros, rutaCodigo, vendedorNombre }) {
       </div>
 
       <div className="card" style={{ padding: 12 }}>
-        <TablaCodigos filas={filas} />
+        <TablaCodigos filas={filas} codigosSinVuala={codigosSinVuala} />
       </div>
     </div>
   );
@@ -188,7 +191,7 @@ function RutaDetalle({ registros, rutaCodigo, vendedorNombre }) {
 
 // Detalle de "Hoy" para una sola ruta — se alimenta directo de OTC DEL
 // DÍA (no de OTC SEMANAL), a diferencia de todo lo demás en este módulo.
-function DetalleHoyRuta({ registrosHoy, rutaCodigo, mostrarEncabezado }) {
+function DetalleHoyRuta({ registrosHoy, rutaCodigo, mostrarEncabezado, codigosSinVuala }) {
   const filas = useMemo(() => detalleCodigosSemana(registrosHoy, rutaCodigo), [registrosHoy, rutaCodigo]);
   const totales = useMemo(() => totalesRuta(registrosHoy, rutaCodigo), [registrosHoy, rutaCodigo]);
 
@@ -208,18 +211,138 @@ function DetalleHoyRuta({ registrosHoy, rutaCodigo, mostrarEncabezado }) {
         </div>
       )}
       <div className="card" style={{ padding: 12 }}>
-        <TablaCodigos filas={filas} />
+        <TablaCodigos filas={filas} codigosSinVuala={codigosSinVuala} />
       </div>
     </div>
   );
 }
 
-export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
-  const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos" | "hoy"
+// =========================================================================
+// CatalogoSinVualaPanel — apartado solo para el Gerente: agregar o quitar
+// códigos de producto que cuentan como "Sin Vuala", sin tocar código ni
+// hacer commit cada vez que sale un producto nuevo.
+//
+// Se guarda en data.otcSinVualaExtra (array de { codigo, articulo }), que
+// se COMBINA en tiempo real con la lista fija CODIGOS_OTC_SIN_VUALA de
+// constants.js — esa lista fija no se toca, solo se le suma lo que el
+// Gerente agregue aquí.
+// =========================================================================
+function CatalogoSinVualaPanel({ data, persistFresco }) {
+  const [codigoNuevo, setCodigoNuevo] = useState("");
+  const [articuloNuevo, setArticuloNuevo] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  const extra = data?.otcSinVualaExtra || [];
+
+  function agregar() {
+    const codigo = codigoNuevo.trim();
+    if (!codigo) return;
+    if (CODIGOS_OTC_SIN_VUALA.includes(codigo) || extra.some((e) => e.codigo === codigo)) {
+      alert(`El código ${codigo} ya está catalogado como Sin Vuala.`);
+      return;
+    }
+    setGuardando(true);
+    persistFresco((fresca) => ({
+      otcSinVualaExtra: [...(fresca.otcSinVualaExtra || []), { codigo, articulo: articuloNuevo.trim() || null }],
+    }));
+    setCodigoNuevo("");
+    setArticuloNuevo("");
+    setGuardando(false);
+  }
+
+  function quitar(codigo) {
+    persistFresco((fresca) => ({
+      otcSinVualaExtra: (fresca.otcSinVualaExtra || []).filter((e) => e.codigo !== codigo),
+    }));
+  }
+
+  return (
+    <div>
+      <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 4 }}>
+        CATÁLOGO · CÓDIGOS SIN VUALA
+      </div>
+      <div style={{ fontSize: 11, color: COLOR_MUTED, marginBottom: 14 }}>
+        Agrega aquí los códigos de producto nuevos que deban contar como "Sin Vuala" en OTC — se reflejan al instante en toda la app, para todas las rutas, sin necesidad de subir código nuevo.
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            value={codigoNuevo}
+            onChange={(e) => setCodigoNuevo(e.target.value)}
+            placeholder="Código (ej. 0360)"
+            style={{ flex: "1 1 140px", padding: "9px 10px", borderRadius: 8, border: `1px solid ${COLOR_BORDE}`, background: "#0F172A", color: "#E8EDF5", fontSize: 13, fontFamily: "monospace" }}
+          />
+          <input
+            type="text"
+            value={articuloNuevo}
+            onChange={(e) => setArticuloNuevo(e.target.value)}
+            placeholder="Nombre del artículo (opcional, ej. CP11D24+EXIS20)"
+            style={{ flex: "2 1 220px", padding: "9px 10px", borderRadius: 8, border: `1px solid ${COLOR_BORDE}`, background: "#0F172A", color: "#E8EDF5", fontSize: 13 }}
+          />
+          <button
+            onClick={agregar}
+            disabled={!codigoNuevo.trim() || guardando}
+            className="btn"
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, opacity: !codigoNuevo.trim() || guardando ? 0.5 : 1 }}
+          >
+            <Plus size={14} /> Agregar
+          </button>
+        </div>
+      </div>
+
+      <div className="display" style={{ fontSize: 12, color: COLOR_MUTED, marginBottom: 8 }}>
+        AGREGADOS POR TI {extra.length > 0 && `(${extra.length})`}
+      </div>
+      {extra.length === 0 ? (
+        <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>
+          Aún no has agregado ningún código adicional.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
+          {extra.map((e) => (
+            <div
+              key={e.codigo}
+              style={{ display: "flex", alignItems: "center", fontSize: 12.5, padding: "8px 10px", borderRadius: 8, background: "#0F172A", borderLeft: `3px solid ${COLOR_VERDE}` }}
+            >
+              <span style={{ flex: "0 0 70px", color: COLOR_MUTED, fontFamily: "monospace" }}>{e.codigo}</span>
+              <span style={{ flex: 1, color: "#E8EDF5" }}>{e.articulo || "—"}</span>
+              <button
+                onClick={() => quitar(e.codigo)}
+                title="Quitar de Sin Vuala"
+                style={{ background: "none", border: "none", color: COLOR_ROJO, cursor: "pointer", display: "flex", alignItems: "center", padding: 4 }}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="display" style={{ fontSize: 12, color: COLOR_MUTED, marginBottom: 8 }}>
+        LISTA FIJA (de constants.js — {CODIGOS_OTC_SIN_VUALA.length})
+      </div>
+      <div style={{ fontSize: 11.5, color: COLOR_MUTED, lineHeight: 1.7, fontFamily: "monospace" }}>
+        {CODIGOS_OTC_SIN_VUALA.join(", ")}
+      </div>
+    </div>
+  );
+}
+
+export default function OtcVentasView({ data, rol, rutaPropia, identidad, persistFresco, puesto }) {
+  const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos" | "hoy" | "catalogo"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
   const [productoSeleccionado, setProductoSeleccionado] = useState(null); // {codigo, articulo}
   const [vistaProductos, setVistaProductos] = useState("semana"); // "semana" | ISO date string del día
   const [modoVendedor, setModoVendedor] = useState("semana"); // "semana" | "hoy" — solo para rol vendedor
+
+  // Combina la lista fija de constants.js con lo que el Gerente haya
+  // agregado desde el catálogo — se recalcula solo si cambia lo agregado.
+  const codigosSinVuala = useMemo(
+    () => new Set([...CODIGOS_OTC_SIN_VUALA, ...(data?.otcSinVualaExtra || []).map((e) => e.codigo)]),
+    [data?.otcSinVualaExtra]
+  );
 
   // Fuente de datos: lo que ya carga el botón "OTC SEMANAL" (y, como
   // respaldo por si esa semana no se ha vuelto a subir, se completa con
@@ -303,12 +426,12 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
         </div>
         {modoVendedor === "semana" ? (
           hayDatos ? (
-            <RutaDetalle registros={registrosTodos} rutaCodigo={rutaPropia} vendedorNombre={identidad} />
+            <RutaDetalle registros={registrosTodos} rutaCodigo={rutaPropia} vendedorNombre={identidad} codigosSinVuala={codigosSinVuala} />
           ) : (
             <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no se ha cargado la información de OTC de esta semana.</div>
           )
         ) : (
-          <DetalleHoyRuta registrosHoy={registrosHoy} rutaCodigo={rutaPropia} mostrarEncabezado={false} />
+          <DetalleHoyRuta registrosHoy={registrosHoy} rutaCodigo={rutaPropia} mostrarEncabezado={false} codigosSinVuala={codigosSinVuala} />
         )}
         {modoVendedor === "hoy" && registrosHoy.filter((r) => r.rutaCodigo === rutaPropia).length === 0 && (
           <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 20 }}>Aún no hay ventas de OTC cargadas para hoy.</div>
@@ -351,7 +474,20 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
         >
           Hoy
         </button>
+        {puesto === "gerente" && (
+          <button
+            onClick={() => { setModoStaff("catalogo"); setRutaStaffSeleccionada(null); setProductoSeleccionado(null); }}
+            className={modoStaff === "catalogo" ? "btn" : "btn-ghost"}
+            style={{ fontSize: 13, flex: 1 }}
+          >
+            Catálogo
+          </button>
+        )}
       </div>
+
+      {modoStaff === "catalogo" && puesto === "gerente" && (
+        <CatalogoSinVualaPanel data={data} persistFresco={persistFresco} />
+      )}
 
       {modoStaff === "hoy" && (
         <div>
@@ -367,7 +503,7 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
             </div>
           ) : (
             rutasConVentaHoy.map((rc) => (
-              <DetalleHoyRuta key={rc} registrosHoy={registrosHoy} rutaCodigo={rc} mostrarEncabezado />
+              <DetalleHoyRuta key={rc} registrosHoy={registrosHoy} rutaCodigo={rc} mostrarEncabezado codigosSinVuala={codigosSinVuala} />
             ))
           )}
         </div>
@@ -424,6 +560,7 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
             <RutaDetalle
               registros={registrosTodos}
               rutaCodigo={rutaStaffSeleccionada}
+              codigosSinVuala={codigosSinVuala}
             />
           </div>
         )
@@ -463,7 +600,7 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad }) {
               <span style={{ marginLeft: 10, display: "inline-block", width: 10, height: 10, borderRadius: 3, background: COLOR_MUTED, opacity: 0.4 }} /> Vuala
             </div>
             <div className="card" style={{ padding: 12 }}>
-              <TablaCodigos filas={resumenProductos} mostrarRutas onClickFila={(f) => setProductoSeleccionado(f)} />
+              <TablaCodigos filas={resumenProductos} mostrarRutas onClickFila={(f) => setProductoSeleccionado(f)} codigosSinVuala={codigosSinVuala} />
             </div>
           </div>
         ) : (
