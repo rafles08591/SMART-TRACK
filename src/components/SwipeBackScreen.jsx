@@ -43,22 +43,48 @@ export default function SwipeBackScreen({ title, icon, onBack, children }) {
   const screenRef = useRef(null);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const startRef = useRef({ x: 0, y: 0, locked: null });
+  const startRef = useRef({ x: 0, y: 0, locked: null, scrollEl: null });
+
+  // Busca, desde el punto donde empezó el toque hacia arriba, si hay una
+  // tabla/contenedor con su propio scroll horizontal (ej. tablas anchas
+  // con overflow-x). Si el dedo arrancó ahí, el gesto de "regresar" se
+  // desactiva por completo para ese toque — se deja que la tabla se mueva
+  // de forma nativa, sin que la pantalla intente cerrarse.
+  function buscarTablaConScrollPropio(el) {
+    let nodo = el;
+    while (nodo && nodo !== screenRef.current && nodo !== document.body) {
+      if (nodo.scrollWidth > nodo.clientWidth + 1) {
+        const overflowX = window.getComputedStyle(nodo).overflowX;
+        if (overflowX === "auto" || overflowX === "scroll") return nodo;
+      }
+      nodo = nodo.parentElement;
+    }
+    return null;
+  }
 
   const handleTouchStart = (e) => {
     const t = e.touches[0];
-    startRef.current = { x: t.clientX, y: t.clientY, locked: null };
+    const scrollEl = buscarTablaConScrollPropio(e.target);
+    startRef.current = { x: t.clientX, y: t.clientY, locked: null, scrollEl };
     setDragging(true);
   };
 
   const handleTouchMove = (e) => {
+    // El toque empezó dentro de una tabla con scroll horizontal propio:
+    // nunca lo tratamos como "regresar", dejamos que la tabla se mueva
+    // de forma nativa (no llamamos preventDefault ni movemos la pantalla).
+    if (startRef.current.scrollEl) return;
+
     const t = e.touches[0];
     const dx = t.clientX - startRef.current.x;
     const dy = t.clientY - startRef.current.y;
 
     if (!startRef.current.locked) {
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-        startRef.current.locked = Math.abs(dx) > Math.abs(dy) && dx > 0 ? "h" : "v";
+      // Umbral más alto (14px) y exige que el movimiento sea claramente
+      // horizontal (1.4x más ancho que alto) — menos sensible a arrastres
+      // diagonales o accidentales.
+      if (Math.abs(dx) > 14 || Math.abs(dy) > 14) {
+        startRef.current.locked = dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.4 ? "h" : "v";
       }
     }
 
@@ -71,12 +97,15 @@ export default function SwipeBackScreen({ title, icon, onBack, children }) {
   const handleTouchEnd = () => {
     setDragging(false);
     const width = screenRef.current?.offsetWidth ?? 1;
-    if (startRef.current.locked === "h" && dragX > width * 0.32) {
+    // Umbral de cierre más alto (45% del ancho, antes 32%) — evita que un
+    // arrastre a medias termine cerrando la pantalla sin querer.
+    if (startRef.current.locked === "h" && dragX > width * 0.45) {
       onBack();
     } else {
       setDragX(0);
     }
     startRef.current.locked = null;
+    startRef.current.scrollEl = null;
   };
 
   return (
