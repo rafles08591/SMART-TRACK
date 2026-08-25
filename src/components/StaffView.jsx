@@ -48,6 +48,8 @@ import OtcVentasView from "./OtcVentasView";
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
+  const esSuplente1 = puesto === "suplente1";
+  const esSuplente2 = puesto === "suplente2";
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
@@ -287,7 +289,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               tab={objTab}
               setTab={(k) => { setObjTab(k); setPantallaAbierta(true); }}
               tabs={
-                esSupervisor2
+                (esSuplente1 || esSuplente2)
+                  ? OBJETIVO_TABS.filter((t) => (data.permisosSuplentes?.[puesto] || []).includes(t.key))
+                  : esSupervisor2
                   ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
@@ -496,7 +500,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           ) : objTab === "tiempos" ? (
             <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} />
           ) : objTab === "unidades" ? (
-            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_PVR} />
+            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_PVR} />
           ) : objTab === "nomina" ? (
             <NominaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
           ) : objTab === "sin_visita" ? (
@@ -525,7 +529,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 14 }}>
                 Unidades y revisiones del CLO Tepic. El reporte combinado de ambos CLOs está al final, junto a la bitácora.
               </div>
-              <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_TEPIC} />
+              <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_TEPIC} />
             </div>
           ) : objTab === "creditos" ? (
             <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
