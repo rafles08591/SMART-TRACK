@@ -1,6 +1,6 @@
 // @ts-nocheck
-import React, { useState, useEffect, useRef } from "react";
-import { AlertCircle, Calendar, CheckCircle2, Clock, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { AlertCircle, Calendar, CheckCircle2, Clock, CreditCard, Download, MapPin, Star, Target, Ticket, Truck, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import html2canvas from "html2canvas";
 import {
@@ -11,6 +11,7 @@ import {
   calcularVisitasVsObjetivo, calcularClientesFaltantes, todayISO,
   formatCrono,
 } from "../utils";
+import { esDeEsteAno, esVencido } from "../carteraVencidaParser";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 import TiemposView, { supabaseTiempos } from "./TiemposView";
@@ -347,7 +348,7 @@ async function buscarTiemposParaRutaFecha(rutaCodigo, fecha) {
 }
 
 
-export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo, mesaControl }) {
+export default function MesaControlView({ data, analisis, nombreRuta, nombreVendedor, revisor, vendedorStats, resumenPedidos, visitasVsObjetivo, mesaControl }) {
   const [modoCaptura, setModoCaptura] = useState(false);
   const [tiempos, setTiempos] = useState(null);
   const [tiemposCargando, setTiemposCargando] = useState(true);
@@ -374,6 +375,26 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
     return () => { activo = false; };
   }, [nombreRuta, mesaControl, analisis?.fecha]);
   const capturaRef = useRef(null);
+
+  // Créditos vencidos de ESTA ruta — se calcula del mismo archivo de
+  // cartera que ya carga el Staff en la pestaña "Créditos" (data.carteraVencida),
+  // filtrado al código de esta ruta (ej. "J201").
+  const codigoRutaCredito = (nombreRuta || "").replace("RUTA ", "").trim();
+  const creditosVencidos = useMemo(() => {
+    const hoy = new Date();
+    const registros = data?.carteraVencida?.registros || [];
+    let cantidad = 0;
+    let monto = 0;
+    for (const r of registros) {
+      if (r.rutaCodigo !== codigoRutaCredito) continue;
+      if (!esDeEsteAno(r, hoy)) continue;
+      if (!esVencido(r)) continue;
+      cantidad += 1;
+      monto += r.saldo;
+    }
+    return { cantidad, monto };
+  }, [data?.carteraVencida?.registros, codigoRutaCredito]);
+
 
   useEffect(() => {
     let activo = true;
@@ -543,6 +564,12 @@ export default function MesaControlView({ analisis, nombreRuta, nombreVendedor, 
         <KpiCard icon={<Target size={14} />} label="Volumen total" value={unidades(volumenTotal)} accent="#F2B134" />
         <KpiCard icon={<AlertCircle size={14} />} label="Visitas < 3 min" value={menores3.length} accent={menores3.length > 0 ? "#FF6B6B" : "#3DDC97"} />
         <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={visitasEfectivas} />
+        <KpiCard
+          icon={<CreditCard size={14} />}
+          label="Créditos vencidos"
+          value={`${creditosVencidos.cantidad} · ${money(creditosVencidos.monto)}`}
+          accent={creditosVencidos.cantidad > 0 ? "#FF6B6B" : "#3DDC97"}
+        />
         {vendedorStats?.hoy && (
           <KpiCard
             icon={<Star size={14} />}
