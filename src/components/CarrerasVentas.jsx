@@ -1,7 +1,7 @@
 import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo } from "react";
 
-const DURACION_TOTAL = 60; // 60 segundos = 100%
+const DURACION_TOTAL = 6; // 60 segundos = 100%
 
 
 export default function CarrerasVentas({ porVendedor }) {
