@@ -301,9 +301,19 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             Escribe la cantidad que consideres — no se guarda hasta que le des "Enviar cambios". Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
           </div>
           <TablaCargaVendedor items={cargaActiva.items} nombreRuta={vendedorActual} bloqueado={cargaActiva.bloqueado || yaEnviado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
-          {!cargaActiva.bloqueado && !yaEnviado && (
-            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={() => enviarPara(vendedorActual)}>
-              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar cambios
+          {!cargaActiva.bloqueado && (
+            <button
+              className="btn"
+              style={{
+                marginTop: 14, width: "100%",
+                background: yaEnviado ? "#3DDC97" : undefined, borderColor: yaEnviado ? "#3DDC97" : undefined,
+                color: yaEnviado ? "#0B1220" : undefined,
+                cursor: yaEnviado ? "default" : "pointer",
+              }}
+              onClick={() => { if (!yaEnviado) enviarPara(vendedorActual); }}
+              disabled={yaEnviado}
+            >
+              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {yaEnviado ? "Cambios enviados correctamente ✓" : "Enviar cambios"}
             </button>
           )}
         </>
