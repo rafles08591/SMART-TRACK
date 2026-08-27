@@ -293,7 +293,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 (esSuplente1 || esSuplente2)
                   ? OBJETIVO_TABS.filter((t) => (data.permisosSuplentes?.[puesto] || []).includes(t.key))
                   : esSupervisor2
-                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
+                                    ? OBJETIVO_TABS.filter((t) => ["dia", "carreras", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
