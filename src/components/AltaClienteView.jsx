@@ -103,7 +103,7 @@ const initialForm = {
 // Solo pre-llena; el vendedor siempre puede corregir a mano antes de
 // guardar (la dirección exacta es responsabilidad de quien la captura).
 // -------------------------------------------------------------------------
-const GOOGLE_MAPS_API_KEY = "AIzaSyC-4jbAQbGm9-kqc_BgYuObIHWjCnVFO8c"; // 
+const GOOGLE_MAPS_API_KEY = "AIzaSyC-4jbAQbGm9-kqc_BgYuObIHWjCnVFO8c";
 
 let promesaGoogleMapsCargado = null;
 function cargarGoogleMapsScript() {
@@ -136,10 +136,41 @@ function componentesDe(resultado) {
   return mapa;
 }
 
+// -------------------------------------------------------------------------
+// "Entre calle 1" / "Entre calle 2" — ni Google ni el Nominatim que
+// usábamos antes regresan esto: un geocoder responde "cuál es la calle de
+// este punto", no "qué calles cruzan cerca". Para sugerirlas se usa
+// Overpass API (consultas sobre el mapa de OpenStreetMap — gratis, sin
+// key) buscando los nombres de vialidades distintos a menos de 70 metros
+// del punto; normalmente son las calles que delimitan la cuadra. Es una
+// sugerencia aproximada — el vendedor la revisa y corrige igual que el
+// resto del domicilio antes de guardar.
+// -------------------------------------------------------------------------
+async function buscarCallesCercanas(lat, lon, calleAExcluir) {
+  const radioMetros = 70;
+  const consulta = `[out:json][timeout:10];way(around:${radioMetros},${lat},${lon})[highway][name];out tags center;`;
+  try {
+    const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: consulta });
+    if (!res.ok) { console.warn(`Overpass respondió con estatus ${res.status} al buscar calles cercanas.`); return []; }
+    const data = await res.json();
+    const excluir = (calleAExcluir || "").trim().toUpperCase();
+    const nombres = [];
+    for (const el of data.elements || []) {
+      const nombre = el.tags?.name?.trim();
+      if (!nombre || nombre.toUpperCase() === excluir) continue;
+      if (!nombres.includes(nombre)) nombres.push(nombre);
+    }
+    return nombres;
+  } catch (e) {
+    console.warn("No se pudieron sugerir calles cercanas ('entre calles'):", e.message || e);
+    return [];
+  }
+}
+
 async function reverseGeocode(lat, lon) {
   await cargarGoogleMapsScript();
   const geocoder = new window.google.maps.Geocoder();
-  return new Promise((resolve) => {
+  const direccion = await new Promise((resolve) => {
     geocoder.geocode({ location: { lat, lng: lon }, language: "es", region: "mx" }, (resultados, status) => {
       if (status !== "OK" || !resultados?.length) {
         if (status === "REQUEST_DENIED") {
@@ -172,6 +203,17 @@ async function reverseGeocode(lat, lon) {
       });
     });
   });
+
+  // Sugiere "entre calle 1" y "entre calle 2" con las vialidades cercanas
+  // (ver buscarCallesCercanas arriba). Si Overpass falla o no encuentra
+  // nada, se dejan vacías igual que antes — no rompe el resto del llenado.
+  const cercanas = await buscarCallesCercanas(lat, lon, direccion.calle);
+
+  return {
+    ...direccion,
+    entreCalle1: cercanas[0] || "",
+    entreCalle2: cercanas[1] || "",
+  };
 }
 
 function Field({ label, required, children }) {
@@ -198,14 +240,14 @@ const inputStyle = {
   outline: "none",
 };
 
-function TextInput({ value, onChange, placeholder, type = "text" }) {
+function TextInput({ value, onChange, placeholder, type = "text", invalido = false }) {
   return (
     <input
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      style={inputStyle}
+      style={invalido ? { ...inputStyle, border: `1px solid ${COLORS.red}`, boxShadow: `0 0 0 1px ${COLORS.red}` } : inputStyle}
     />
   );
 }
@@ -219,10 +261,23 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
   const [guardando, setGuardando] = useState(false);
   const [status, setStatus] = useState("");
   const [misAltas, setMisAltas] = useState([]);
+  const [errores, setErrores] = useState(new Set()); // keys de CAMPOS_REQUERIDOS que faltaron en el último intento de guardar
+  const [fotoConError, setFotoConError] = useState(false);
   const fotoInputRef = useRef(null);
   const archivoInputRef = useRef(null);
 
-  const setCampo = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const setCampo = (key, value) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    // En cuanto el usuario captura algo en un campo que estaba marcado en
+    // rojo, se le quita el error — no hace falta que vuelva a dar
+    // GUARDAR para que desaparezca el recuadro rojo.
+    setErrores((prev) => {
+      if (!prev.has(key)) return prev;
+      const siguiente = new Set(prev);
+      siguiente.delete(key);
+      return siguiente;
+    });
+  };
 
   useEffect(() => {
     cargarMisAltas();
@@ -264,12 +319,20 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
             calle: dir.calle || f.calle,
             numero: dir.numero || f.numero,
             colonia: dir.colonia || f.colonia,
+            entreCalle1: dir.entreCalle1 || f.entreCalle1,
+            entreCalle2: dir.entreCalle2 || f.entreCalle2,
             municipio: dir.municipio || f.municipio,
             estado: dir.estado || f.estado,
             codigoPostal: dir.codigoPostal || f.codigoPostal,
           }));
-          if (!dir.numero) {
+          const faltaNumero = !dir.numero;
+          const faltanEntreCalles = !dir.entreCalle1 && !dir.entreCalle2;
+          if (faltaNumero && faltanEntreCalles) {
+            setUbicacionMsg("Dirección sugerida — el mapa no tiene el número exacto ni las calles que cruzan cerca, agrégalos a mano. Revisa lo demás antes de guardar.");
+          } else if (faltaNumero) {
             setUbicacionMsg("Dirección sugerida — el mapa no tiene registrado el número exacto de esta calle, agrégalo a mano. Revisa lo demás antes de guardar.");
+          } else if (faltanEntreCalles) {
+            setUbicacionMsg("Dirección sugerida — no se encontraron calles cercanas para \"entre calles\", agrégalas a mano. Revisa lo demás antes de guardar.");
           } else {
             setUbicacionMsg("Dirección sugerida — revísala y corrige lo que haga falta antes de guardar.");
           }
@@ -295,6 +358,7 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
     const file = e.target.files?.[0];
     if (!file) return;
     setFoto({ file, previewUrl: URL.createObjectURL(file) });
+    setFotoConError(false);
   }
 
   function onArchivoSeleccionado(e) {
@@ -302,22 +366,33 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
     if (file) setArchivo(file);
   }
 
-  function validar() {
+  function camposFaltantes() {
     const requeridos = ["nombreNegocio", "nombreCliente", "telefono", "volumenSemanal", "coordX", "coordY"];
     for (const c of CAMPOS_DIRECCION) if (c.required) requeridos.push(c.key);
-    const faltantes = requeridos.filter((k) => !String(form[k] || "").trim());
-    if (faltantes.length > 0) return `Faltan campos obligatorios: ${faltantes.length}.`;
-    if (!foto) return "La foto de la tienda es obligatoria.";
-    return null;
+    return requeridos.filter((k) => !String(form[k] || "").trim());
   }
 
   async function guardar() {
-    const err = validar();
-    if (err) {
-      setStatus(err);
+    const faltantes = camposFaltantes();
+    const faltaFoto = !foto;
+    if (faltantes.length > 0 || faltaFoto) {
+      // Remarca en rojo cada recuadro que falta (incluye coordX/coordY,
+      // que son los que llena "Usar mi ubicación") y, si falta, el de la
+      // foto — así no hay que adivinar cuál de todos es el que falló.
+      setErrores(new Set(faltantes));
+      setFotoConError(faltaFoto);
+      setStatus(
+        faltantes.length > 0 && faltaFoto
+          ? `Faltan campos obligatorios: ${faltantes.length} (y la foto de la tienda).`
+          : faltantes.length > 0
+          ? `Faltan campos obligatorios: ${faltantes.length}.`
+          : "La foto de la tienda es obligatoria."
+      );
       setTimeout(() => setStatus(""), 3000);
       return;
     }
+    setErrores(new Set());
+    setFotoConError(false);
     setGuardando(true);
     setStatus("Guardando…");
     try {
@@ -401,16 +476,16 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Nombre negocio o tienda" required>
-              <TextInput value={form.nombreNegocio} onChange={(v) => setCampo("nombreNegocio", v)} placeholder="Ej. Abarrotes La Esquina" />
+              <TextInput value={form.nombreNegocio} onChange={(v) => setCampo("nombreNegocio", v)} placeholder="Ej. Abarrotes La Esquina" invalido={errores.has("nombreNegocio")} />
             </Field>
             <Field label="Nombre del cliente" required>
-              <TextInput value={form.nombreCliente} onChange={(v) => setCampo("nombreCliente", v)} placeholder="Ej. Juan Pérez" />
+              <TextInput value={form.nombreCliente} onChange={(v) => setCampo("nombreCliente", v)} placeholder="Ej. Juan Pérez" invalido={errores.has("nombreCliente")} />
             </Field>
             <Field label="Teléfono" required>
-              <TextInput value={form.telefono} onChange={(v) => setCampo("telefono", v)} placeholder="10 dígitos" type="tel" />
+              <TextInput value={form.telefono} onChange={(v) => setCampo("telefono", v)} placeholder="10 dígitos" type="tel" invalido={errores.has("telefono")} />
             </Field>
             <Field label="Vol. total categoría cigarros semanalmente" required>
-              <TextInput value={form.volumenSemanal} onChange={(v) => setCampo("volumenSemanal", v)} placeholder="Ej. 40" type="number" />
+              <TextInput value={form.volumenSemanal} onChange={(v) => setCampo("volumenSemanal", v)} placeholder="Ej. 40" type="number" invalido={errores.has("volumenSemanal")} />
             </Field>
           </div>
 
@@ -442,17 +517,17 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {CAMPOS_DIRECCION.map((c) => (
               <Field key={c.key} label={c.label} required={c.required}>
-                <TextInput value={form[c.key]} onChange={(v) => setCampo(c.key, v)} />
+                <TextInput value={form[c.key]} onChange={(v) => setCampo(c.key, v)} invalido={errores.has(c.key)} />
               </Field>
             ))}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Coordenada X (longitud)" required>
-              <TextInput value={form.coordX} onChange={(v) => setCampo("coordX", v)} placeholder="Se llena con 'Usar mi ubicación'" />
+              <TextInput value={form.coordX} onChange={(v) => setCampo("coordX", v)} placeholder="Se llena con 'Usar mi ubicación'" invalido={errores.has("coordX")} />
             </Field>
             <Field label="Coordenada Y (latitud)" required>
-              <TextInput value={form.coordY} onChange={(v) => setCampo("coordY", v)} placeholder="Se llena con 'Usar mi ubicación'" />
+              <TextInput value={form.coordY} onChange={(v) => setCampo("coordY", v)} placeholder="Se llena con 'Usar mi ubicación'" invalido={errores.has("coordY")} />
             </Field>
           </div>
 
@@ -479,8 +554,8 @@ export default function AltaClienteView({ vendedorUsername, rutaCodigo }) {
               htmlFor="alta-cliente-foto-input"
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                border: `1px dashed ${COLORS.cardBorder}`, borderRadius: 12, padding: "16px", cursor: "pointer",
-                color: COLORS.inkMuted, fontSize: 13,
+                border: `1px dashed ${fotoConError ? COLORS.red : COLORS.cardBorder}`, borderRadius: 12, padding: "16px", cursor: "pointer",
+                color: fotoConError ? COLORS.red : COLORS.inkMuted, fontSize: 13,
               }}
             >
               {foto ? "Cambiar foto" : "📷 Tomar / seleccionar foto"}
