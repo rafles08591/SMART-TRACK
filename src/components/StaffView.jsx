@@ -450,6 +450,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 </div>
               )}
             </div>
+                    ) : objTab === "carreras" ? (
+            <CarrerasVentas porVendedor={stats.porVendedor} />
           ) : objTab === "mesa" ? (
             <>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
