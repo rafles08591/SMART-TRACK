@@ -1,4 +1,3 @@
-"use client";
 import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo } from "react";
 
@@ -8,7 +7,6 @@ export default function CarrerasVentas({ porVendedor }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     autoplay: false,
-    stateMachines: "State Machine 1",
   });
 
   const ranking = useMemo(() => {
@@ -18,7 +16,7 @@ export default function CarrerasVentas({ porVendedor }) {
       .map((v) => {
         const ruta = v.name.replace("RUTA ", "").trim();
         const pct = Math.min(Math.max(v.hoy?.efectividadPct ?? 0, 0), 100);
-        return { ruta, nombre: v.name, pct };
+        return { ruta, pct };
       })
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
@@ -26,35 +24,40 @@ export default function CarrerasVentas({ porVendedor }) {
   useEffect(() => {
     if (!rive) return;
     ranking.forEach(({ ruta, pct }) => {
+      const nombreTimeline = `Timeline ${ruta}`;
       const segundos = (pct / 100) * DURACION_TOTAL;
-      rive.scrub(`Timeline ${ruta}`, segundos);
+      rive.play(nombreTimeline);   // activa el Timeline
+      rive.scrub(nombreTimeline, segundos); // lo posiciona
+      rive.pause(nombreTimeline);  // lo congela ahí
     });
   }, [rive, ranking]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "80vh" }}>
-      <RiveComponent style={{ width: "100%", height: "100%" }} />
+    <div style={{ width: "100%" }}>
+      <div style={{ width: "100%", height: "65vh" }}>
+        <RiveComponent style={{ width: "100%", height: "100%" }} />
+      </div>
+
       <div
         style={{
-          position: "absolute", top: 16, right: 16,
-          background: "rgba(0,0,0,0.75)", color: "#fff", borderRadius: 12,
-          padding: "12px 16px", fontSize: 13, minWidth: 200,
-          maxHeight: "70vh", overflowY: "auto",
+          display: "flex", gap: 8, overflowX: "auto", padding: "10px 4px",
+          marginTop: 8,
         }}
       >
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>🏁 Posiciones</div>
         {ranking.map((r, i) => (
           <div
             key={r.ruta}
             style={{
-              display: "flex", justifyContent: "space-between", gap: 8,
-              padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.1)",
-              fontWeight: i === 0 ? 700 : 400,
-              color: i === 0 ? "#FFD700" : "#fff",
+              flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6,
+              background: i === 0 ? "#3a2f0a" : "#1a1a1a",
+              border: i === 0 ? "1px solid #FFD700" : "1px solid #333",
+              borderRadius: 20, padding: "6px 12px", fontSize: 12, color: "#fff",
+              whiteSpace: "nowrap",
             }}
           >
-            <span>{i + 1}° {r.ruta}</span>
-            <span>{r.pct.toFixed(0)}%</span>
+            <span style={{ color: i === 0 ? "#FFD700" : "#9AA7BD", fontWeight: 700 }}>{i + 1}°</span>
+            <span style={{ fontWeight: 600 }}>{r.ruta}</span>
+            <span style={{ color: "#9AA7BD" }}>{r.pct.toFixed(0)}%</span>
           </div>
         ))}
       </div>
