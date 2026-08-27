@@ -76,43 +76,102 @@ const initialForm = {
 };
 
 // -------------------------------------------------------------------------
-// Reverse geocoding con OpenStreetMap Nominatim — gratis, sin API key.
+// Reverse geocoding con Google Maps (Geocoding API) — reemplaza a
+// OpenStreetMap Nominatim, que en México muy seguido no traía el número
+// de casa ni el nombre de calle bien etiquetados. Google tiene, por
+// mucho margen, el catálogo de domicilios más completo en México.
+//
+// IMPORTANTE — configuración necesaria antes de que esto funcione:
+//   1. Crea/usa un proyecto en Google Cloud Console y habilita ahí la
+//      "Maps JavaScript API" (y, si te da error REQUEST_DENIED, habilita
+//      también "Geocoding API").
+//   2. Activa facturación en ese proyecto — Google exige una tarjeta
+//      registrada aunque el uso se quede dentro del nivel gratuito
+//      (10,000 llamadas gratis al mes por producto, en 2026).
+//   3. Genera una API key y RESTRÍNGELA por "referente HTTP" (HTTP
+//      referrer) a los dominios donde corre SMART-TRACK — esta key va
+//      incrustada en el código del navegador, así que sin esa
+//      restricción cualquiera podría copiarla y usarla a tu costa.
+//   4. Pega esa key abajo en GOOGLE_MAPS_API_KEY.
+//
+// Nota técnica: se usa el Geocoder del script de "Maps JavaScript API"
+// (no un fetch directo a maps.googleapis.com/maps/api/geocode/json)
+// porque ese endpoint REST no permite llamadas cross-origin desde el
+// navegador (no manda cabeceras CORS) — el Geocoder del script sí está
+// pensado para usarse así, del lado del cliente.
+//
 // Solo pre-llena; el vendedor siempre puede corregir a mano antes de
 // guardar (la dirección exacta es responsabilidad de quien la captura).
-//
-// Se piden dos niveles de detalle (zoom 18 = edificio, zoom 16 = calle) y
-// se combinan: en muchas zonas de México, OpenStreetMap no tiene el
-// "house_number" de un domicilio exacto etiquetado, pero sí el nombre de
-// la calle a nivel más amplio — con esto se aprovecha lo que exista en
-// vez de dejar todo vacío si falta el dato más fino.
 // -------------------------------------------------------------------------
-async function pedirNominatim(lat, lon, zoom) {
-  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1&zoom=${zoom}&accept-language=es`;
-  const res = await fetch(url, { headers: { "Accept-Language": "es" } });
-  if (!res.ok) return {};
-  const data = await res.json();
-  return data.address || {};
+const GOOGLE_MAPS_API_KEY = "AIzaSyC-4jbAQbGm9-kqc_BgYuObIHWjCnVFO8c"; // 
+
+let promesaGoogleMapsCargado = null;
+function cargarGoogleMapsScript() {
+  if (window.google?.maps?.Geocoder) return Promise.resolve();
+  if (promesaGoogleMapsCargado) return promesaGoogleMapsCargado;
+  promesaGoogleMapsCargado = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&language=es&region=MX`;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      promesaGoogleMapsCargado = null; // permite reintentar en la siguiente llamada
+      reject(new Error("No se pudo cargar el script de Google Maps."));
+    };
+    document.head.appendChild(script);
+  });
+  return promesaGoogleMapsCargado;
+}
+
+// Junta los address_components de un resultado de Google en un objeto
+// { tipo: valor } para poder leerlos por nombre (route, street_number,
+// sublocality_level_1, etc.) en vez de andar recorriendo el arreglo cada vez.
+function componentesDe(resultado) {
+  const mapa = {};
+  for (const comp of resultado.address_components) {
+    for (const tipo of comp.types) {
+      if (!(tipo in mapa)) mapa[tipo] = comp.long_name;
+    }
+  }
+  return mapa;
 }
 
 async function reverseGeocode(lat, lon) {
-  // zoom 18 = nivel edificio (más preciso, si existe el dato);
-  // zoom 16 = nivel calle (más probable que sí tenga el nombre de la vía).
-  const [fino, amplio] = await Promise.all([
-    pedirNominatim(lat, lon, 18),
-    pedirNominatim(lat, lon, 16),
-  ]);
-  // Combina: prioriza el resultado fino, pero rellena con el amplio lo
-  // que falte (típicamente el nombre de la calle cuando no hay número
-  // de casa etiquetado en OSM para ese punto exacto).
-  const a = { ...amplio, ...fino };
-  return {
-    calle: a.road || a.pedestrian || a.residential || a.footway || amplio.road || "",
-    numero: a.house_number || "",
-    colonia: a.suburb || a.neighbourhood || a.quarter || a.residential || "",
-    municipio: a.city || a.town || a.village || a.municipality || "",
-    estado: a.state || "",
-    codigoPostal: a.postcode || "",
-  };
+  await cargarGoogleMapsScript();
+  const geocoder = new window.google.maps.Geocoder();
+  return new Promise((resolve) => {
+    geocoder.geocode({ location: { lat, lng: lon }, language: "es", region: "mx" }, (resultados, status) => {
+      if (status !== "OK" || !resultados?.length) {
+        if (status === "REQUEST_DENIED") {
+          console.error(
+            "Google Geocoding rechazó la solicitud (REQUEST_DENIED) — revisa que GOOGLE_MAPS_API_KEY sea válida, que el proyecto tenga facturación activa, y que \"Maps JavaScript API\" (y/o \"Geocoding API\") esté habilitada en Google Cloud Console."
+          );
+        } else if (status !== "ZERO_RESULTS") {
+          console.warn(`Google Geocoding respondió: ${status}`);
+        }
+        resolve({});
+        return;
+      }
+      // Combina TODOS los resultados que regresa Google (vienen del más
+      // específico al más general) en vez de quedarse solo con el
+      // primero: si al resultado más preciso le falta, por ejemplo, la
+      // colonia, se completa con la que traiga un resultado más amplio,
+      // igual que antes se combinaban los zooms 18/16 de Nominatim.
+      const combinado = {};
+      for (const resultado of resultados) {
+        const comp = componentesDe(resultado);
+        for (const tipo in comp) if (!(tipo in combinado)) combinado[tipo] = comp[tipo];
+      }
+      resolve({
+        calle: combinado.route || "",
+        numero: combinado.street_number || "",
+        colonia: combinado.sublocality_level_1 || combinado.neighborhood || combinado.sublocality || combinado.colloquial_area || "",
+        municipio: combinado.locality || combinado.administrative_area_level_2 || "",
+        estado: combinado.administrative_area_level_1 || "",
+        codigoPostal: combinado.postal_code || "",
+      });
+    });
+  });
 }
 
 function Field({ label, required, children }) {
