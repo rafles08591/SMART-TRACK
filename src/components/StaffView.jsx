@@ -21,6 +21,7 @@ import { useCapturaImagen } from "./hooks";
 import { supabase } from "../supabaseClient";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
+import CarrerasVentas from "./CarrerasVentas";
 import TablaPorRutaHoy from "./TablaPorRutaHoy";
 import RepartidorAhogadoView from "./RepartidorAhogadoView";
 import MesaControlView from "./MesaControlView";
