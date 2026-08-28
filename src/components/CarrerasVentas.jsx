@@ -27,18 +27,17 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   const yaAnimoRef = useRef(false);
 
-  useEffect(() => {
-    if (!rive || ranking.length === 0 || yaAnimoRef.current) return;
-    yaAnimoRef.current = true;
-    console.log('[Carrera] iniciando animación', ranking);
-
-    const DURACION_ANIMACION_MS = 1800;
-    let frameId;
-
-    const objetivos = ranking.map(({ ruta, pct }) => ({
-      nombreTimeline: `Timeline ${ruta}`,
-      segundosDestino: (pct / 100) * DURACION_TOTAL,
-    }));
+ useEffect(() => {
+  if (!rive || ranking.length === 0) return;
+  ranking.forEach(({ ruta, pct }) => {
+    const nombreTimeline = `Timeline ${ruta}`;
+    const segundos = (pct / 100) * DURACION_TOTAL;
+    rive.play(nombreTimeline);
+    rive.scrub(nombreTimeline, segundos);
+    rive.drawFrame();
+    rive.pause(nombreTimeline);
+  });
+}, [rive, ranking]);
 
     objetivos.forEach(({ nombreTimeline }) => rive.play(nombreTimeline));
 
