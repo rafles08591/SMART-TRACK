@@ -24,12 +24,12 @@ export const NOMBRES = {
 
 export const OBJETIVO_TABS = [
   { key: "dia", label: "DÍA", unit: "special" },
-  { key: "carreras", label: "🚚 Carrera", unit: null },
   { key: "escalera", label: "ESCALERA", unit: "special" },
+  { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
+  { key: "carreras", label: "CARRERA", unit: null },
   { key: "max", label: "MAX", unit: "units" },
   { key: "open", label: "OPEN", unit: "units" },
   { key: "champions", label: "CHAMPIONS", unit: "units" },
-  { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "cuponera", label: "CUPONERA", unit: "special" },
   { key: "tiempos", label: "TIEMPOS", unit: "special" },
   { key: "unidades", label: "UNIDADES", unit: "special" },
