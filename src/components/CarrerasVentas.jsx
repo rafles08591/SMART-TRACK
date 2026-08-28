@@ -29,6 +29,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   useEffect(() => {
     if (!rive || ranking.length === 0 || yaAnimoRef.current) return;
     yaAnimoRef.current = true;
+    console.log('[Carrera] iniciando animación', ranking);
 
     const DURACION_ANIMACION_MS = 1800;
     let frameId;
@@ -50,6 +51,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       const transcurrido = ahora - inicio;
       const progreso = Math.min(transcurrido / DURACION_ANIMACION_MS, 1);
       const suavizado = easeOutCubic(progreso);
+      console.log('[Carrera] tick, progreso:', progreso); 
 
       objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
         rive.scrub(nombreTimeline, segundosDestino * suavizado);
