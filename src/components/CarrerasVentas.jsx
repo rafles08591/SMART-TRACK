@@ -4,10 +4,10 @@ import { useEffect, useMemo } from "react";
 const DURACION_TOTAL = 60;
 const TIMELINES = ["Timeline J201","Timeline J202","Timeline J203","Timeline J204","Timeline J205","Timeline J206","Timeline J207"];
 
-export default function CarrerasVentas({ porVendedor }) {
+export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
-    animations: TIMELINES, // clave: instancia las 7 explícitamente
+    animations: TIMELINES,
     autoplay: false,
   });
 
@@ -35,11 +35,25 @@ export default function CarrerasVentas({ porVendedor }) {
   }, [rive, ranking]);
 
   return (
-    <div style={{ width: "100%" }}>
-      <div style={{ width: "100%", height: "65vh" }}>
+    <div style={{ position: "fixed", inset: 0, background: "#0a0a0a", zIndex: 9999, display: "flex", flexDirection: "column" }}>
+      {onCerrar && (
+        <button
+          onClick={onCerrar}
+          style={{
+            position: "absolute", top: 16, left: 16, zIndex: 10000,
+            background: "rgba(0,0,0,0.6)", color: "#fff", border: "1px solid #555",
+            borderRadius: 8, padding: "8px 14px", fontSize: 14, cursor: "pointer",
+          }}
+        >
+          ← Regresar
+        </button>
+      )}
+
+      <div style={{ flex: 1, minHeight: 0 }}>
         <RiveComponent style={{ width: "100%", height: "100%" }} />
       </div>
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "10px 4px", marginTop: 8 }}>
+
+      <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "10px 12px", flexShrink: 0 }}>
         {ranking.map((r, i) => (
           <div key={r.ruta} style={{
             flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6,
