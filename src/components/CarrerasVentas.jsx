@@ -25,19 +25,15 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   }, [porVendedor]);
 
  useEffect(() => {
-  if (!rive || ranking.length === 0) return;
+  if (!rive) return;
+  window.riveDebug = rive; // para poder probar manualmente en la consola
 
-  ranking.forEach(({ ruta, pct }) => {
-    const nombreTimeline = `Timeline ${ruta}`;
-    const segundos = (pct / 100) * DURACION_TOTAL;
-    console.log(`[Carrera] ${nombreTimeline} -> pct=${pct} segundos=${segundos}`);
-
-    rive.play(nombreTimeline);
-    rive.scrub(nombreTimeline, segundos);
-    rive.drawFrame();
-    rive.pause(nombreTimeline);
-  });
-}, [rive, ranking]);
+  // PRUEBA: solo mueve J201 a la mitad, ignora las demás por ahora
+  rive.play("Timeline J201");
+  rive.scrub("Timeline J201", 30); // si dura 60s, 30 = mitad
+  rive.drawFrame();
+  rive.pause("Timeline J201");
+}, [rive]);
 
   const contenido = (
     <div style={{
