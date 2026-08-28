@@ -3033,26 +3033,10 @@ export default function App() {
       )}
 
       {role === "vendedor" && (
-        <VendorView
+               <VendorView
           vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
+          porVendedor={stats.porVendedor}
           periodo={periodo}
-          restantes={stats.restantes}
-          mesaControl={mesaControl}
-          mensajeDia={mensajesDia[stats.porVendedor.find((v) => v.id === currentVendorId)?.name]}
-          data={data}
-          persist={persist}
-          persistFresco={persistParcialFresco}
-          persistCargas={persistCargas}
-          persistRevisionUnidad={persistRevisionUnidad}
-          persistConfigUnidades={persistConfigUnidades}
-          onRefresh={refrescarManual}
-          refrescando={refrescando}
-          onRegistrarEvento={registrarEventoUso}
-          onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
-          peorVendedorNombre={stats.peorVendedorNombre}
-          bottom3Nombres={stats.bottom3Nombres}
-        />
-      )}
 
       {role === "admin" && (
         <FacturasAdminView onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} asignarFoliosTickets={asignarFoliosTickets} />
