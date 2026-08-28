@@ -52,7 +52,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const rankingKey = ranking.map((r) => `${r.ruta}:${r.pct.toFixed(1)}`).join("|");
   const yaAnimoRef = useRef("");
 
-  useEffect(() => {
+   useEffect(() => {
     if (!rive || ranking.length === 0) return;
     if (yaAnimoRef.current === rankingKey) return;
     yaAnimoRef.current = rankingKey;
@@ -60,18 +60,44 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
     let frameId = 0;
     let cancelado = false;
 
+    console.log("[Carrera] animations", rive.animationNames);
+
     const objetivos = ranking.map(({ ruta, pct }) => ({
       nombreTimeline: `Timeline ${ruta}`,
       segundosDestino: (pct / 100) * DURACION_TOTAL,
     }));
 
+    const j206 = objetivos.find((o) => o.nombreTimeline === "Timeline J206");
+
     rive.play(TIMELINES);
     rive.pause(TIMELINES);
     objetivos.forEach(({ nombreTimeline }) => rive.scrub(nombreTimeline, 0));
+    if (j206) rive.scrub(j206.nombreTimeline, 0);
     rive.drawFrame();
 
     const inicio = performance.now();
 
+    const tick = (ahora) => {
+      if (cancelado) return;
+      const progreso = Math.min(Math.max((ahora - inicio) / DURACION_ANIMACION_MS, 0), 1);
+      const factor = suavizar(progreso);
+
+      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
+        rive.scrub(nombreTimeline, segundosDestino * factor);
+      });
+      // J206 al último para que no la pisen J205 / J207
+      if (j206) rive.scrub(j206.nombreTimeline, j206.segundosDestino * factor);
+
+      rive.drawFrame();
+      if (progreso < 1) frameId = requestAnimationFrame(tick);
+    };
+
+    frameId = requestAnimationFrame(tick);
+    return () => {
+      cancelado = true;
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [rive, ranking, rankingKey]);
     const tick = (ahora) => {
       if (cancelado) return;
       const progreso = Math.min(Math.max((ahora - inicio) / DURACION_ANIMACION_MS, 0), 1);
