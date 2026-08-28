@@ -72,12 +72,9 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       segundosDestino: (pct / 100) * DURACION_TOTAL,
     }));
 
-    const j206 = objetivos.find((o) => o.nombreTimeline === "Timeline J206");
-
     rive.play(TIMELINES);
     rive.pause(TIMELINES);
     objetivos.forEach(({ nombreTimeline }) => rive.scrub(nombreTimeline, 0));
-    if (j206) rive.scrub(j206.nombreTimeline, 0);
     rive.drawFrame();
 
     const inicio = performance.now();
@@ -90,9 +87,8 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
         rive.scrub(nombreTimeline, segundosDestino * factor);
       });
-      if (j206) rive.scrub(j206.nombreTimeline, j206.segundosDestino * factor);
-
       rive.drawFrame();
+
       if (progreso < 1) frameId = requestAnimationFrame(tick);
     };
 
