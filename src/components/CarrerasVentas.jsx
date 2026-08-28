@@ -30,7 +30,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   // PRUEBA: solo mueve J201 a la mitad, ignora las demás por ahora
   rive.play("Timeline J201");
-  rive.scrub("Timeline J201", 30); // si dura 60s, 30 = mitad
+  rive.scrub("Timeline J201", 0.5); // si dura 60s, 30 = mitad
   rive.drawFrame();
   rive.pause("Timeline J201");
 }, [rive]);
