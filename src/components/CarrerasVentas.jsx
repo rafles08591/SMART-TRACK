@@ -1,12 +1,12 @@
 import { useRive, DrawOptimizationOptions } from "@rive-app/react-canvas";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 
 const DURACION_TOTAL = 1;
 const TIMELINES = ["Timeline J201","Timeline J202","Timeline J203","Timeline J204","Timeline J205","Timeline J206","Timeline J207"];
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
-   const { rive, RiveComponent } = useRive({
+  const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     animations: TIMELINES,
     autoplay: false,
@@ -25,51 +25,16 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
 
-  const yaAnimoRef = useRef(false);
-
- useEffect(() => {
-  if (!rive || ranking.length === 0) return;
-  ranking.forEach(({ ruta, pct }) => {
-    const nombreTimeline = `Timeline ${ruta}`;
-    const segundos = (pct / 100) * DURACION_TOTAL;
-    rive.play(nombreTimeline);
-    rive.scrub(nombreTimeline, segundos);
-    rive.drawFrame();
-    rive.pause(nombreTimeline);
-  });
-}, [rive, ranking]);
-
-    objetivos.forEach(({ nombreTimeline }) => rive.play(nombreTimeline));
-
-    const inicio = performance.now();
-
-    function easeOutCubic(x) {
-      return 1 - Math.pow(1 - x, 3);
-    }
-
-    function tick(ahora) {
-      const transcurrido = ahora - inicio;
-      const progreso = Math.min(transcurrido / DURACION_ANIMACION_MS, 1);
-      const suavizado = easeOutCubic(progreso);
-      console.log('[Carrera] tick, progreso:', progreso); 
-
-      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
-        rive.scrub(nombreTimeline, segundosDestino * suavizado);
-      });
+  useEffect(() => {
+    if (!rive || ranking.length === 0) return;
+    ranking.forEach(({ ruta, pct }) => {
+      const nombreTimeline = `Timeline ${ruta}`;
+      const segundos = (pct / 100) * DURACION_TOTAL;
+      rive.play(nombreTimeline);
+      rive.scrub(nombreTimeline, segundos);
       rive.drawFrame();
-
-      if (progreso < 1) {
-        frameId = requestAnimationFrame(tick);
-      } else {
-        objetivos.forEach(({ nombreTimeline }) => rive.pause(nombreTimeline));
-      }
-    }
-
-    frameId = requestAnimationFrame(tick);
-
-    return () => {
-      if (frameId) cancelAnimationFrame(frameId);
-    };
+      rive.pause(nombreTimeline);
+    });
   }, [rive, ranking]);
 
   const contenido = (
