@@ -3024,7 +3024,8 @@ export default function App() {
 
       {role === "vendedor" && (
         <VendorView
-          vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
+  vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
+  porVendedor={stats.porVendedor}
           periodo={periodo}
           restantes={stats.restantes}
           mesaControl={mesaControl}
