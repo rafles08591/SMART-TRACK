@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
 const DURACION_TOTAL = 1;
-const DURACION_ANIMACION_MS = 4500;
+const DURACION_ANIMACION_MS = 45000;
 const TIMELINES = [
   "Timeline J201",
   "Timeline J202",
