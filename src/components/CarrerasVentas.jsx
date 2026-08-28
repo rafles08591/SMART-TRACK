@@ -2,7 +2,7 @@ import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 
-const DURACION_TOTAL = 60;
+const DURACION_TOTAL = 1; // ¡confirmado! cada Timeline dura 1 segundo real
 const TIMELINES = ["Timeline J201","Timeline J202","Timeline J203","Timeline J204","Timeline J205","Timeline J206","Timeline J207"];
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
@@ -24,16 +24,17 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
 
- useEffect(() => {
-  if (!rive) return;
-  window.riveDebug = rive; // para poder probar manualmente en la consola
-
-  // PRUEBA: solo mueve J201 a la mitad, ignora las demás por ahora
-  rive.play("Timeline J201");
-  rive.scrub("Timeline J201", 0.5); // si dura 60s, 30 = mitad
-  rive.drawFrame();
-  rive.pause("Timeline J201");
-}, [rive]);
+  useEffect(() => {
+    if (!rive || ranking.length === 0) return;
+    ranking.forEach(({ ruta, pct }) => {
+      const nombreTimeline = `Timeline ${ruta}`;
+      const segundos = (pct / 100) * DURACION_TOTAL;
+      rive.play(nombreTimeline);
+      rive.scrub(nombreTimeline, segundos);
+      rive.drawFrame();
+      rive.pause(nombreTimeline);
+    });
+  }, [rive, ranking]);
 
   const contenido = (
     <div style={{
