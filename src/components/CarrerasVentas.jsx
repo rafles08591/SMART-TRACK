@@ -1,4 +1,4 @@
-import { useRive } from "@rive-app/react-canvas";
+import { useRive, DrawOptimizationOptions } from "@rive-app/react-canvas";
 import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
@@ -6,10 +6,11 @@ const DURACION_TOTAL = 1;
 const TIMELINES = ["Timeline J201","Timeline J202","Timeline J203","Timeline J204","Timeline J205","Timeline J206","Timeline J207"];
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
-  const { rive, RiveComponent } = useRive({
+   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     animations: TIMELINES,
     autoplay: false,
+    drawingOptions: DrawOptimizationOptions.AlwaysDraw,
   });
 
   const ranking = useMemo(() => {
