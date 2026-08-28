@@ -1,9 +1,9 @@
-import { useRive, Layout, Fit, Alignment, DrawOptimizationOptions } from "@rive-app/react-canvas";
+import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
-const DURACION_TIMELINE = 1;      // segundos que dura cada timeline en Rive (INICIO → META)
-const DURACION_CARRERA_MS = 1800; // qué tanto tardan en "manejar" al abrir
+const DURACION_TOTAL = 1;
+const DURACION_ANIMACION_MS = 4500;
 const TIMELINES = [
   "Timeline J201",
   "Timeline J202",
@@ -14,8 +14,25 @@ const TIMELINES = [
   "Timeline J207",
 ];
 
+// "cubic" | "quart" | "expo"
+const CURVA = "quart";
+
 function easeOutCubic(x) {
   return 1 - Math.pow(1 - x, 3);
+}
+
+function easeOutQuart(x) {
+  return 1 - Math.pow(1 - x, 4);
+}
+
+function easeOutExpo(x) {
+  return x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
+}
+
+function suavizar(x) {
+  if (CURVA === "cubic") return easeOutCubic(x);
+  if (CURVA === "expo") return easeOutExpo(x);
+  return easeOutQuart(x);
 }
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
@@ -23,11 +40,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
     src: "/carreras_ventas.riv",
     animations: TIMELINES,
     autoplay: false,
-    layout: new Layout({
-      fit: Fit.Contain,
-      alignment: Alignment.Center,
-    }),
-    drawingOptions: DrawOptimizationOptions.AlwaysDraw,
   });
 
   const ranking = useMemo(() => {
@@ -42,47 +54,40 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
 
-  // Evita reiniciar la carrera si el padre re-renderiza con el mismo ranking
   const rankingKey = ranking.map((r) => `${r.ruta}:${r.pct.toFixed(1)}`).join("|");
-  const rankingRef = useRef(ranking);
-  rankingRef.current = ranking;
+  const yaAnimoRef = useRef("");
 
   useEffect(() => {
-    if (!rive || rankingRef.current.length === 0) return;
+    if (!rive || ranking.length === 0) return;
+    if (yaAnimoRef.current === rankingKey) return;
+    yaAnimoRef.current = rankingKey;
 
     let frameId = 0;
     let cancelado = false;
 
-    // Instancia las 7 timelines y las deja pausadas.
-    // Si las dejas en play(), Rive las avanza solo y pelea con el scrub.
+    const objetivos = ranking.map(({ ruta, pct }) => ({
+      nombreTimeline: `Timeline ${ruta}`,
+      segundosDestino: (pct / 100) * DURACION_TOTAL,
+    }));
+
     rive.play(TIMELINES);
     rive.pause(TIMELINES);
 
-    const objetivos = rankingRef.current.map(({ ruta, pct }) => ({
-      nombre: `Timeline ${ruta}`,
-      destino: (pct / 100) * DURACION_TIMELINE,
-    }));
-
-    const scrubTodas = (factor) => {
-      objetivos.forEach(({ nombre, destino }) => {
-        const t = Math.max(0, Math.min(destino * factor, DURACION_TIMELINE));
-        try {
-          rive.scrub(nombre, t);
-        } catch {
-          rive.scrub([nombre], t);
-        }
-      });
-      if (typeof rive.drawFrame === "function") rive.drawFrame();
-    };
-
-    scrubTodas(0);
+    objetivos.forEach(({ nombreTimeline }) => rive.scrub(nombreTimeline, 0));
+    rive.drawFrame();
 
     const inicio = performance.now();
 
     const tick = (ahora) => {
       if (cancelado) return;
-      const progreso = Math.min(Math.max((ahora - inicio) / DURACION_CARRERA_MS, 0), 1);
-      scrubTodas(easeOutCubic(progreso));
+      const progreso = Math.min(Math.max((ahora - inicio) / DURACION_ANIMACION_MS, 0), 1);
+      const factor = suavizar(progreso);
+
+      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
+        rive.scrub(nombreTimeline, segundosDestino * factor);
+      });
+      rive.drawFrame();
+
       if (progreso < 1) frameId = requestAnimationFrame(tick);
     };
 
@@ -92,7 +97,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       cancelado = true;
       if (frameId) cancelAnimationFrame(frameId);
     };
-  }, [rive, rankingKey]);
+  }, [rive, ranking, rankingKey]);
 
   const contenido = (
     <div
