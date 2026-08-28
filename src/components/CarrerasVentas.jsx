@@ -25,14 +25,18 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   }, [porVendedor]);
 
   useEffect(() => {
-    if (!rive) return;
-    ranking.forEach(({ ruta, pct }) => {
-      const nombreTimeline = `Timeline ${ruta}`;
-      const segundos = (pct / 100) * DURACION_TOTAL;
-      rive.play(nombreTimeline);
-      rive.scrub(nombreTimeline, segundos);
-      rive.pause(nombreTimeline);
-    });
+  if (!rive || ranking.length === 0) return;
+
+  rive.play(TIMELINES); // activa las 7 de una vez
+
+  ranking.forEach(({ ruta, pct }) => {
+    const segundos = (pct / 100) * DURACION_TOTAL;
+    rive.scrub(`Timeline ${ruta}`, segundos);
+  });
+
+  rive.pause(TIMELINES); // congela las 7 en su posición
+  rive.drawFrame(); // fuerza a dibujar el resultado ya congelado
+}, [rive, ranking]);
   }, [rive, ranking]);
 
   const contenido = (
