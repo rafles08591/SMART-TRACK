@@ -1,32 +1,5 @@
 import { useState, memo } from "react";
 
-/* ============================================================
-   NeonObjetivoTabs.jsx
-   Reemplazo visual de ObjetivoTabs (mismo API de props) — pasa
-   de fila de botones planos a tarjetas con ícono de línea neón,
-   agrupadas por familia, con glow según estadoTabs.
-
-   MISMAS PROPS QUE EL ObjetivoTabs ACTUAL:
-     tab        -> string, key del tab activo (objTab / tab)
-     setTab     -> setter (setObjTab / setTab)
-     tabs       -> array [{ key, label, unit? }, ...] YA FILTRADO
-                   por rol/puesto (StaffView y VendorView ya arman
-                   este array — este componente no filtra nada,
-                   solo dibuja lo que le llega)
-     estadoTabs -> objeto { [key]: "aviso_nuevo" | "pendiente_urgente"
-                   | "completo" | "parpadeo_verde" | "aviso_azul" }
-
-   OPTIMIZACIÓN DE RENDIMIENTO (Android):
-     - Sin filter:drop-shadow permanente (carísimo de repintar en
-       Android/Skia) — el glow del ícono y el texto usan box-shadow
-       y text-shadow, mucho más baratos.
-     - El pulso de alertas anima opacity en vez de box-shadow (solo
-       compositor/GPU, no repinta), en una capa aparte.
-     - Cada tarjeta es su propio componente memoizado con su propio
-       estado de "presionado" — tocar una tarjeta ya NO vuelve a
-       renderizar las demás.
-   ============================================================ */
-
 const SW = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
 
 function TileIcon({ name, ...props }) {
@@ -45,6 +18,19 @@ function TileIcon({ name, ...props }) {
     case "userplus": return (<svg {...p}><circle cx="9.5" cy="8.5" r="3.6"/><path d="M3.5 20.5c1-3.6 3.5-5.5 6-5.5s5 1.9 6 5.5"/><path d="M18.5 8v5M16 10.5h5"/></svg>);
     case "ticket": return (<svg {...p}><path d="M3.5 9.5a2 2 0 0 0 0-4V4h17v1.5a2 2 0 0 0 0 4v1a2 2 0 0 0 0 4v1a2 2 0 0 0 0 4V20h-17v-1.5a2 2 0 0 0 0-4v-1a2 2 0 0 0 0-4Z"/><path d="M14 5v14" strokeDasharray="2.2 2.2"/></svg>);
     case "truck": return (<svg {...p}><rect x="2.5" y="7.5" width="11" height="9"/><path d="M13.5 10.5H17l3.5 3.2v2.8h-3"/><circle cx="7" cy="18.5" r="1.6"/><circle cx="16.5" cy="18.5" r="1.6"/></svg>);
+    case "monstertruck": return (
+      <svg {...p}>
+        <path d="M3 13.2V10.8h3l1.7-2.7h6.4l1.5 2.7H21v2.4" />
+        <path d="M8.2 8.1h5.6" />
+        <path d="M4 13.2h16" />
+        <path d="M6.3 13.2v2.2M17.7 13.2v2.2" />
+        <circle cx="7.2" cy="18.2" r="2.4" />
+        <circle cx="16.8" cy="18.2" r="2.4" />
+        <circle cx="7.2" cy="18.2" r=".7" fill="currentColor" stroke="none" />
+        <circle cx="16.8" cy="18.2" r=".7" fill="currentColor" stroke="none" />
+        <path d="M19.5 10.8V8.4h2.2" />
+      </svg>
+    );
     case "cash": return (<svg {...p}><rect x="2.5" y="6.5" width="19" height="12" rx="1.8"/><circle cx="12" cy="12.5" r="3"/></svg>);
     case "clock": return (<svg {...p}><circle cx="12" cy="12.5" r="8.5"/><path d="M12 7.5v5l3.3 2"/><path d="M9 2.5h6"/></svg>);
     case "box": return (<svg {...p}><path d="M12 3 21 7.5v9L12 21 3 16.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>);
@@ -60,13 +46,11 @@ function TileIcon({ name, ...props }) {
   }
 }
 
-/* key del tab -> { icon, color, family }. Ajusta libremente. Cualquier
-   key que llegue en `tabs` y no esté aquí cae en un default gris para
-   que nunca se rompa, solo se ve menos bonito hasta que lo agregues. */
 const META = {
-  dia:               { icon: "calendar", color: "#38bdf8", fam: "🏠 Inicio" },
-  escalera:          { icon: "ladder",   color: "#c084fc", fam: "🏠 Inicio" },
-  mesa:              { icon: "dashboard",color: "#60a5fa", fam: "🏠 Inicio" },
+  dia:               { icon: "calendar",      color: "#38bdf8", fam: "🏠 Inicio" },
+  escalera:          { icon: "ladder",        color: "#c084fc", fam: "🏠 Inicio" },
+  mesa:              { icon: "dashboard",     color: "#60a5fa", fam: "🏠 Inicio" },
+  carreras:          { icon: "monstertruck",  color: "#ff6b00", fam: "🏠 Inicio" },
 
   max:               { icon: "rocket",   color: "#f472b6", fam: "🎯 Avances" },
   open:              { icon: "unlock",   color: "#fb923c", fam: "🎯 Avances", img: "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/OPEN.jpeg" },
@@ -105,8 +89,6 @@ const META = {
 
 const FAMILY_ORDER = ["🏠 Inicio", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
 
-// Traduce el status de estadoTabs a color/pulso, sin tocar tu lógica de
-// cuándo se dispara cada status (eso sigue viviendo en StaffView/VendorView).
 function statusOverride(status) {
   switch (status) {
     case "pendiente_urgente":
@@ -147,8 +129,6 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         touchAction: "manipulation",
       }}
     >
-      {/* Glow de pulso: capa aparte que solo anima OPACITY (compositor/GPU,
-          no repinta) en vez de animar box-shadow directamente. */}
       {pulse && (
         <span
           aria-hidden
@@ -169,8 +149,6 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         }} />
       )}
 
-      {/* Glow del ícono con box-shadow (barato) en vez de filter:drop-shadow
-          (carísimo de repintar en Android). */}
       <span style={{
         width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center",
         color, borderRadius: 8, boxShadow: `0 0 8px -1px ${color}90`,
@@ -182,7 +160,6 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         )}
       </span>
 
-      {/* Glow del texto con text-shadow (barato) en vez de filter:drop-shadow. */}
       <span style={{
         fontSize: 10.5, fontWeight: 700, lineHeight: 1.15, color,
         textShadow: `0 0 4px ${color}90`,
