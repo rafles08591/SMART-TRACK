@@ -305,7 +305,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "4.3";
+const BUILD_VERSION = "4.1";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -724,6 +724,16 @@ export default function App() {
   const diasNoLaborables = data?.diasNoLaborables || [];
   const periodo = data?.periodo || { inicio: firstOfMonthISO(), fin: lastOfMonthISO() };
 
+  // Mismo criterio combinado que ya usa OtcVentasView.jsx: la lista fija de
+  // constants.js + lo que el Gerente haya agregado en tiempo real desde el
+  // panel "Catálogo" (data.otcSinVualaExtra). Antes stats.porVendedor solo
+  // usaba la lista fija, así que un código agregado ahí no se reflejaba en
+  // la columna "Sin Vuala" de la tabla POR RUTA · HOY.
+  const codigosSinVuala = useMemo(
+    () => new Set([...CODIGOS_OTC_SIN_VUALA, ...(data?.otcSinVualaExtra || []).map((e) => e.codigo)]),
+    [data?.otcSinVualaExtra]
+  );
+
   const stats = useMemo(() => {
     const restantes = diasRestantes(periodo.fin, diasNoLaborables);
     const diasLaborablesTotal = diasHabilesEntre(periodo.inicio, periodo.fin, diasNoLaborables);
@@ -857,7 +867,7 @@ export default function App() {
       const paquetesHoy = propiasAvanceDia.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
       const otcHoy = propiasOtcDia.reduce((s, r) => s + (Number(r.monto) || 0), 0);
       const otcSinVualaPiezas = propiasOtcDia
-        .filter((r) => CODIGOS_OTC_SIN_VUALA.includes((r.codigoArticulo || "").trim()))
+        .filter((r) => codigosSinVuala.has((r.codigoArticulo || "").trim()))
         .reduce((s, r) => s + (Number(r.unidadesVendidas) || 0), 0);
       const otcSinVualaCumple = otcSinVualaPiezas >= OTC_SIN_VUALA_MINIMO;
       // Visitas efectivas = clientes distintos (un cliente repetido varias veces cuenta una sola vez)
@@ -1087,7 +1097,7 @@ export default function App() {
     const bottom3Nombres = rankingDesempeno.slice(0, 3).map((v) => v.name);
 
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
-  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data?.escaleraObjetivosManuales]);
+  }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data?.escaleraObjetivosManuales, codigosSinVuala]);
 
   async function procesarFilasOtcSemanal(filas) {
     const registros = convertirFilasOtcDia(filas);
@@ -3024,8 +3034,7 @@ export default function App() {
 
       {role === "vendedor" && (
         <VendorView
-  vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
-  porVendedor={stats.porVendedor}
+          vendedor={stats.porVendedor.find((v) => v.id === currentVendorId)}
           periodo={periodo}
           restantes={stats.restantes}
           mesaControl={mesaControl}
