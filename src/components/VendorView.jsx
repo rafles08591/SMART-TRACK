@@ -15,6 +15,7 @@ import NeonObjetivoTabs from "./NeonObjetivoTabs";
 import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
+import CarrerasVentas from "./CarrerasVentas";
 import MesaControlView from "./MesaControlView";
 import CuponeraView from "./CuponeraView";
 import RallyOtcView from "./RallyOtcView";
@@ -38,7 +39,7 @@ import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 // adelante, solo hay que sumarla aquí.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
+export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres, porVendedor }) {
   const [tab, setTab] = useState("dia");
   // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
   // pantalla completa en vez del grid.
@@ -88,7 +89,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
+  const esTabEspecial = tab === "dia" || tab === "carreras" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -128,7 +129,10 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
           title={OBJETIVO_TABS.find((t) => t.key === tab)?.label || tab}
           onBack={() => setPantallaAbierta(false)}
         >
-      {tab === "dia" ? (
+          
+           {tab === "carreras" ? (
+        <CarrerasVentas porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
+      ) : tab === "dia" ? (
         <DiaKpis
           hoy={vendedor.hoy}
           mensajeDia={mensajeDia}
