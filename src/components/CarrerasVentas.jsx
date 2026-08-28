@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
 import { useRive } from "@rive-app/react-canvas";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
-const DURACION_TOTAL = 1; // ¡confirmado! cada Timeline dura 1 segundo real
+const DURACION_TOTAL = 1;
 const TIMELINES = ["Timeline J201","Timeline J202","Timeline J203","Timeline J204","Timeline J205","Timeline J206","Timeline J207"];
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
@@ -25,91 +24,51 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
 
-const yaAnimoRef = useRef(false);
+  const yaAnimoRef = useRef(false);
 
-useEffect(() => {
-  if (!rive || ranking.length === 0 || yaAnimoRef.current) return;
-  yaAnimoRef.current = true; // marca que ya se hizo, para que no se repita
+  useEffect(() => {
+    if (!rive || ranking.length === 0 || yaAnimoRef.current) return;
+    yaAnimoRef.current = true;
 
-  const DURACION_ANIMACION_MS = 1800;
-  let frameId;
+    const DURACION_ANIMACION_MS = 1800;
+    let frameId;
 
-  const objetivos = ranking.map(({ ruta, pct }) => ({
-    nombreTimeline: `Timeline ${ruta}`,
-    segundosDestino: (pct / 100) * DURACION_TOTAL,
-  }));
+    const objetivos = ranking.map(({ ruta, pct }) => ({
+      nombreTimeline: `Timeline ${ruta}`,
+      segundosDestino: (pct / 100) * DURACION_TOTAL,
+    }));
 
-  objetivos.forEach(({ nombreTimeline }) => rive.play(nombreTimeline));
+    objetivos.forEach(({ nombreTimeline }) => rive.play(nombreTimeline));
 
-  const inicio = performance.now();
+    const inicio = performance.now();
 
-  function easeOutCubic(x) {
-    return 1 - Math.pow(1 - x, 3);
-  }
-
-  function tick(ahora) {
-    const transcurrido = ahora - inicio;
-    const progreso = Math.min(transcurrido / DURACION_ANIMACION_MS, 1);
-    const suavizado = easeOutCubic(progreso);
-
-    objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
-      rive.scrub(nombreTimeline, segundosDestino * suavizado);
-    });
-    rive.drawFrame();
-
-    if (progreso < 1) {
-      frameId = requestAnimationFrame(tick);
-    } else {
-      objetivos.forEach(({ nombreTimeline }) => rive.pause(nombreTimeline));
+    function easeOutCubic(x) {
+      return 1 - Math.pow(1 - x, 3);
     }
-  }
 
-  frameId = requestAnimationFrame(tick);
+    function tick(ahora) {
+      const transcurrido = ahora - inicio;
+      const progreso = Math.min(transcurrido / DURACION_ANIMACION_MS, 1);
+      const suavizado = easeOutCubic(progreso);
 
-  return () => {
-    if (frameId) cancelAnimationFrame(frameId);
-  };
-}, [rive, ranking]);
+      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
+        rive.scrub(nombreTimeline, segundosDestino * suavizado);
+      });
+      rive.drawFrame();
 
-  const DURACION_ANIMACION_MS = 1800; // qué tanto tarda en "manejar" hasta su punto al abrir la pantalla
-  let frameId;
-
-  const objetivos = ranking.map(({ ruta, pct }) => ({
-    nombreTimeline: `Timeline ${ruta}`,
-    segundosDestino: (pct / 100) * DURACION_TOTAL,
-  }));
-
-  objetivos.forEach(({ nombreTimeline }) => rive.play(nombreTimeline));
-
-  const inicio = performance.now();
-
-  function easeOutCubic(x) {
-    return 1 - Math.pow(1 - x, 3);
-  }
-
-  function tick(ahora) {
-    const transcurrido = ahora - inicio;
-    const progreso = Math.min(transcurrido / DURACION_ANIMACION_MS, 1);
-    const suavizado = easeOutCubic(progreso);
-
-    objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
-      rive.scrub(nombreTimeline, segundosDestino * suavizado);
-    });
-    rive.drawFrame();
-
-    if (progreso < 1) {
-      frameId = requestAnimationFrame(tick);
-    } else {
-      objetivos.forEach(({ nombreTimeline }) => rive.pause(nombreTimeline));
+      if (progreso < 1) {
+        frameId = requestAnimationFrame(tick);
+      } else {
+        objetivos.forEach(({ nombreTimeline }) => rive.pause(nombreTimeline));
+      }
     }
-  }
 
-  frameId = requestAnimationFrame(tick);
+    frameId = requestAnimationFrame(tick);
 
-  return () => {
-    if (frameId) cancelAnimationFrame(frameId);
-  };
-}, [rive, ranking]);
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [rive, ranking]);
 
   const contenido = (
     <div style={{
