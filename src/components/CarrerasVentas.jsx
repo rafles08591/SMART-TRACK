@@ -24,19 +24,20 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       .sort((a, b) => b.pct - a.pct);
   }, [porVendedor]);
 
-  useEffect(() => {
-    if (!rive || ranking.length === 0) return;
+ useEffect(() => {
+  if (!rive || ranking.length === 0) return;
 
-    rive.play(TIMELINES);
+  ranking.forEach(({ ruta, pct }) => {
+    const nombreTimeline = `Timeline ${ruta}`;
+    const segundos = (pct / 100) * DURACION_TOTAL;
+    console.log(`[Carrera] ${nombreTimeline} -> pct=${pct} segundos=${segundos}`);
 
-    ranking.forEach(({ ruta, pct }) => {
-      const segundos = (pct / 100) * DURACION_TOTAL;
-      rive.scrub(`Timeline ${ruta}`, segundos);
-    });
-
-    rive.pause(TIMELINES);
+    rive.play(nombreTimeline);
+    rive.scrub(nombreTimeline, segundos);
     rive.drawFrame();
-  }, [rive, ranking]);
+    rive.pause(nombreTimeline);
+  });
+}, [rive, ranking]);
 
   const contenido = (
     <div style={{
