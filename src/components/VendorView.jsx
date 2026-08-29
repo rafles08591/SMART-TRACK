@@ -32,7 +32,7 @@ import CarteraVencidaView from "./CarteraVencidaView";
 import OtcVentasView from "./OtcVentasView";
 import AltaClienteView from "./AltaClienteView";
 import CoachIAView from "./CoachIAView";
-import CarreraDesempenoView from "./CarreraDesempenoView";
+import CarrerasVentas from "./CarrerasVentas";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
@@ -221,9 +221,8 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
         <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
       ) : tab === "otc_ventas" ? (
         <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
-      ) : tab === "carreras" ? (
-        <CarreraDesempenoView porVendedor={porVendedor} />
-      ) : !m ? (
+      ) : tab === "carreras" ? null
+      : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
         // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
         // evita que truene toda la app.
@@ -270,6 +269,9 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
         </>
       )}
         </SwipeBackScreen>
+      )}
+      {pantallaAbierta && tab === "carreras" && (
+        <CarrerasVentas porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
       )}
     </div>
   );
