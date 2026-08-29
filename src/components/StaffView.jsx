@@ -47,6 +47,7 @@ import OtcVentasView from "./OtcVentasView";
 import ResetPinView from "./ResetPinView";
 import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 import PromocionesCoachView from "./PromocionesCoachView";
+import CarreraDesempenoView from "./CarreraDesempenoView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -528,6 +529,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             ) : (
               <EscaleraStaffView data={data} persistFresco={persistFresco} stats={stats} revisorNombre={revisorNombre} />
             )
+          ) : objTab === "carreras" ? (
+            <CarreraDesempenoView porVendedor={stats.porVendedor} />
           ) : objTab === "actividad" ? (
             puesto === "gerente" ? (
               <ActividadView />
