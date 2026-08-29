@@ -27,9 +27,10 @@ const USUARIOS_CON_PERMISOS_EDITABLES = new Set([
 // Debe coincidir con RUTAS_CON_KM en VendorView.jsx.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-// Pestañas que no tiene sentido prender/apagar por persona (son del propio
-// Gerente, o se resuelven distinto).
-const TABS_NO_ASIGNABLES = new Set(["reset_pin", "permisos"]);
+// Pestañas que no tiene sentido prender/apagar por persona (se resuelven
+// distinto). reset_pin y permisos SÍ son asignables (Gerente los tiene fijos
+// siempre; el resto de roles solo los ven si Gerente se los da aquí mismo).
+const TABS_NO_ASIGNABLES = new Set([]);
 
 const TABS_ASIGNABLES = OBJETIVO_TABS.filter((t) => !TABS_NO_ASIGNABLES.has(t.key));
 
