@@ -1099,6 +1099,20 @@ export default function App() {
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
   }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data?.escaleraObjetivosManuales, codigosSinVuala]);
 
+  // Registra quién y cuándo se hizo la última carga de cada sección de
+  // "Cargar datos" (Avance del día, OTC del día, etc.). Se REEMPLAZA cada
+  // vez para esa sección — no guarda historial, solo el dato más reciente.
+  async function registrarUltimaCarga(seccion, accion = "carga") {
+    const quien =
+      puesto === "gerente" ? "Gerente" :
+      puesto === "supervisor" ? "Supervisor-1" :
+      puesto === "supervisor2" ? "Supervisor-2" :
+      (staffUsername || "Staff");
+    await persistParcialFresco((fresca) => ({
+      ultimaCarga: { ...(fresca.ultimaCarga || {}), [seccion]: { fecha: new Date().toISOString(), quien, accion } },
+    }));
+  }
+
   async function procesarFilasOtcSemanal(filas) {
     const registros = convertirFilasOtcDia(filas);
     if (registros.length === 0) {
@@ -1106,6 +1120,7 @@ export default function App() {
       return;
     }
     await persistParcialFresco(() => ({ otcSemanal: registros }));
+    await registrarUltimaCarga("otcSemanal");
     const fechas = [...new Set(registros.map((r) => r.fecha))];
     setStatus(`OTC semanal cargado: ${registros.length} registros para ${fechas.join(", ")}.`);
   }
@@ -1630,6 +1645,7 @@ export default function App() {
     // pierda ni se sobreescriba con una versión vieja.
     try {
       await persistParcialFresco(() => ({ pedidosDia: registros }));
+      await registrarUltimaCarga("pedidosDia");
       const fechas = [...new Set(registros.map((r) => r.fecha).filter(Boolean))];
       setPedidosDiaStatus(`Pedidos cargados: ${registros.length} registros para ${fechas.join(", ") || "la fecha del reporte"}.`);
     } catch (err) {
@@ -2496,6 +2512,7 @@ export default function App() {
       avanceDia: registros,
       visitasSemana: podarVisitasSemanaAntiguas(fusionarVisitasSemanaDesdeAvanceDia(fresca.visitasSemana || {}, registros)),
     }));
+    await registrarUltimaCarga("avanceDia");
     const resultadoFacturas = await sincronizarVentasFacturas(filas);
     if (resultadoFacturas && resultadoFacturas.ok !== false && resultadoFacturas.guardadas > 0) {
       await asignarFoliosTickets();
@@ -2548,6 +2565,7 @@ export default function App() {
       const anteriores = (fresca.otcDia || []).filter((r) => !fechasNuevas.has(r.fecha));
       return { otcDia: [...anteriores, ...registros] };
     });
+    await registrarUltimaCarga("otcDia");
     const fechas = [...fechasNuevas].sort();
     setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")} (se acumula; no se borran días anteriores).`);
   }
@@ -2666,6 +2684,7 @@ export default function App() {
     }
 
     await cargarVentasPeriodo(data.periodo);
+    await registrarUltimaCarga("ventasPeriodo");
     setVentasPeriodoStatus(`Periodo actualizado: ${registros.length} registros (${etiquetaOrigen}) para ${fechas.join(", ")}.`);
   }
 
@@ -2713,6 +2732,7 @@ export default function App() {
         return;
       }
       await cargarVentasPeriodo(data.periodo);
+      await registrarUltimaCarga("ventasPeriodo", "borrado total");
       setVentasPeriodoStatus("Se borró todo el avance de ventas guardado.");
     } catch (err) {
       console.error(err);
@@ -2856,6 +2876,7 @@ export default function App() {
         );
         return { visitasSemana: visitasSemanaMerged };
       });
+      await registrarUltimaCarga("visitasNur");
       setVisitasNurStatus(
         `Visitas NUR cargadas: ${registros.length} registros para ${fechaCarga}.` +
         (sinRuta > 0 ? ` (${sinRuta} con NUR sin mapear a ninguna ruta — revisa RUTA_POR_NUR)` : "")
