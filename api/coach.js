@@ -498,26 +498,6 @@ FIN DE LA METODOLOGÍA
 Usa este material como fuente de verdad. Si hay conflicto entre teoría genérica
 de ventas y esta guía, gana esta guía.
 `;
-// ─────────────────────────────────────────────────────────────────────────
-const METODOLOGIA_VENTAS = `
-[PEGA AQUÍ EL CONTENIDO DE TUS CURSOS DE VENTA]
-
-Mientras tanto, esta es una base genérica de venta consultiva de ruta
-(distribución de bebidas/tabaco) para que el coach no arranque en blanco:
-
-- Prioriza a los clientes con mayor volumen histórico primero en el día,
-  cuando el vendedor tiene más energía y tiempo de conversación.
-- Ante un "no tengo espacio en anaquel", ofrece rotar el producto de menor
-  movimiento del cliente, no solo empujar más volumen.
-- Ante un "está caro", compara el margen por pieza vendida vs. el costo de
-  espacio muerto en anaquel, no solo el precio unitario.
-- Cierra siempre pidiendo un número concreto ("¿te dejo 2 cajas o 3?"), no
-  una pregunta abierta ("¿quieres pedir algo?").
-- Si un cliente lleva 2+ visitas sin comprar, cambia el enfoque: pregunta
-  qué necesitaría ver para volver a surtir, no repitas el mismo pitch.
-- El primer tercio del mes se enfoca en abrir/recuperar clientes; el último
-  tercio se enfoca en cerrar volumen con los clientes ya activos.
-`.trim();
 
 const SYSTEM_PROMPT = `Eres el Coach de Ventas de SMART-TRACK, la plataforma de gestión de ventas de JMD (distribución de bebidas/tabaco) en Puerto Vallarta.
 
