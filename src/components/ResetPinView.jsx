@@ -73,7 +73,7 @@ export default function ResetPinView() {
       const json = await resp.json();
 
       if (!resp.ok) {
-        setError(json.error || "No se pudo reiniciar el PIN");
+        setError(json.error + (json.detalle_temporal ? ` (detalle: ${json.detalle_temporal})` : "") || "No se pudo reiniciar el PIN");
         setLoading(false);
         return;
       }
