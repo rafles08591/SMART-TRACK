@@ -57,6 +57,7 @@ export const OBJETIVO_TABS = [
   { key: "otc_ventas", label: "OTC VENTAS", unit: "special" },
   { key: "reset_pin", label: "RESTABLECER PIN", unit: "special" },
   { key: "permisos", label: "PERMISOS", unit: "special" },
+  { key: "promociones_coach", label: "PROMOS PARA COACH", unit: "special" },
 ];
 
 // Lista compartida de usuarios de la app (para el buscador de Restablecer
