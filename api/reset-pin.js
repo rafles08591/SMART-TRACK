@@ -107,7 +107,10 @@ export default async function handler(req, res) {
     });
     if (updateErr) {
       console.error("Error actualizando password:", updateErr);
-      return res.status(500).json({ error: "No se pudo actualizar el PIN. Intenta de nuevo." });
+      return res.status(500).json({
+        error: "No se pudo actualizar el PIN. Intenta de nuevo.",
+        detalle_temporal: updateErr?.message || "sin detalle",
+      });
     }
 
     return res.status(200).json({ ok: true });
