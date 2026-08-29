@@ -112,6 +112,13 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   const resumenOtc = vendedor.marcaOtc ? `OTC: ${money(vendedor.marcaOtc.vendido)}/${money(vendedor.marcaOtc.objetivo)}` : "";
   const resumenVentas = [resumenMarcasOpen, resumenMarcasChampions, resumenOtc].filter(Boolean).join(" · ") || "Sin datos de ventas todavía.";
 
+  // Promociones activas cargadas por Gerente (PromocionesCoachView) — se le
+  // pasan al coach tal cual, con precios reales, para que no invente combos.
+  const resumenPromociones = (data.promocionesCoach || [])
+    .filter((p) => p.activa)
+    .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
+    .join("\n");
+
   const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
@@ -140,7 +147,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <div style={{ position: "fixed", inset: 0, background: "#0B1120", zIndex: 999, overflowY: "auto" }}>
           <div style={{ maxWidth: 620, margin: "0 auto", padding: "24px 18px 60px" }}>
             <button className="btn-ghost" onClick={() => setCoachAbierto(false)} style={{ marginBottom: 16 }}>‹ Regresar</button>
-            <CoachIAView vendedorNombre={nombre || vendedor.name} resumenObjetivo={resumenObjetivo} resumenVentas={resumenVentas} />
+            <CoachIAView vendedorNombre={nombre || vendedor.name} resumenObjetivo={resumenObjetivo} resumenVentas={resumenVentas} resumenPromociones={resumenPromociones} />
           </div>
         </div>
       )}
