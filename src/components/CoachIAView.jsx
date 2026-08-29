@@ -12,7 +12,7 @@ import { Sparkles, Send, RefreshCw } from "lucide-react";
 // - vendedorNombre: string
 // - resumenObjetivo: string, ej. "83% del objetivo mensual, faltan 3 días y $12,400 por vender"
 // - resumenVentas: string, ej. "Ice Mix: 120 cajas · Blossom Mix: 40 cajas · OTC: $3,200 · Sin Vuala: sí"
-export default function CoachIAView({ vendedorNombre, resumenObjetivo, resumenVentas }) {
+export default function CoachIAView({ vendedorNombre, resumenObjetivo, resumenVentas, resumenPromociones }) {
   const [pregunta, setPregunta] = useState("");
   const [consejo, setConsejo] = useState(null);
   const [cargando, setCargando] = useState(false);
@@ -29,6 +29,7 @@ export default function CoachIAView({ vendedorNombre, resumenObjetivo, resumenVe
           vendedorNombre,
           resumenObjetivo,
           resumenVentas,
+          resumenPromociones,
           pregunta: preguntaEnviada,
         }),
       });
