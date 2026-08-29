@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useEffect, useState } from "react";
-import { Target, Calendar, MapPin, Star, LogOut } from "lucide-react";
+import { Target, Calendar, MapPin, Star, LogOut, Sparkles } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import {
   OBJETIVO_TABS, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS,
@@ -15,7 +15,6 @@ import NeonObjetivoTabs from "./NeonObjetivoTabs";
 import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
-import CarrerasVentas from "./CarrerasVentas";
 import MesaControlView from "./MesaControlView";
 import CuponeraView from "./CuponeraView";
 import RallyOtcView from "./RallyOtcView";
@@ -32,6 +31,7 @@ import EscaleraView from "./EscaleraView";
 import CarteraVencidaView from "./CarteraVencidaView";
 import OtcVentasView from "./OtcVentasView";
 import AltaClienteView from "./AltaClienteView";
+import CoachIAView from "./CoachIAView";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
@@ -39,11 +39,15 @@ import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 // adelante, solo hay que sumarla aquí.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres, porVendedor }) {
+export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
   // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
   // pantalla completa en vez del grid.
   const [pantallaAbierta, setPantallaAbierta] = useState(false);
+  // Pantalla del Coach de Ventas IA — independiente del sistema de pestañas
+  // (OBJETIVO_TABS), igual que el Restablecer PIN de StaffView, para no
+  // tocar constants.js ni el árbol grande de JSX de abajo.
+  const [coachAbierto, setCoachAbierto] = useState(false);
 
   // Registro de uso: mismo mecanismo que en StaffView.
   useEffect(() => {
@@ -89,7 +93,26 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
   );
   const nombre = NOMBRES[vendedor.name];
   const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
-  const esTabEspecial = tab === "dia" || tab === "carreras" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
+
+  // Resúmenes en texto plano para el Coach de Ventas IA — se arman aquí con
+  // datos reales (no hay nada inventado) y se le pasan a CoachIAView, que
+  // solo los manda tal cual al endpoint /api/coach.
+  const tabMax = vendedor.tabs?.max;
+  const unitMax = OBJETIVO_TABS.find((t) => t.key === "max")?.unit;
+  const efectividadHoyTxt = vendedor.hoy?.efectividadPct != null ? `${vendedor.hoy.efectividadPct.toFixed(0)}%` : "sin datos";
+  const resumenObjetivo = tabMax
+    ? `${tabMax.avancePct.toFixed(0)}% del objetivo del periodo · faltan ${fmt(unitMax, tabMax.restaPorVender)} por vender · necesitas ${fmt(unitMax, tabMax.ventaPorDiaNecesaria)}/día · efectividad de hoy: ${efectividadHoyTxt}`
+    : `Efectividad de hoy: ${efectividadHoyTxt}`;
+  const resumenMarcasOpen = (MARCAS_OPEN || [])
+    .map((m) => { const d = vendedor.marcasOpen?.[m.key]; return d ? `${m.label}: ${unidades(d.vendido)}/${unidades(d.objetivo)}` : null; })
+    .filter(Boolean).join(" · ");
+  const resumenMarcasChampions = (MARCAS_CHAMPIONS || [])
+    .map((m) => { const d = vendedor.marcasChampions?.[m.key]; return d ? `${m.label}: ${unidades(d.vendido)}/${unidades(d.objetivo)}` : null; })
+    .filter(Boolean).join(" · ");
+  const resumenOtc = vendedor.marcaOtc ? `OTC: ${money(vendedor.marcaOtc.vendido)}/${money(vendedor.marcaOtc.objetivo)}` : "";
+  const resumenVentas = [resumenMarcasOpen, resumenMarcasChampions, resumenOtc].filter(Boolean).join(" · ") || "Sin datos de ventas todavía.";
+
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -105,14 +128,35 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         refrescando={refrescando}
       />
 
+      {!pantallaAbierta && !coachAbierto && (
+        <div style={{ display: "flex", justifyContent: "flex-end", margin: "10px 0 0" }}>
+          <button className="btn-ghost" onClick={() => setCoachAbierto(true)} style={{ fontSize: 12 }}>
+            <Sparkles size={13} style={{ verticalAlign: "-2px" }} /> Coach de ventas
+          </button>
+        </div>
+      )}
+
+      {coachAbierto && (
+        <div style={{ position: "fixed", inset: 0, background: "#0B1120", zIndex: 999, overflowY: "auto" }}>
+          <div style={{ maxWidth: 620, margin: "0 auto", padding: "24px 18px 60px" }}>
+            <button className="btn-ghost" onClick={() => setCoachAbierto(false)} style={{ marginBottom: 16 }}>‹ Regresar</button>
+            <CoachIAView vendedorNombre={nombre || vendedor.name} resumenObjetivo={resumenObjetivo} resumenVentas={resumenVentas} />
+          </div>
+        </div>
+      )}
+
       {!pantallaAbierta && (
         <NeonObjetivoTabs
           tab={tab}
           setTab={(k) => { setTab(k); setPantallaAbierta(true); }}
-          tabs={OBJETIVO_TABS.filter((t) => {
-            if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
-            return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
-          })}
+          tabs={
+            data.permisosPersonalizados?.[vendedor.name]
+              ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[vendedor.name].includes(t.key))
+              : OBJETIVO_TABS.filter((t) => {
+                  if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
+                  return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
+                })
+          }
           estadoTabs={{
             rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
             avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
@@ -129,10 +173,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
           title={OBJETIVO_TABS.find((t) => t.key === tab)?.label || tab}
           onBack={() => setPantallaAbierta(false)}
         >
-          
-           {tab === "carreras" ? (
-        <CarrerasVentas porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
-      ) : tab === "dia" ? (
+      {tab === "dia" ? (
         <DiaKpis
           hoy={vendedor.hoy}
           mensajeDia={mensajeDia}
