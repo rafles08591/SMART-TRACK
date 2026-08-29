@@ -43,6 +43,7 @@ function TileIcon({ name, ...props }) {
     case "checklist": return (<svg {...p}><rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8.5l1.4 1.4L12 7.3M8 14.5l1.4 1.4L12 13.3"/><path d="M14 8.5h4M14 14.5h4"/></svg>);
     case "calc": return (<svg {...p}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M7.5 7h9"/><circle cx="8" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="16.5" r=".9" fill="currentColor" stroke="none"/></svg>);
     case "key": return (<svg {...p}><circle cx="7.5" cy="14.5" r="4"/><path d="M10.6 11.4 19 3M15.5 7 18 9.5M18.3 3.8 20.5 6"/></svg>);
+    case "megaphone": return (<svg {...p}><path d="M3 10v4h3l7 4V6l-7 4H3Z"/><path d="M13 8.5a4 4 0 0 1 0 7M16 6a7 7 0 0 1 0 12"/><path d="M6 14v4a1.5 1.5 0 0 0 3 0v-4"/></svg>);
     case "sliders": return (<svg {...p}><path d="M4 6h9M17 6h3M4 12h3M9 12h11M4 18h13M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>);
     default: return (<svg {...p}><rect x="4" y="4" width="16" height="16" rx="3"/></svg>);
   }
@@ -67,6 +68,7 @@ const META = {
   alta_cliente:      { icon: "userplus", color: "#34d399", fam: "💰 Ventas" },
 
   cuponera:          { icon: "ticket",   color: "#fb923c", fam: "🎟️ Promociones" },
+  promociones_coach: { icon: "megaphone",color: "#fbbf24", fam: "🎟️ Promociones" },
 
   unidades:          { icon: "truck",    color: "#f87171", fam: "📋 Operación" },
   nomina:            { icon: "cash",     color: "#4ade80", fam: "📋 Operación" },
