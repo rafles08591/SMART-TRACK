@@ -52,6 +52,15 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const esSuplente1 = puesto === "suplente1";
+
+  // Texto chiquito de "última actualización" para cada sección de Cargar
+  // datos — lee data.ultimaCarga (se reemplaza cada vez, no acumula).
+  function formatoUltimaCarga(seccion) {
+    const info = data.ultimaCarga?.[seccion];
+    if (!info) return null;
+    const fechaTxt = new Date(info.fecha).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    return `Última actualización: ${fechaTxt} · ${info.quien}${info.accion && info.accion !== "carga" ? ` (${info.accion})` : ""}`;
+  }
   const esSuplente2 = puesto === "suplente2";
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
   const [tab, setTab] = useState("resumen");
@@ -1009,6 +1018,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+          {formatoUltimaCarga("avanceDia") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("avanceDia")}</div>
+          )}
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC DEL DÍA</div>
@@ -1023,6 +1035,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+          {formatoUltimaCarga("otcDia") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("otcDia")}</div>
+          )}
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>AVANCE DEL PERIODO</div>
@@ -1040,6 +1055,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+          {formatoUltimaCarga("ventasPeriodo") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("ventasPeriodo")}</div>
+          )}
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC SEMANAL</div>
@@ -1056,6 +1074,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+          {formatoUltimaCarga("otcSemanal") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("otcSemanal")}</div>
+          )}
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>VISITAS NUR</div>
@@ -1069,6 +1090,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 0 }}>
             Se sube todos los días con lo visitado hasta ese momento — se combina con Mesa de Control en "Sin Visita", cualquiera de los dos cuenta.
           </p>
+          {formatoUltimaCarga("visitasNur") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginBottom: 4 }}>{formatoUltimaCarga("visitasNur")}</div>
+          )}
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>PEDIDOS DEL DÍA</div>
@@ -1083,6 +1107,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </span>
             )}
           </div>
+          {formatoUltimaCarga("pedidosDia") && (
+            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("pedidosDia")}</div>
+          )}
         </div>
       )}
     </div>
