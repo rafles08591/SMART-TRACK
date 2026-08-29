@@ -32,6 +32,7 @@ import CarteraVencidaView from "./CarteraVencidaView";
 import OtcVentasView from "./OtcVentasView";
 import AltaClienteView from "./AltaClienteView";
 import CoachIAView from "./CoachIAView";
+import CarreraDesempenoView from "./CarreraDesempenoView";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
@@ -39,7 +40,7 @@ import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 // adelante, solo hay que sumarla aquí.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-export default function VendorView({ vendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
+export default function VendorView({ vendedor, porVendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
   const [tab, setTab] = useState("dia");
   // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
   // pantalla completa en vez del grid.
@@ -119,7 +120,7 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
     .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
     .join("\n");
 
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -220,6 +221,8 @@ export default function VendorView({ vendedor, periodo, restantes, mesaControl, 
         <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
       ) : tab === "otc_ventas" ? (
         <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "carreras" ? (
+        <CarreraDesempenoView porVendedor={porVendedor} />
       ) : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
         // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
