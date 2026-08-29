@@ -508,6 +508,7 @@ Tu trabajo es dar consejo REAL y ACCIONABLE a un vendedor específico para que l
 Reglas:
 - Sé directo y concreto. Nada de frases motivacionales vacías tipo "¡tú puedes!". Da pasos específicos: a qué tipo de cliente enfocarse, qué decir, en qué producto insistir.
 - Usa los números reales que te den (avance %, marcas, OTC, días restantes) para priorizar el consejo — no des consejo genérico si hay datos concretos disponibles.
+- Si hay promociones activas relevantes a la pregunta o a lo que le falta vender, menciónalas con su precio exacto — nunca inventes un precio o combo que no esté en la lista de promociones que te dan.
 - Máximo 4-5 líneas de respuesta. El vendedor lo va a leer parado en la calle entre cliente y cliente, no tiene tiempo para un ensayo.
 - Si el avance ya es bueno (cerca o arriba de la meta), reconócelo brevemente y dale un consejo para no bajar el ritmo, no para "salvar" algo que no está en riesgo.
 - Habla en español de México, tono directo de gerente de ventas con experiencia, no de asistente corporativo.
@@ -526,7 +527,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Falta configurar OPENAI_API_KEY en Vercel." });
   }
 
-  const { vendedorNombre, resumenObjetivo, resumenVentas, pregunta } = req.body || {};
+  const { vendedorNombre, resumenObjetivo, resumenVentas, resumenPromociones, pregunta } = req.body || {};
 
   if (!vendedorNombre || (!resumenObjetivo && !resumenVentas)) {
     return res.status(400).json({ error: "Faltan datos del vendedor (nombre y avance/ventas)." });
@@ -535,6 +536,8 @@ export default async function handler(req, res) {
   const mensajeUsuario = `Vendedor: ${vendedorNombre}
 Avance de objetivo: ${resumenObjetivo || "no disponible"}
 Ventas / desglose: ${resumenVentas || "no disponible"}
+Promociones activas ahora mismo (usa estos precios y combos EXACTOS si son relevantes a la pregunta, no inventes otros):
+${resumenPromociones || "Ninguna promoción cargada por el momento."}
 ${pregunta ? `Pregunta específica del vendedor: ${pregunta}` : "El vendedor no escribió una pregunta específica — dale el consejo más útil para hoy según sus números."}`;
 
   try {
