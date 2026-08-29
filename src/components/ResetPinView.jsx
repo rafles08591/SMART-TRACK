@@ -109,7 +109,7 @@ export default function ResetPinView() {
         Reiniciar PIN
       </h1>
       <p style={{ fontSize: 13, color: COLOR.slate400, marginBottom: 24 }}>
-        Solo Gerente puede usar esta función
+        Necesitas permiso para restablecer PINs
       </p>
 
       <div style={{ position: "relative", marginBottom: 16 }}>
