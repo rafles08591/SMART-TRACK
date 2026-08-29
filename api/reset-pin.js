@@ -54,7 +54,11 @@ export default async function handler(req, res) {
     // 1) ¿El token pertenece a un usuario real y con sesión válida?
     const { data: callerData, error: callerErr } = await supabaseAdmin.auth.getUser(callerToken);
     if (callerErr || !callerData?.user) {
-      return res.status(401).json({ error: "Sesión inválida o expirada. Vuelve a iniciar sesión e intenta de nuevo." });
+      console.error("Fallo al validar token del que llama:", callerErr);
+      return res.status(401).json({
+        error: "Sesión inválida o expirada. Vuelve a iniciar sesión e intenta de nuevo.",
+        detalle_temporal: callerErr?.message || "sin detalle",
+      });
     }
 
     // 2) ¿Ese usuario es Gerente? (se revisa en la tabla profiles, no en el token)
