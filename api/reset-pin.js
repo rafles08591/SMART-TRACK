@@ -1,7 +1,8 @@
 // api/reset-pin.js
-// Función serverless de Vercel. Deja que SOLO un usuario con puesto "gerente"
-// restablezca el PIN (contraseña de Supabase Auth) de cualquier otro usuario
-// de la app, sin depender de correos reales ni del panel de Supabase.
+// Función serverless de Vercel. Deja restablecer el PIN (contraseña de
+// Supabase Auth) de cualquier usuario a: Gerente siempre, o cualquier otro
+// usuario al que Gerente le haya dado la pestaña "reset_pin" desde Permisos.
+// Sin depender de correos reales ni del panel de Supabase.
 //
 // Requiere DOS variables de entorno nuevas en Vercel (Settings → Environment
 // Variables), además de la que ya tienes para el coach:
@@ -64,15 +65,30 @@ export default async function handler(req, res) {
     // 2) ¿Ese usuario es Gerente? (se revisa en la tabla profiles, no en el token)
     const { data: callerProfile, error: perfilErr } = await supabaseAdmin
       .from("profiles")
-      .select("role, puesto")
+      .select("role, puesto, username")
       .eq("id", callerData.user.id)
       .maybeSingle();
     if (perfilErr || !callerProfile) {
       return res.status(403).json({ error: "No se encontró tu perfil." });
     }
     const esGerente = callerProfile.role === "staff" && callerProfile.puesto === "gerente";
-    if (!esGerente) {
-      return res.status(403).json({ error: "Solo el Gerente puede restablecer PINs." });
+
+    // Gerente siempre puede. Cualquier otro usuario solo puede si Gerente le
+    // dio explícitamente la pestaña "reset_pin" desde Permisos — se revisa
+    // aquí en el servidor contra el dato real guardado, nunca confiando en
+    // lo que mande el navegador (eso sería fácil de falsificar).
+    let autorizado = esGerente;
+    if (!autorizado) {
+      const { data: estadoRow } = await supabaseAdmin
+        .from("ventas_app_state")
+        .select("data")
+        .eq("id", "main")
+        .maybeSingle();
+      const permisosDeEsteUsuario = estadoRow?.data?.permisosPersonalizados?.[callerProfile.username] || [];
+      autorizado = permisosDeEsteUsuario.includes("reset_pin");
+    }
+    if (!autorizado) {
+      return res.status(403).json({ error: "No tienes permiso para restablecer PINs." });
     }
 
     // 3) Busca al usuario objetivo por su username exacto.
