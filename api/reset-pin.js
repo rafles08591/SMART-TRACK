@@ -40,8 +40,8 @@ export default async function handler(req, res) {
   if (!targetUsername || !newPassword) {
     return res.status(400).json({ error: "Faltan datos (usuario o PIN nuevo)." });
   }
-  if (String(newPassword).length < 6) {
-    return res.status(400).json({ error: "El PIN nuevo debe tener al menos 6 caracteres (regla de Supabase Auth)." });
+  if (String(newPassword).length < 4) {
+    return res.status(400).json({ error: "El PIN nuevo debe tener al menos 4 dígitos." });
   }
 
   // Cliente con la service_role key: puede todo, por eso solo vive aquí en
