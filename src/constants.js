@@ -55,6 +55,30 @@ export const OBJETIVO_TABS = [
   { key: "alta_cliente", label: "ALTA CLIENTE", unit: "special" },
   { key: "altas_cliente", label: "ALTAS DE CLIENTE", unit: "special" },
   { key: "otc_ventas", label: "OTC VENTAS", unit: "special" },
+  { key: "reset_pin", label: "RESTABLECER PIN", unit: "special" },
+  { key: "permisos", label: "PERMISOS", unit: "special" },
+];
+
+// Lista compartida de usuarios de la app (para el buscador de Restablecer
+// PIN y el de Permisos). Si agregas un usuario nuevo en Supabase, agrégalo
+// aquí también para que aparezca en esos buscadores.
+export const USUARIOS_APP = [
+  ...RUTAS.map((r) => ({ username: r, label: `${r.replace("RUTA ", "")} - ${NOMBRES[r] || r}` })),
+  { username: "SUPERVISOR-1", label: `Supervisor 1${NOMBRES["SUPERVISOR-1"] ? " - " + NOMBRES["SUPERVISOR-1"] : ""}` },
+  { username: "SUPERVISOR-2", label: `Supervisor 2${NOMBRES["SUPERVISOR-2"] ? " - " + NOMBRES["SUPERVISOR-2"] : ""}` },
+  { username: "SUPLENTE-1", label: "Suplente 1" },
+  { username: "SUPLENTE-2", label: "Suplente 2" },
+  { username: "LIQUIDACION- SULEMA PONCE", label: "Liquidación" },
+  { username: "ADMIN", label: "Admin" },
+  { username: "MERCH07", label: "MERCH07" },
+  { username: "MERCH28", label: "MERCH28" },
+  { username: "MERCH29", label: "MERCH29" },
+  { username: "MERCH30", label: "MERCH30" },
+  { username: "MERCH04", label: "MERCH04" },
+  { username: "MERCH31", label: "MERCH31" },
+  { username: "MERCH32", label: "MERCH32" },
+  { username: "MERCH62", label: "MERCH62" },
+  { username: "MERCH63", label: "MERCH63" },
 ];
 
 export const MARCA_KEYS = { "ice mix": "iceMix", "bloss mix": "blossMix", "summ mix": "summMix", "faronet": "faronet" };
