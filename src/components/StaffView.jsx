@@ -45,6 +45,7 @@ import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
 import AltasClienteStaffView from "./AltasClienteStaffView";
 import OtcVentasView from "./OtcVentasView";
 import ResetPinView from "./ResetPinView";
+import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -57,10 +58,6 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   // true cuando se abrió una tarjeta del grid (DÍA, ESCALERA, MAX...) y se
   // debe mostrar esa vista a pantalla completa en vez del grid.
   const [pantallaAbierta, setPantallaAbierta] = useState(false);
-  // Pantalla exclusiva de Gerente para restablecer el PIN de cualquier
-  // usuario — independiente del sistema de pestañas (OBJETIVO_TABS) para no
-  // tener que agregarla ahí ni arriesgar el resto del árbol de JSX.
-  const [resetPinAbierto, setResetPinAbierto] = useState(false);
   const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
   const [newName, setNewName] = useState("");
 
@@ -280,23 +277,6 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
       <FondoDeFondo url={fondoUrl} />
       <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} onRefresh={onRefresh} refrescando={refrescando} />
 
-      {puesto === "gerente" && (
-        <div style={{ display: "flex", justifyContent: "flex-end", margin: "10px 0 0" }}>
-          <button className="btn-ghost" onClick={() => setResetPinAbierto(true)} style={{ fontSize: 12 }}>
-            <KeyRound size={13} style={{ verticalAlign: "-2px" }} /> Restablecer PIN
-          </button>
-        </div>
-      )}
-
-      {resetPinAbierto && (
-        <div style={{ position: "fixed", inset: 0, background: "#0B1120", zIndex: 999, overflowY: "auto" }}>
-          <div style={{ maxWidth: 620, margin: "0 auto", padding: "24px 18px 60px" }}>
-            <button className="btn-ghost" onClick={() => setResetPinAbierto(false)} style={{ marginBottom: 16 }}>‹ Regresar</button>
-            <ResetPinView />
-          </div>
-        </div>
-      )}
-
 
       <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
         {(esSupervisor2 ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
@@ -314,10 +294,12 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               tabs={
                 (esSuplente1 || esSuplente2)
                   ? OBJETIVO_TABS.filter((t) => (data.permisosSuplentes?.[puesto] || []).includes(t.key))
+                  : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
+                  ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
                   : esSupervisor2
                   ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
                   : esSupervisor1
-                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente")
+                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
               }
               estadoTabs={estadoTabsActividades}
@@ -604,6 +586,10 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             </div>
           ) : objTab === "mi_fondo" ? (
             <PanelFondoPersonalizado identidad={staffUsername} url={fondoUrl} setUrl={setFondoUrl} />
+          ) : objTab === "reset_pin" ? (
+            <ResetPinView />
+          ) : objTab === "permisos" ? (
+            <PermisosPersonalizadosView data={data} persistFresco={persistFresco} />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
