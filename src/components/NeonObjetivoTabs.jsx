@@ -42,6 +42,8 @@ function TileIcon({ name, ...props }) {
     case "piggy": return (<svg {...p}><path d="M4.5 12.5a6.5 6.5 0 0 1 6.5-6.5h3a5 5 0 0 1 5 5v.5l2 1.5-2 1v1a2 2 0 0 1-2 2h-1v2h-3v-2H9.5v2h-3v-3.2A6.5 6.5 0 0 1 4.5 12.5Z"/><circle cx="15" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><path d="M7 6.5 5.5 4.5M9.5 6 8.5 4"/></svg>);
     case "checklist": return (<svg {...p}><rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8.5l1.4 1.4L12 7.3M8 14.5l1.4 1.4L12 13.3"/><path d="M14 8.5h4M14 14.5h4"/></svg>);
     case "calc": return (<svg {...p}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M7.5 7h9"/><circle cx="8" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="16.5" r=".9" fill="currentColor" stroke="none"/></svg>);
+    case "key": return (<svg {...p}><circle cx="7.5" cy="14.5" r="4"/><path d="M10.6 11.4 19 3M15.5 7 18 9.5M18.3 3.8 20.5 6"/></svg>);
+    case "sliders": return (<svg {...p}><path d="M4 6h9M17 6h3M4 12h3M9 12h11M4 18h13M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>);
     default: return (<svg {...p}><rect x="4" y="4" width="16" height="16" rx="3"/></svg>);
   }
 }
@@ -85,6 +87,8 @@ const META = {
   avisos:            { icon: "bell",     color: "#f87171", fam: "🔔 Avisos" },
 
   mi_fondo:          { icon: "piggy",    color: "#fbbf24", fam: "⚙️ Configuración" },
+  reset_pin:         { icon: "key",      color: "#f59e0b", fam: "⚙️ Configuración" },
+  permisos:          { icon: "sliders",  color: "#38bdf8", fam: "⚙️ Configuración" },
 };
 
 const FAMILY_ORDER = ["🏠 Inicio", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
