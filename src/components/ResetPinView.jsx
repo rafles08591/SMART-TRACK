@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { KeyRound, LoaderCircle, ShieldCheck, Search } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { USUARIOS_APP } from "../constants";
 
 // Restablecer PIN — panel exclusivo de Gerente (el chequeo real de permiso
 // pasa en el servidor, en api/reset-pin.js; esto de aquí es solo la UI).
@@ -25,36 +26,6 @@ const COLOR = {
   slate100: "#f1f5f9",
 };
 
-// Lista para el buscador. Igual que en el intento anterior, esto es una
-// copia estática de los usuarios — si agregas un usuario nuevo en Supabase
-// (o cambias un nombre), hay que reflejarlo aquí también a mano. Si más
-// adelante esto molesta, se puede cambiar para traerla en vivo desde la
-// tabla profiles en vez de tenerla fija en el código.
-const USUARIOS = [
-  { username: "RUTA J201", label: "J201 - Francisco Javier" },
-  { username: "RUTA J202", label: "J202 - Riqui Martín" },
-  { username: "RUTA J203", label: "J203 - Ana Paola" },
-  { username: "RUTA J204", label: "J204 - Noema Natalia" },
-  { username: "RUTA J205", label: "J205 - Manuel" },
-  { username: "RUTA J206", label: "J206 - Selene" },
-  { username: "RUTA J207", label: "J207 - Alfredo Juárez" },
-  { username: "SUPERVISOR-1", label: "Supervisor 1 - Christian Velasco" },
-  { username: "SUPERVISOR-2", label: "Supervisor 2" },
-  { username: "SUPLENTE-1", label: "Suplente 1" },
-  { username: "SUPLENTE-2", label: "Suplente 2" },
-  { username: "LIQUIDACION- SULEMA PONCE", label: "Liquidación" },
-  { username: "ADMIN", label: "Admin" },
-  { username: "MERCH07", label: "MERCH07" },
-  { username: "MERCH28", label: "MERCH28" },
-  { username: "MERCH29", label: "MERCH29" },
-  { username: "MERCH30", label: "MERCH30" },
-  { username: "MERCH04", label: "MERCH04" },
-  { username: "MERCH31", label: "MERCH31" },
-  { username: "MERCH32", label: "MERCH32" },
-  { username: "MERCH62", label: "MERCH62" },
-  { username: "MERCH63", label: "MERCH63" },
-];
-
 export default function ResetPinView() {
   const [busqueda, setBusqueda] = useState("");
   const [seleccionado, setSeleccionado] = useState(null);
@@ -63,7 +34,7 @@ export default function ResetPinView() {
   const [error, setError] = useState("");
   const [exito, setExito] = useState(false);
 
-  const filtrados = USUARIOS.filter((u) =>
+  const filtrados = USUARIOS_APP.filter((u) =>
     u.label.toLowerCase().includes(busqueda.toLowerCase()) ||
     u.username.toLowerCase().includes(busqueda.toLowerCase())
   );
