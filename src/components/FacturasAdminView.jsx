@@ -65,6 +65,37 @@ function costoUnitarioNeto(montoLinea, cajetillasLinea) {
 
 const LIMITE_TICKET_EFECTIVO = 2000;
 
+// Un mismo cliente puede tener varias filas con el MISMO código de
+// producto (ej. varias pasadas/tickets del día que se subieron por
+// separado) — antes se mostraban tal cual, una fila por cada una, y la
+// factura quedaba fragmentada en muchos renglones repetidos del mismo
+// código. Aquí se unifican por `articulo` sumando cajetillas y monto,
+// para que SIEMPRE se muestre un solo renglón por código dentro de un
+// mismo ticket. Esto es independiente de la forma de pago:
+//   - CRÉDITO/TRANSFERENCIA: nunca se dividen en partes (ver
+//     `necesitaDividir` más abajo), así que esto deja UN ticket con
+//     todos los productos ya unificados.
+//   - EFECTIVO: la división en partes ≤ $2000 (ticket_parte/ticket_de)
+//     sigue haciéndose como ya estaba — esto solo unifica los códigos
+//     repetidos QUE CAEN DENTRO de cada parte, sin tocar cómo se arma
+//     la división.
+function agruparProductosPorCodigo(productos) {
+  const mapa = new Map();
+  const orden = [];
+  (productos || []).forEach((p) => {
+    const clave = p.articulo;
+    if (!mapa.has(clave)) {
+      mapa.set(clave, { articulo: p.articulo, nombre: p.nombre, cajetillas: 0, monto: 0, ids: [] });
+      orden.push(clave);
+    }
+    const acc = mapa.get(clave);
+    acc.cajetillas += Number(p.cajetillas) || 0;
+    acc.monto += Number(p.monto) || 0;
+    if (p.id) acc.ids.push(p.id);
+  });
+  return orden.map((clave) => mapa.get(clave));
+}
+
 function BotonCopiar({ texto, etiqueta }) {
   const [copiado, setCopiado] = useState(false);
   async function copiar(e) {
@@ -292,13 +323,14 @@ function UltimaCompraCredito({ ruta, codigoCliente, cliente, fechaActual, esOtcA
 
 function textoParaCopiar(ticket) {
   const venta = ticket.ventaOriginal;
+  const productosUnificados = agruparProductosPorCodigo(ticket.productos);
   const { distribucionBruta, distribucionNeta, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
   const lineas = [
     `Cliente: ${venta.codigoCliente}${venta.cliente ? " — " + venta.cliente : ""}${venta.esOtc ? " (OTC)" : ""}${ticket.parteLabel ? ` (ticket ${ticket.parteLabel})` : ""}`,
     `Ruta: ${venta.ruta}   Fecha: ${venta.fecha}   Forma de pago: ${venta.formaPago || "EFECTIVO"}`,
     "",
     "Productos:",
-    ...ticket.productos.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
+    ...productosUnificados.map((p) => `  ${p.articulo} — ${p.nombre} — ${num(p.cajetillas)} caj. — ${money(p.monto)} (sin IVA: ${money(calcularDesgloseLinea(p.monto, p.cajetillas))})`),
     "",
     `Total cajetillas: ${num(ticket.totalCajetillas)}`,
     `Total del ticket: ${money(ticket.totalMonto + distribucionBruta)}`,
@@ -321,6 +353,7 @@ function textoParaCopiar(ticket) {
 // "última compra anterior", para que se vea con todo el detalle tal cual.
 function CuerpoTicket({ ticket }) {
   const venta = ticket.ventaOriginal;
+  const productosUnificados = agruparProductosPorCodigo(ticket.productos);
   const { distribucionBruta, distribucionNeta, precioProductoNeto } = calcularDesglose(ticket.totalMonto, ticket.totalCajetillas);
   return (
     <>
@@ -337,7 +370,7 @@ function CuerpoTicket({ ticket }) {
               </tr>
             </thead>
             <tbody>
-              {ticket.productos.map((p, i) => (
+              {productosUnificados.map((p, i) => (
                 <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
                   <td style={{ padding: "6px 8px 6px 0" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
