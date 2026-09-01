@@ -1619,6 +1619,12 @@ function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, sco
   const [gestion, setGestion] = useState("tablero");
   const mostrarGestion = esGerente;
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
+  // Supervisor-1 y Supervisor-2 no tienen el panel completo de Gestión
+  // (eso sigue siendo exclusivo de Gerente), pero sí pueden CONSULTAR
+  // — nunca editar — los NIPs de tarjeta y claves de conductor de TODAS
+  // las rutas de vendedores y merch, no solo las de su propio grupo.
+  const esSupervisorConsultaNips = (puesto === "supervisor" || puesto === "supervisor2") && !esGerente;
+  const [verNips, setVerNips] = useState(false);
 
   return (
     <div>
@@ -1645,6 +1651,13 @@ function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, sco
             <button className={`ru-btn ${gestion === "limpieza" ? "active" : ""}`} onClick={() => setGestion("limpieza")}>Limpieza</button>
           </div>
         )}
+        {esSupervisorConsultaNips && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className={`ru-btn ${verNips ? "active" : ""}`} onClick={() => setVerNips((v) => !v)}>
+              <Fuel size={14} /> {verNips ? "Ver tablero" : "Consultar NIPs"}
+            </button>
+          </div>
+        )}
       </div>
 
       {mostrarGestion && gestion === "asignar" && (
@@ -1666,11 +1679,15 @@ function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, sco
         <GestionClavesGasolina clavesGasolina={clavesGasolina} setClavesGasolina={setClavesGasolina} unidades={unidades} />
       )}
 
+      {esSupervisorConsultaNips && verNips && (
+        <ConsultaClavesGasolina unidades={unidades} asignaciones={asignaciones} clavesGasolina={clavesGasolina} />
+      )}
+
       {mostrarGestion && gestion === "limpieza" && (
         <PanelLimpieza revisiones={revisiones} persistConfigUnidades={persistConfigUnidades} />
       )}
 
-      {(!mostrarGestion || gestion === "tablero") && (
+      {(!mostrarGestion || gestion === "tablero") && !(esSupervisorConsultaNips && verNips) && (
         <>
           <AuditoriasDeHoy unidadesVisibles={unidadesVisibles} revisiones={revisiones} />
 
@@ -2010,6 +2027,59 @@ function FilaClave({ label, valor, destacado }) {
       <span className="ru-mono" style={{ fontSize: destacado ? 17 : 14, fontWeight: 600, color: destacado ? T.primary : T.ink }}>
         {valor || "—"}
       </span>
+    </div>
+  );
+}
+
+// Vista de SOLO CONSULTA para Supervisor-1 y Supervisor-2 — misma
+// información que ve Gerente en "Gasolina" (N° Conductor, Clave
+// conductor, NIP de tarjeta), pero de TODAS las rutas de vendedores
+// (J201-J207) y merch a la vez, sin importar el grupo propio del
+// supervisor que esté mirando, y sin ningún campo editable ni botón
+// de carga — cada quien sigue editando esto únicamente Gerente desde
+// su panel de Gestión.
+function ConsultaClavesGasolina({ unidades, asignaciones, clavesGasolina }) {
+  const porRuta = clavesGasolina.porRuta || {};
+  const porPlaca = clavesGasolina.porPlaca || {};
+  const rutasConsultables = RUTAS_UNIDADES.filter((r) => r.grupo === "supervisor" || r.grupo === "supervisor2");
+
+  return (
+    <div>
+      <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>NIPs de gasolina · vendedores y merch</div>
+      <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 14 }}>
+        Solo consulta — para corregir alguna clave, pide al Gerente que la edite desde su panel de Gasolina.
+      </div>
+      <div className="ru-card" style={{ overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+            <thead>
+              <tr style={{ background: T.bg, textAlign: "left" }}>
+                {["Ruta", "N° Conductor", "Clave conductor", "Unidad (placa)", "NIP tarjeta", "Centro costos"].map((h) => (
+                  <th key={h} style={{ padding: "8px 12px", fontWeight: 500, color: T.muted, fontSize: 11.5, whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rutasConsultables.map((r) => {
+                const clavePersonal = porRuta[r.id] || null;
+                const unidadId = asignaciones[r.id];
+                const unidad = unidades.find((u) => u.id === unidadId);
+                const clavePlaca = unidad ? porPlaca[normalizarPlaca(unidad.placas)] : null;
+                return (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${T.border}` }}>
+                    <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.id}</td>
+                    <td className="ru-mono" style={{ padding: "8px 12px" }}>{clavePersonal?.numeroConductor || "—"}</td>
+                    <td className="ru-mono" style={{ padding: "8px 12px" }}>{clavePersonal?.claveConductor || "—"}</td>
+                    <td className="ru-mono" style={{ padding: "8px 12px", color: T.muted }}>{unidad?.placas || "sin asignar"}</td>
+                    <td className="ru-mono" style={{ padding: "8px 12px", fontWeight: 700, color: T.primary }}>{clavePlaca?.nipTarjeta || "—"}</td>
+                    <td className="ru-mono" style={{ padding: "8px 12px", color: T.muted }}>{clavePlaca?.centroCostos || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
