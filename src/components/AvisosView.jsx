@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
 import { Plus, Trash2, Ban, CheckCircle2, AlertCircle, MessageSquare, Download } from "lucide-react";
+import { supabase } from "../supabaseClient";
 import { NOMBRES, RUTAS } from "../constants";
 import { fechaHoyISO } from "../utils";
 
