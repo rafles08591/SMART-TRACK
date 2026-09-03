@@ -21,17 +21,41 @@ function extraerPct(v) {
 }
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
-  const { rive, RiveComponent } = useRive({
-    src: "/carreras_ventas.riv",
-    artboard: ARTBOARD,
-    animations: TIMELINES,
-    autoplay: false,
-    layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
-    onLoad: (inst) => {
-      inst.pause(TIMELINES);
-      console.info("[Rive] anims", inst.animationNames);
-    },
+  useEffect(() => {
+  if (!rive) return;
+
+  console.info("[Rive] listo", {
+    anims: rive.animationNames,
+    hasPause: typeof rive.pause === "function",
+    hasScrub: typeof rive.scrub === "function",
   });
+
+  if (typeof rive.pause === "function") {
+    rive.pause(TIMELINES);
+  }
+
+  function animar(ts) {
+    if (inicioRef.current === null) inicioRef.current = ts;
+    const t = Math.min((ts - inicioRef.current) / DURACION_ANIMACION_MS, 1);
+    const factor = easeOutQuart(t);
+    const siguiente = {};
+
+    RUTAS.forEach((r) => {
+      const pct = metas[r] * factor;
+      siguiente[r] = pct;
+      if (typeof rive.scrub === "function") {
+        rive.scrub([`Timeline ${r}`], (pct / 100) * DURACION_S);
+      }
+    });
+
+    setAvanceVivo(siguiente);
+    if (t < 1) frameRef.current = requestAnimationFrame(animar);
+  }
+
+  inicioRef.current = null;
+  frameRef.current = requestAnimationFrame(animar);
+  return () => frameRef.current && cancelAnimationFrame(frameRef.current);
+}, [rive, metas]);
 
   const metas = useMemo(() => {
     const mapa = Object.fromEntries(RUTAS.map((r) => [r, 0]));
