@@ -5,7 +5,7 @@ import {
   Fit,
   Alignment,
 } from "@rive-app/react-canvas";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 // --- Ajusta estos nombres si en tu editor quedaron distintos ---
@@ -13,7 +13,9 @@ const STATE_MACHINE = "State Machine 1";
 const START_RACE_INPUT = "StartRace"; // Input clásico (no ViewModel) de la State Machine
 const VIEW_MODEL_NAME = "Race"; // ViewModel con progress_J201...progress_J207
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
-const DURACION_ANIMACION_MS = 45000;
+
+// Duración total de la animación de avance. Súbelo para que corra más lento.
+const DURACION_ANIMACION_MS = 90000; // 90s (antes 45s)
 const CURVA = "quart";
 
 function easeOutCubic(x) {
@@ -31,6 +33,40 @@ function suavizar(x) {
   return easeOutQuart(x);
 }
 
+// Busca y enlaza la instancia del ViewModel "Race" probando varias rutas posibles,
+// para no depender de que el artboard ya tenga un Source asignado en el editor.
+function resolverInstanciaRace(rive) {
+  if (rive.viewModelInstance) {
+    return { vmi: rive.viewModelInstance, origen: "autoBind (Source del artboard)" };
+  }
+  if (typeof rive.viewModelByName !== "function") {
+    return { vmi: null, origen: null };
+  }
+  const vm = rive.viewModelByName(VIEW_MODEL_NAME);
+  if (!vm) return { vmi: null, origen: null };
+
+  let vmi = null;
+  let origen = "";
+
+  if (typeof vm.defaultInstance === "function") {
+    vmi = vm.defaultInstance();
+    if (vmi) origen = "defaultInstance()";
+  }
+  if (!vmi && typeof vm.instanceByName === "function") {
+    vmi = vm.instanceByName("Instance") || vm.instanceByName("Default");
+    if (vmi) origen = "instanceByName()";
+  }
+  if (!vmi && typeof vm.instance === "function") {
+    vmi = vm.instance(0);
+    if (vmi) origen = "instance(0)";
+  }
+
+  if (vmi && typeof rive.bindViewModelInstance === "function") {
+    rive.bindViewModelInstance(vmi);
+  }
+  return { vmi, origen };
+}
+
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
@@ -40,10 +76,9 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
     layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
   });
 
-  // Input clásico StartRace (dispara el ciclo de correr en cada layer: Bee/Piggy/RiseVest/Cowry)
   const startRaceInput = useStateMachineInput(rive, STATE_MACHINE, START_RACE_INPUT);
 
-  // Metas de % por ruta, calculadas desde Supabase (igual que antes)
+  // Metas de % por ruta, calculadas desde Supabase
   const metas = useMemo(() => {
     const mapa = {};
     RUTAS.forEach((r) => (mapa[r] = 0));
@@ -51,12 +86,19 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
     porVendedor
       .filter((v) => v.name?.trim().toUpperCase().startsWith("RUTA J20"))
       .forEach((v) => {
-        const ruta = v.name.replace("RUTA ", "").trim(); // "J201", "J202", ...
+        const ruta = v.name.replace("RUTA ", "").trim();
         const pct = Math.min(Math.max(v.hoy?.efectividadPct ?? 0, 0), 100);
         if (mapa[ruta] !== undefined) mapa[ruta] = pct;
       });
     return mapa;
   }, [porVendedor]);
+
+  // Valores en vivo para pintar la mini gráfica inferior (0-100 por ruta)
+  const [avanceVivo, setAvanceVivo] = useState(() => {
+    const inicial = {};
+    RUTAS.forEach((r) => (inicial[r] = 0));
+    return inicial;
+  });
 
   const inicioRef = useRef(null);
   const frameRef = useRef(null);
@@ -65,27 +107,14 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   useEffect(() => {
     if (!rive) return;
 
-    // 1) Intenta la instancia enlazada automáticamente (Source asignado en el editor)
-    let vmi = rive.viewModelInstance;
-
-    // 2) Si no vino (p.ej. el artboard aún no tiene Source asignado en el editor),
-    //    la buscamos y enlazamos manualmente por nombre, sin depender del editor.
-    if (!vmi && typeof rive.viewModelByName === "function") {
-      const vm = rive.viewModelByName(VIEW_MODEL_NAME);
-      if (vm) {
-        vmi = vm.defaultInstance ? vm.defaultInstance() : null;
-        if (vmi && typeof rive.bindViewModelInstance === "function") {
-          rive.bindViewModelInstance(vmi);
-        }
-      }
-    }
+    const { vmi, origen } = resolverInstanciaRace(rive);
 
     if (!vmi) {
       console.warn(
-        `[CarrerasVentas] No se encontró/enlazó el ViewModel "${VIEW_MODEL_NAME}". ` +
-          "Revisa el nombre del ViewModel en el editor de Rive, o asigna una instancia como Source en el artboard 'Race scene'."
+        `[CarrerasVentas] No se pudo enlazar el ViewModel "${VIEW_MODEL_NAME}". ` +
+          "Revisa en el editor de Rive que exista un ViewModel llamado exactamente 'Race' con al menos una instancia, " +
+          "o que 'Race scene' tenga una instancia asignada como Source."
       );
-      // Aun sin datos de avance, dejamos correr el trigger para no dejar el personaje congelado
       if (!disparado.current && startRaceInput) {
         startRaceInput.fire();
         disparado.current = true;
@@ -93,13 +122,14 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       return;
     }
 
-    // Referencias a cada propiedad Number progress_J20X (con aviso si falta alguna)
+    console.info(`[CarrerasVentas] ViewModel "${VIEW_MODEL_NAME}" enlazado via ${origen}.`);
+
     const props = {};
     RUTAS.forEach((r) => {
       const prop = vmi.number(`progress_${r}`);
       if (!prop) {
         console.warn(
-          `[CarrerasVentas] La propiedad "progress_${r}" no existe en la instancia del ViewModel "${VIEW_MODEL_NAME}".`
+          `[CarrerasVentas] La propiedad "progress_${r}" no existe en la instancia enlazada de "${VIEW_MODEL_NAME}".`
         );
       }
       props[r] = prop;
@@ -110,17 +140,19 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       const t = Math.min((ts - inicioRef.current) / DURACION_ANIMACION_MS, 1);
       const factor = suavizar(t);
 
+      const siguienteAvance = {};
       RUTAS.forEach((r) => {
         const valorActual = metas[r] * factor;
         if (props[r]) props[r].value = valorActual;
+        siguienteAvance[r] = valorActual;
       });
+      setAvanceVivo(siguienteAvance);
 
       if (t < 1) {
         frameRef.current = requestAnimationFrame(animar);
       }
     }
 
-    // Dispara el trigger StartRace UNA sola vez para que arranque el ciclo de correr
     if (!disparado.current && startRaceInput) {
       startRaceInput.fire();
       disparado.current = true;
@@ -144,6 +176,8 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
         height: "100vh",
         backgroundColor: "#0b1220",
         zIndex: 9999,
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       {onCerrar && (
@@ -164,7 +198,61 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
           ‹ Regresar
         </button>
       )}
-      <RiveComponent style={{ width: "100%", height: "100%" }} />
+
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <RiveComponent style={{ width: "100%", height: "100%" }} />
+      </div>
+
+      {/* Mini gráfica de avance por ruta */}
+      <div
+        style={{
+          flexShrink: 0,
+          padding: "12px 20px 16px",
+          background: "rgba(255,255,255,0.04)",
+          borderTop: "1px solid rgba(255,255,255,0.08)",
+          display: "grid",
+          gridTemplateColumns: `repeat(${RUTAS.length}, 1fr)`,
+          gap: 12,
+        }}
+      >
+        {RUTAS.map((r) => {
+          const pct = Math.round(avanceVivo[r] ?? 0);
+          return (
+            <div key={r} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  color: "#e5e7eb",
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                <span>{r}</span>
+                <span>{pct}%</span>
+              </div>
+              <div
+                style={{
+                  height: 8,
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.12)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${pct}%`,
+                    background: "#f5a623",
+                    borderRadius: 999,
+                    transition: "width 0.1s linear",
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>,
     document.body
   );
