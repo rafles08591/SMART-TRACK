@@ -25,7 +25,7 @@ function suavizar(x) {
 
 export default function CarreraDeBotargas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
-    src: "/carrera_de_botargas.riv", // <-- pon aqui el nombre/ruta real del archivo publicado
+   src: "/carreras_ventas.riv",
     stateMachines: STATE_MACHINE,
     autoplay: true,
     autoBind: true, // usa la instancia del ViewModel "Race" que dejaste asignada como Source del artboard
