@@ -10,6 +10,13 @@ import { createPortal } from "react-dom";
 const ARTBOARD = "Race scene";
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 const TIMELINES = RUTAS.map((r) => `Timeline ${r}`);
+const RUN_LOOPS = [
+  "runrino",
+  "RiseVestRunner",
+  "PiggyRunner",
+  "BeeRunner",
+  "CowryWiseRunner",
+];
 const DURACION_S = 1;
 const DURACION_ANIMACION_MS = 90000;
 
@@ -33,7 +40,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     artboard: ARTBOARD,
-    animations: TIMELINES,
+    animations: [...TIMELINES, ...RUN_LOOPS],
     autoplay: false,
     layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
   });
@@ -53,19 +60,23 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   const inicioRef = useRef(null);
   const frameRef = useRef(null);
+  const loopsOn = useRef(false);
 
   useEffect(() => {
     if (!rive) return;
 
-    console.info("[CarrerasVentas] listo", {
-      anims: rive.animationNames,
-      hasPause: typeof rive.pause === "function",
-      hasScrub: typeof rive.scrub === "function",
-      metas,
-    });
+    const nombres = rive.animationNames || [];
+    const loopsQueExisten = RUN_LOOPS.filter((n) => nombres.includes(n));
+    console.info("[CarrerasVentas] anims", nombres);
+    console.info("[CarrerasVentas] loops encontrados", loopsQueExisten);
 
     if (typeof rive.pause === "function") {
       rive.pause(TIMELINES);
+    }
+
+    if (!loopsOn.current && typeof rive.play === "function" && loopsQueExisten.length) {
+      rive.play(loopsQueExisten);
+      loopsOn.current = true;
     }
 
     function animar(ts) {
