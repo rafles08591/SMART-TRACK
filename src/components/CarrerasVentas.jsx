@@ -1,9 +1,17 @@
-import { useRive, useStateMachineInput } from "@rive-app/react-canvas";
+import {
+  useRive,
+  useStateMachineInput,
+  Layout,
+  Fit,
+  Alignment,
+} from "@rive-app/react-canvas";
 import { useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 
 // --- Ajusta estos nombres si en tu editor quedaron distintos ---
 const STATE_MACHINE = "State Machine 1";
 const START_RACE_INPUT = "StartRace"; // Input clásico (no ViewModel) de la State Machine
+const VIEW_MODEL_NAME = "Race"; // ViewModel con progress_J201...progress_J207
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 const DURACION_ANIMACION_MS = 45000;
 const CURVA = "quart";
@@ -23,12 +31,13 @@ function suavizar(x) {
   return easeOutQuart(x);
 }
 
-export default function CarreraDeBotargas({ porVendedor, onCerrar }) {
+export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
-   src: "/carreras_ventas.riv",
+    src: "/carreras_ventas.riv",
     stateMachines: STATE_MACHINE,
     autoplay: true,
-    autoBind: true, // usa la instancia del ViewModel "Race" que dejaste asignada como Source del artboard
+    autoBind: true,
+    layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
   });
 
   // Input clásico StartRace (dispara el ciclo de correr en cada layer: Bee/Piggy/RiseVest/Cowry)
@@ -56,18 +65,44 @@ export default function CarreraDeBotargas({ porVendedor, onCerrar }) {
   useEffect(() => {
     if (!rive) return;
 
-    const vmi = rive.viewModelInstance; // instancia por defecto del ViewModel "Race" (via autoBind)
+    // 1) Intenta la instancia enlazada automáticamente (Source asignado en el editor)
+    let vmi = rive.viewModelInstance;
+
+    // 2) Si no vino (p.ej. el artboard aún no tiene Source asignado en el editor),
+    //    la buscamos y enlazamos manualmente por nombre, sin depender del editor.
+    if (!vmi && typeof rive.viewModelByName === "function") {
+      const vm = rive.viewModelByName(VIEW_MODEL_NAME);
+      if (vm) {
+        vmi = vm.defaultInstance ? vm.defaultInstance() : null;
+        if (vmi && typeof rive.bindViewModelInstance === "function") {
+          rive.bindViewModelInstance(vmi);
+        }
+      }
+    }
+
     if (!vmi) {
       console.warn(
-        "No hay viewModelInstance enlazada. Revisa que 'Race scene' tenga asignado el ViewModel 'Race' como Source en el editor de Rive."
+        `[CarrerasVentas] No se encontró/enlazó el ViewModel "${VIEW_MODEL_NAME}". ` +
+          "Revisa el nombre del ViewModel en el editor de Rive, o asigna una instancia como Source en el artboard 'Race scene'."
       );
+      // Aun sin datos de avance, dejamos correr el trigger para no dejar el personaje congelado
+      if (!disparado.current && startRaceInput) {
+        startRaceInput.fire();
+        disparado.current = true;
+      }
       return;
     }
 
-    // Referencias a cada propiedad Number progress_J20X
+    // Referencias a cada propiedad Number progress_J20X (con aviso si falta alguna)
     const props = {};
     RUTAS.forEach((r) => {
-      props[r] = vmi.number(`progress_${r}`);
+      const prop = vmi.number(`progress_${r}`);
+      if (!prop) {
+        console.warn(
+          `[CarrerasVentas] La propiedad "progress_${r}" no existe en la instancia del ViewModel "${VIEW_MODEL_NAME}".`
+        );
+      }
+      props[r] = prop;
     });
 
     function animar(ts) {
@@ -100,9 +135,37 @@ export default function CarreraDeBotargas({ porVendedor, onCerrar }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rive, startRaceInput, metas]);
 
-  return (
-    <div>
+  return createPortal(
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        backgroundColor: "#0b1220",
+        zIndex: 9999,
+      }}
+    >
+      {onCerrar && (
+        <button
+          onClick={onCerrar}
+          style={{
+            position: "absolute",
+            top: 16,
+            left: 16,
+            zIndex: 10000,
+            padding: "8px 16px",
+            borderRadius: 8,
+            border: "none",
+            background: "#f5f5f5",
+            cursor: "pointer",
+          }}
+        >
+          ‹ Regresar
+        </button>
+      )}
       <RiveComponent style={{ width: "100%", height: "100%" }} />
-    </div>
+    </div>,
+    document.body
   );
 }
