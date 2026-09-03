@@ -11,11 +11,11 @@ import { createPortal } from "react-dom";
 // --- Ajusta estos nombres si en tu editor quedaron distintos ---
 const STATE_MACHINE = "State Machine 1";
 const START_RACE_INPUT = "StartRace"; // Input clásico (no ViewModel) de la State Machine
-const VIEW_MODEL_NAME = "Race"; // ViewModel con progress_J201...progress_J207
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
+const TIMELINES = RUTAS.map((r) => `Timeline ${r}`); // "Timeline J201", ... "Timeline J207"
 
 // Duración total de la animación de avance. Súbelo para que corra más lento.
-const DURACION_ANIMACION_MS = 90000; // 90s (antes 45s)
+const DURACION_ANIMACION_MS = 90000;
 const CURVA = "quart";
 
 function easeOutCubic(x) {
@@ -33,44 +33,32 @@ function suavizar(x) {
   return easeOutQuart(x);
 }
 
-// Busca y enlaza la instancia del ViewModel "Race" probando varias rutas posibles,
-// para no depender de que el artboard ya tenga un Source asignado en el editor.
-function resolverInstanciaRace(rive) {
-  if (rive.viewModelInstance) {
-    return { vmi: rive.viewModelInstance, origen: "autoBind (Source del artboard)" };
+// Duración (en segundos) de una animación por nombre, usando los datos que el
+// runtime de Rive expone del artboard. Si no la encuentra, cae a 1s por defecto
+// (ajusta FALLBACK_DURATION_S si tus Timelines duran distinto).
+const FALLBACK_DURATION_S = 1;
+function obtenerDuracionSegundos(rive, nombreTimeline) {
+  try {
+    const anims = rive?.animationNames ? null : null; // no-op, mantenido por claridad
+    const artboardAnims =
+      rive?.contents?.artboards?.[0]?.animations ||
+      rive?.contents?.artboards?.[0]?.linearAnimations ||
+      [];
+    const found = artboardAnims.find((a) => a.name === nombreTimeline);
+    if (found && found.duration && found.fps) {
+      return found.duration / found.fps;
+    }
+  } catch (e) {
+    // seguimos con el fallback
   }
-  if (typeof rive.viewModelByName !== "function") {
-    return { vmi: null, origen: null };
-  }
-  const vm = rive.viewModelByName(VIEW_MODEL_NAME);
-  if (!vm) return { vmi: null, origen: null };
-
-  let vmi = null;
-  let origen = "";
-
-  if (typeof vm.defaultInstance === "function") {
-    vmi = vm.defaultInstance();
-    if (vmi) origen = "defaultInstance()";
-  }
-  if (!vmi && typeof vm.instanceByName === "function") {
-    vmi = vm.instanceByName("Instance") || vm.instanceByName("Default");
-    if (vmi) origen = "instanceByName()";
-  }
-  if (!vmi && typeof vm.instance === "function") {
-    vmi = vm.instance(0);
-    if (vmi) origen = "instance(0)";
-  }
-
-  if (vmi && typeof rive.bindViewModelInstance === "function") {
-    rive.bindViewModelInstance(vmi);
-  }
-  return { vmi, origen };
+  return FALLBACK_DURATION_S;
 }
 
 export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
-    stateMachines: STATE_MACHINE,
+    stateMachines: STATE_MACHINE, // sigue activa para el ciclo de correr (piernas/brazos)
+    animations: TIMELINES, // además cargamos las timelines clásicas para controlarlas a mano
     autoplay: true,
     autoBind: true,
     layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
@@ -78,7 +66,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   const startRaceInput = useStateMachineInput(rive, STATE_MACHINE, START_RACE_INPUT);
 
-  // Metas de % por ruta, calculadas desde Supabase
   const metas = useMemo(() => {
     const mapa = {};
     RUTAS.forEach((r) => (mapa[r] = 0));
@@ -93,7 +80,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
     return mapa;
   }, [porVendedor]);
 
-  // Valores en vivo para pintar la mini gráfica inferior (0-100 por ruta)
   const [avanceVivo, setAvanceVivo] = useState(() => {
     const inicial = {};
     RUTAS.forEach((r) => (inicial[r] = 0));
@@ -103,37 +89,25 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const inicioRef = useRef(null);
   const frameRef = useRef(null);
   const disparado = useRef(false);
+  const duracionesRef = useRef({});
 
   useEffect(() => {
     if (!rive) return;
 
-    const { vmi, origen } = resolverInstanciaRace(rive);
-
-    if (!vmi) {
-      console.warn(
-        `[CarrerasVentas] No se pudo enlazar el ViewModel "${VIEW_MODEL_NAME}". ` +
-          "Revisa en el editor de Rive que exista un ViewModel llamado exactamente 'Race' con al menos una instancia, " +
-          "o que 'Race scene' tenga una instancia asignada como Source."
-      );
-      if (!disparado.current && startRaceInput) {
-        startRaceInput.fire();
-        disparado.current = true;
-      }
-      return;
-    }
-
-    console.info(`[CarrerasVentas] ViewModel "${VIEW_MODEL_NAME}" enlazado via ${origen}.`);
-
-    const props = {};
+    // Duración real de cada Timeline (para mapear % -> segundos correctamente)
     RUTAS.forEach((r) => {
-      const prop = vmi.number(`progress_${r}`);
-      if (!prop) {
-        console.warn(
-          `[CarrerasVentas] La propiedad "progress_${r}" no existe en la instancia enlazada de "${VIEW_MODEL_NAME}".`
-        );
-      }
-      props[r] = prop;
+      duracionesRef.current[r] = obtenerDuracionSegundos(rive, `Timeline ${r}`);
     });
+    console.info("[CarrerasVentas] Duraciones detectadas por ruta:", duracionesRef.current);
+
+    // Dejamos las timelines "pausadas" en el frame 0 para poder hacer scrub manual
+    rive.play(TIMELINES);
+    rive.pause(TIMELINES);
+
+    if (!disparado.current && startRaceInput) {
+      startRaceInput.fire();
+      disparado.current = true;
+    }
 
     function animar(ts) {
       if (inicioRef.current === null) inicioRef.current = ts;
@@ -142,20 +116,17 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
       const siguienteAvance = {};
       RUTAS.forEach((r) => {
-        const valorActual = metas[r] * factor;
-        if (props[r]) props[r].value = valorActual;
-        siguienteAvance[r] = valorActual;
+        const pct = metas[r] * factor; // 0-100
+        const duracion = duracionesRef.current[r] || FALLBACK_DURATION_S;
+        const segundoDestino = (pct / 100) * duracion;
+        rive.scrub(`Timeline ${r}`, segundoDestino);
+        siguienteAvance[r] = pct;
       });
       setAvanceVivo(siguienteAvance);
 
       if (t < 1) {
         frameRef.current = requestAnimationFrame(animar);
       }
-    }
-
-    if (!disparado.current && startRaceInput) {
-      startRaceInput.fire();
-      disparado.current = true;
     }
 
     inicioRef.current = null;
@@ -203,7 +174,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
         <RiveComponent style={{ width: "100%", height: "100%" }} />
       </div>
 
-      {/* Mini gráfica de avance por ruta */}
       <div
         style={{
           flexShrink: 0,
