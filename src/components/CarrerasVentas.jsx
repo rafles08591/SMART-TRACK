@@ -10,23 +10,18 @@ import { createPortal } from "react-dom";
 const ARTBOARD = "Race scene";
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 const TIMELINES = RUTAS.map((r) => `Timeline ${r}`);
-const START_RUNS = [
-  "PiggyRunner",
-  "BeeRunner",
-  "RiseVestRunner",
-  "CowryWiseRunner",
-  "runrino",
-];
 const DURACION_S = 1;
 const DURACION_ANIMACION_MS = 90000;
 
 function easeOutQuart(x) {
   return 1 - Math.pow(1 - x, 4);
 }
+
 function extraerRuta(nombre = "") {
   const m = String(nombre).toUpperCase().match(/J20[1-7]/);
   return m ? m[0] : null;
 }
+
 function extraerPct(v) {
   const n = Number(
     v?.hoy?.efectividadPct ?? v?.efectividadPct ?? v?.avance ?? 0
@@ -38,7 +33,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     artboard: ARTBOARD,
-    animations: [...TIMELINES, ...START_RUNS],
+    animations: TIMELINES,
     autoplay: false,
     layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
   });
@@ -58,30 +53,17 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   const inicioRef = useRef(null);
   const frameRef = useRef(null);
-  const patadas = useRef(false);
 
   useEffect(() => {
     if (!rive) return;
-
     if (typeof rive.pause === "function") rive.pause(TIMELINES);
-
-    if (!patadas.current && typeof rive.play === "function") {
-      const nombres = rive.animationNames || [];
-      const hay = START_RUNS.filter((n) => nombres.includes(n));
-      if (hay.length) {
-        rive.play(hay);
-        setTimeout(() => {
-          if (typeof rive.pause === "function") rive.pause(hay);
-        }, 80);
-      }
-      patadas.current = true;
-    }
 
     function animar(ts) {
       if (inicioRef.current === null) inicioRef.current = ts;
       const t = Math.min((ts - inicioRef.current) / DURACION_ANIMACION_MS, 1);
       const factor = easeOutQuart(t);
       const siguiente = {};
+
       RUTAS.forEach((ruta) => {
         const pct = metas[ruta] * factor;
         siguiente[ruta] = pct;
@@ -89,6 +71,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
           rive.scrub([`Timeline ${ruta}`], (pct / 100) * DURACION_S);
         }
       });
+
       setAvanceVivo(siguiente);
       if (t < 1) frameRef.current = requestAnimationFrame(animar);
     }
