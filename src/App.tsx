@@ -2110,11 +2110,43 @@ export default function App() {
       const inserciones = [];     // filas nuevas que nacen de partir una existente
 
       for (const filasGrupo of grupos.values()) {
-        const sinFolio = filasGrupo.filter((f) => f.ticket_folio == null);
+        let sinFolio = filasGrupo.filter((f) => f.ticket_folio == null);
+        let conFolio = filasGrupo.filter((f) => f.ticket_folio != null);
+        const esOtc = filasGrupo[0].articulo === "OTC";
+
+        // ---- Auto-corrección: ticket que ya tenía folio pero "creció de
+        // más" ----
+        // "Avance del día" se sube varias veces por día y usa upsert: si un
+        // cliente ya tenía folio asignado en una sola parte (no hacía falta
+        // dividir en ese momento) y una carga posterior hace crecer esas
+        // MISMAS filas (más cajetillas/monto), el total puede rebasar los
+        // $2,000 sin que nada dispare la división de nuevo — porque estas
+        // filas ya tienen folio y por diseño nunca se tocan más abajo.
+        // Aquí se detecta ese caso y se les quita el folio SOLO a las filas
+        // en EFECTIVO que todavía no estén facturadas, para que el bloque de
+        // abajo las vuelva a repartir correctamente en esta misma pasada.
+        // Las filas ya facturadas nunca se liberan (se protegen aparte).
+        if (!esOtc && conFolio.length > 0) {
+          const noFacturadas = conFolio.filter(
+            (f) => f.estado !== "FACTURADO" && (f.forma_pago || "EFECTIVO") === "EFECTIVO"
+          );
+          if (noFacturadas.length > 0) {
+            const valorNoFacturadas = noFacturadas.reduce((s, f) => s + valorRealDeFila(f), 0);
+            const partesUsadas = new Set(noFacturadas.map((f) => f.ticket_parte || 1)).size;
+            const minimoPartesNecesarias = Math.max(1, Math.ceil(valorNoFacturadas / LIMITE_TICKET_FOLIO - 1e-9));
+            if (minimoPartesNecesarias > partesUsadas) {
+              const idsALiberar = new Set(noFacturadas.map((f) => f.id));
+              sinFolio = [
+                ...sinFolio,
+                ...noFacturadas.map((f) => ({ ...f, ticket_folio: null, ticket_parte: null, ticket_de: null })),
+              ];
+              conFolio = conFolio.filter((f) => !idsALiberar.has(f.id));
+            }
+          }
+        }
+
         if (sinFolio.length === 0) continue; // ya está todo asignado, no se toca
 
-        const conFolio = filasGrupo.filter((f) => f.ticket_folio != null);
-        const esOtc = filasGrupo[0].articulo === "OTC";
         const esEfectivo = (filasGrupo[0].forma_pago || "EFECTIVO") === "EFECTIVO";
         const necesitaDividir = !esOtc && esEfectivo;
 
