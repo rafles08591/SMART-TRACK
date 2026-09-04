@@ -10,12 +10,12 @@ import { createPortal } from "react-dom";
 const ARTBOARD = "Race scene";
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 const TIMELINES = RUTAS.map((r) => `Timeline ${r}`);
-const RUN_LOOPS = [
-  "runrino",
-  "RiseVestRunner",
+const START_RUNS = [
   "PiggyRunner",
   "BeeRunner",
+  "RiseVestRunner",
   "CowryWiseRunner",
+  "runrino",
 ];
 const DURACION_S = 1;
 const DURACION_ANIMACION_MS = 90000;
@@ -23,12 +23,10 @@ const DURACION_ANIMACION_MS = 90000;
 function easeOutQuart(x) {
   return 1 - Math.pow(1 - x, 4);
 }
-
 function extraerRuta(nombre = "") {
   const m = String(nombre).toUpperCase().match(/J20[1-7]/);
   return m ? m[0] : null;
 }
-
 function extraerPct(v) {
   const n = Number(
     v?.hoy?.efectividadPct ?? v?.efectividadPct ?? v?.avance ?? 0
@@ -40,7 +38,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carreras_ventas.riv",
     artboard: ARTBOARD,
-    animations: [...TIMELINES, ...RUN_LOOPS],
+    animations: [...TIMELINES, ...START_RUNS],
     autoplay: false,
     layout: new Layout({ fit: Fit.Contain, alignment: Alignment.Center }),
   });
@@ -60,23 +58,23 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
 
   const inicioRef = useRef(null);
   const frameRef = useRef(null);
-  const loopsOn = useRef(false);
+  const patadas = useRef(false);
 
   useEffect(() => {
     if (!rive) return;
 
-    const nombres = rive.animationNames || [];
-    const loopsQueExisten = RUN_LOOPS.filter((n) => nombres.includes(n));
-    console.info("[CarrerasVentas] anims", nombres);
-    console.info("[CarrerasVentas] loops encontrados", loopsQueExisten);
+    if (typeof rive.pause === "function") rive.pause(TIMELINES);
 
-    if (typeof rive.pause === "function") {
-      rive.pause(TIMELINES);
-    }
-
-    if (!loopsOn.current && typeof rive.play === "function" && loopsQueExisten.length) {
-      rive.play(loopsQueExisten);
-      loopsOn.current = true;
+    if (!patadas.current && typeof rive.play === "function") {
+      const nombres = rive.animationNames || [];
+      const hay = START_RUNS.filter((n) => nombres.includes(n));
+      if (hay.length) {
+        rive.play(hay);
+        setTimeout(() => {
+          if (typeof rive.pause === "function") rive.pause(hay);
+        }, 80);
+      }
+      patadas.current = true;
     }
 
     function animar(ts) {
@@ -84,7 +82,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       const t = Math.min((ts - inicioRef.current) / DURACION_ANIMACION_MS, 1);
       const factor = easeOutQuart(t);
       const siguiente = {};
-
       RUTAS.forEach((ruta) => {
         const pct = metas[ruta] * factor;
         siguiente[ruta] = pct;
@@ -92,17 +89,13 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
           rive.scrub([`Timeline ${ruta}`], (pct / 100) * DURACION_S);
         }
       });
-
       setAvanceVivo(siguiente);
       if (t < 1) frameRef.current = requestAnimationFrame(animar);
     }
 
     inicioRef.current = null;
     frameRef.current = requestAnimationFrame(animar);
-
-    return () => {
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
-    };
+    return () => frameRef.current && cancelAnimationFrame(frameRef.current);
   }, [rive, metas]);
 
   return createPortal(
@@ -110,8 +103,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
       style={{
         position: "fixed",
         inset: 0,
-        width: "100vw",
-        height: "100vh",
         backgroundColor: "#0b1220",
         zIndex: 9999,
         display: "flex",
@@ -129,24 +120,18 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
             padding: "8px 16px",
             borderRadius: 8,
             border: "none",
-            background: "#f5f5f5",
             cursor: "pointer",
           }}
         >
           ‹ Regresar
         </button>
       )}
-
       <div style={{ flex: 1, minHeight: 0 }}>
         <RiveComponent style={{ width: "100%", height: "100%" }} />
       </div>
-
       <div
         style={{
-          flexShrink: 0,
           padding: "12px 20px 16px",
-          background: "rgba(255,255,255,0.04)",
-          borderTop: "1px solid rgba(255,255,255,0.08)",
           display: "grid",
           gridTemplateColumns: `repeat(${RUTAS.length}, 1fr)`,
           gap: 12,
@@ -155,10 +140,7 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
         {RUTAS.map((ruta) => {
           const pct = Math.round(avanceVivo[ruta] ?? 0);
           return (
-            <div
-              key={ruta}
-              style={{ display: "flex", flexDirection: "column", gap: 4 }}
-            >
+            <div key={ruta}>
               <div
                 style={{
                   display: "flex",
@@ -176,7 +158,6 @@ export default function CarrerasVentas({ porVendedor, onCerrar }) {
                   height: 8,
                   borderRadius: 999,
                   background: "rgba(255,255,255,0.12)",
-                  overflow: "hidden",
                 }}
               >
                 <div
