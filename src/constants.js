@@ -27,6 +27,7 @@ export const OBJETIVO_TABS = [
   { key: "escalera", label: "ESCALERA", unit: "special" },
   { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "carreras", label: "CARRERA", unit: null },
+  { key: "scorecard", label: "SCORECARD SEMANAL", unit: "special" },
   { key: "max", label: "MAX", unit: "units" },
   { key: "open", label: "OPEN", unit: "units" },
   { key: "champions", label: "CHAMPIONS", unit: "units" },
