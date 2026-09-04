@@ -305,7 +305,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.6";
+const BUILD_VERSION = "5.7";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
