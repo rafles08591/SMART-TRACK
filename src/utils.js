@@ -6,6 +6,8 @@ import {
   ACTIVIDADES_INICIALES,
   RUTAS,
   TZ_MX,
+  MARCAS_DIA,
+  MARCA_KEYS_ALL,
 } from "./constants";
 
 export function creditosPendientes(data) {
@@ -374,4 +376,91 @@ export function normalizarEncabezado(s) {
 
 export function quitarHtml(texto) {
   return String(texto || "").replace(/<[^>]*>/g, "").trim();
+}
+
+// =========================================================================
+// SCORECARD SEMANAL
+// =========================================================================
+// Calcula, para la semana en curso (Lunes → hoy, tope Sábado, igual que el
+// resto de la app), el desempeño de un vendedor reutilizando el MISMO tipo
+// de indicadores que ya se usan en "HOY" (volumen del día, marcas del día,
+// OTC del día) pero acumulados día por día en la semana, comparados contra
+// el objetivo diario que el vendedor YA ve en su dashboard
+// (`ventaPorDiaNecesaria` / `otcDiario`) multiplicado por los días
+// transcurridos de la semana.
+//
+// ⚠️ Esto es una aproximación DELIBERADA, no una réplica del cálculo de
+// `efectividadPct` de "HOY" que vive dentro de `porVendedor` en App.tsx:
+// ese cálculo usa el objetivo diario vigente en cada momento; aquí se usa
+// el objetivo diario de HOY para toda la semana (cambia poco día a día
+// dentro del mismo periodo, así que es una aproximación razonable). Se
+// hizo así — en vez de reutilizar/tocar el cálculo de App.tsx — para no
+// arriesgar el dashboard de HOY que ya está en producción. Si algún día
+// cambia la fórmula de efectividadPct en App.tsx, esta función NO se
+// actualiza sola — revísala aparte si hace falta.
+export function rangoSemanaActual(fechaHoyISOref) {
+  const lunes = lunesDeSemana(fechaHoyISOref);
+  const inicioDate = new Date(lunes + "T00:00:00");
+  const sabadoDate = new Date(inicioDate);
+  sabadoDate.setDate(inicioDate.getDate() + 5); // Lun-Sáb, igual que el resto de SMART-TRACK
+  const sabadoISO = sabadoDate.toLocaleDateString("en-CA");
+  const hoyCapado = fechaHoyISOref < lunes ? lunes : fechaHoyISOref > sabadoISO ? sabadoISO : fechaHoyISOref;
+  const diasTranscurridos = Math.max(
+    1,
+    Math.round((new Date(hoyCapado + "T00:00:00") - inicioDate) / 86400000) + 1
+  );
+  return { lunes, sabado: sabadoISO, hoyCapado, diasTranscurridos };
+}
+
+export function calcularScorecardSemanal(vendedorStats, data, fechaHoyISOref) {
+  const { lunes, sabado, hoyCapado, diasTranscurridos } = rangoSemanaActual(fechaHoyISOref);
+  const nombreLower = (vendedorStats.name || "").trim().toLowerCase();
+
+  const avanceSemana = (data?.avanceDia || []).filter(
+    (r) => r.vendedor.trim().toLowerCase() === nombreLower && r.fecha >= lunes && r.fecha <= hoyCapado
+  );
+  const otcSemana = (data?.otcDia || []).filter(
+    (r) => r.vendedor.trim().toLowerCase() === nombreLower && r.fecha >= lunes && r.fecha <= hoyCapado
+  );
+
+  const paquetesSemana = avanceSemana.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+  const otcMontoSemana = otcSemana.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+
+  const marcasSemana = {};
+  MARCAS_DIA.forEach((m) => {
+    marcasSemana[m.key] = avanceSemana
+      .filter((r) => MARCA_KEYS_ALL[(r.marca || "").trim().toLowerCase()] === m.key)
+      .reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+  });
+
+  const clientesUnicosSemana = new Set(
+    avanceSemana.map((r) => (r.cliente || "").trim()).filter(Boolean)
+  ).size;
+
+  const volumenObjetivoDia = vendedorStats.tabs?.max?.ventaPorDiaNecesaria || 0;
+  const otcObjetivoDia = vendedorStats.objetivos?.otcDiario || 0;
+
+  const indicadores = [];
+  if (volumenObjetivoDia > 0) {
+    indicadores.push({ label: "Volumen", vendido: paquetesSemana, objetivo: volumenObjetivoDia * diasTranscurridos, unidad: "paq" });
+  }
+  MARCAS_DIA.forEach((m) => {
+    const objDia = vendedorStats.marcasOpen?.[m.key]?.ventaPorDiaNecesaria || 0;
+    if (objDia > 0) {
+      indicadores.push({ label: m.label, vendido: marcasSemana[m.key] || 0, objetivo: objDia * diasTranscurridos, unidad: "paq" });
+    }
+  });
+  if (otcObjetivoDia > 0) {
+    indicadores.push({ label: "OTC", vendido: otcMontoSemana, objetivo: otcObjetivoDia * diasTranscurridos, unidad: "$" });
+  }
+
+  const efectividadPct = indicadores.length > 0
+    ? (indicadores.reduce((s, ind) => s + Math.min(1, ind.objetivo > 0 ? ind.vendido / ind.objetivo : 1), 0) / indicadores.length) * 100
+    : 100;
+
+  return {
+    lunes, sabado, hoyCapado, diasTranscurridos,
+    paquetesSemana, otcMontoSemana, marcasSemana, clientesUnicosSemana,
+    indicadores, efectividadPct,
+  };
 }
