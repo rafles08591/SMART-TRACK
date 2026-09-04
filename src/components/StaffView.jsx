@@ -34,6 +34,7 @@ import RallyOtcView from "./RallyOtcView";
 import AvisosView, { hayAvisoNuevoPara } from "./AvisosView";
 import CargasView from "./CargasView";
 import FacturasView from "./FacturasView";
+import FacturasAdminView from "./FacturasAdminView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
 import ActividadView from "./ActividadView";
@@ -49,7 +50,7 @@ import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
 
-export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout }) {
+export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const esSuplente1 = puesto === "suplente1";
@@ -66,6 +67,12 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
+  // Submenú dentro de la pestaña FACTURAS — aplica para Gerente y
+  // Supervisor-1: "clientes" es lo de siempre (registrar clientes que
+  // piden factura), "avance" es el mismo panel que ve ADMIN
+  // (pendientes/facturado por fecha, con la división automática de
+  // tickets EFECTIVO > $2,000).
+  const [facturasSubTab, setFacturasSubTab] = useState("clientes");
   // true cuando se abrió una tarjeta del grid (DÍA, ESCALERA, MAX...) y se
   // debe mostrar esa vista a pantalla completa en vez del grid.
   const [pantallaAbierta, setPantallaAbierta] = useState(false);
@@ -585,7 +592,33 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           ) : objTab === "avisos" ? (
             <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1 || esSupervisor2} revisorNombre={revisorNombre} viewerKey={puesto} />
           ) : objTab === "facturas" ? (
-            <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
+            (puesto === "gerente" || esSupervisor1) ? (
+              <div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  <button
+                    className={facturasSubTab === "clientes" ? "btn" : "btn-ghost"}
+                    style={{ flex: "1 1 45%", minWidth: 0 }}
+                    onClick={() => setFacturasSubTab("clientes")}
+                  >
+                    CLIENTES REGISTRADOS
+                  </button>
+                  <button
+                    className={facturasSubTab === "avance" ? "btn" : "btn-ghost"}
+                    style={{ flex: "1 1 45%", minWidth: 0 }}
+                    onClick={() => setFacturasSubTab("avance")}
+                  >
+                    AVANCE Y PENDIENTES
+                  </button>
+                </div>
+                {facturasSubTab === "clientes" ? (
+                  <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
+                ) : (
+                  <FacturasAdminView onLogout={onLogout} asignarFoliosTickets={asignarFoliosTickets} ocultarSalir />
+                )}
+              </div>
+            ) : (
+              <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
+            )
           ) : objTab === "cargas" ? (
             <CargasView
               data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
