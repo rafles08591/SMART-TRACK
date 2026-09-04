@@ -3070,6 +3070,7 @@ export default function App() {
           onRefresh={refrescarManual}
           refrescando={refrescando}
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
+          asignarFoliosTickets={asignarFoliosTickets}
         />
       )}
 
