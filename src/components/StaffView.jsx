@@ -49,6 +49,8 @@ import ResetPinView from "./ResetPinView";
 import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
+import ScorecardSemanalView from "./ScorecardSemanalView";
+import ScorecardMiniResumen from "./ScorecardMiniResumen";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -295,6 +297,15 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
       <FondoDeFondo url={fondoUrl} />
       <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} onRefresh={onRefresh} refrescando={refrescando} />
 
+      {!pantallaAbierta && (
+        <ScorecardMiniResumen
+          data={data}
+          porVendedor={stats.porVendedor}
+          rol="staff"
+          onAbrir={() => { setTab("resumen"); setObjTab("scorecard"); setPantallaAbierta(true); }}
+        />
+      )}
+
 
       <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
         {(esSupervisor2 ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
@@ -315,7 +326,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
                   ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
                   : esSupervisor2
-                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo"].includes(t.key))
+                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
@@ -637,6 +648,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <PermisosPersonalizadosView data={data} persistFresco={persistFresco} />
           ) : objTab === "promociones_coach" ? (
             <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
+          ) : objTab === "scorecard" ? (
+            <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
