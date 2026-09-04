@@ -922,6 +922,39 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
     return `${f.ruta}|${f.codigo_cliente}|${f.fecha}|${tipo}`;
   }
 
+  // Además del caso obvio (ticket_folio sin asignar), esto también cubre el
+  // caso en que un ticket YA tenía folio en una sola parte, pero una carga
+  // posterior del "Avance del día" hizo crecer (upsert) esas mismas filas y
+  // ahora el total en EFECTIVO ya rebasa el límite de $2,000 sin haberse
+  // vuelto a dividir — ese ticket nunca traería ticket_folio nulo, así que
+  // el chequeo viejo (solo folios nulos) lo dejaba pasar de largo.
+  function necesitaRevisarFolios(filas) {
+    let hayPendiente = false;
+    const grupos = new Map();
+    (filas || []).forEach((f) => {
+      if (f.ticket_folio == null) hayPendiente = true;
+      const clave = claveVenta(f);
+      if (!grupos.has(clave)) grupos.set(clave, []);
+      grupos.get(clave).push(f);
+    });
+    if (hayPendiente) return true;
+    for (const filasGrupo of grupos.values()) {
+      if (filasGrupo[0].articulo === "OTC") continue;
+      const noFacturadas = filasGrupo.filter(
+        (f) => f.estado !== "FACTURADO" && (f.forma_pago || "EFECTIVO") === "EFECTIVO"
+      );
+      if (noFacturadas.length === 0) continue;
+      const valorNoFacturadas = noFacturadas.reduce(
+        (s, f) => s + (Number(f.monto) || 0) + (Number(f.cajetillas) || 0) * COSTO_DISTRIBUCION_UNITARIO,
+        0
+      );
+      const partesUsadas = new Set(noFacturadas.map((f) => f.ticket_parte || 1)).size;
+      const minimoPartesNecesarias = Math.max(1, Math.ceil(valorNoFacturadas / LIMITE_TICKET_EFECTIVO - 1e-9));
+      if (minimoPartesNecesarias > partesUsadas) return true;
+    }
+    return false;
+  }
+
   async function cargar() {
     setCargando(true);
     setError(null);
@@ -939,7 +972,7 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
         .order("creado_en", { ascending: false });
       if (err) throw err;
 
-      const faltanFolios = (data || []).some((f) => f.ticket_folio == null);
+      const faltanFolios = necesitaRevisarFolios(data || []);
       if (faltanFolios && asignarFoliosTickets) {
         await asignarFoliosTickets();
         let query2 = supabase
