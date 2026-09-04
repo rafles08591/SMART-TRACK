@@ -809,7 +809,7 @@ function MensajesPanel({ mensajes, cargando, nuevosIds, onMarcarVistos }) {
   );
 }
 
-export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
+export default function FacturasAdminView({ onLogout, asignarFoliosTickets, ocultarSalir }) {
   const [vistaPrincipal, setVistaPrincipal] = useState("facturacion"); // "facturacion" | "checador"
   const [vista, setVista] = useState("clientes"); // "clientes" | "mensajes" | "catalogo" (dentro de FACTURACIÓN)
   const [tab, setTab] = useState("prioritario");
@@ -1357,7 +1357,9 @@ export default function FacturasAdminView({ onLogout, asignarFoliosTickets }) {
           <button className="btn-ghost" onClick={cargar} disabled={cargando}>
             <RefreshCw size={14} style={{ verticalAlign: "-2px", animation: cargando ? "spin 1s linear infinite" : "none" }} /> {cargando ? "..." : "Refrescar"}
           </button>
-          <button className="btn-ghost" onClick={onLogout}><LogOut size={14} style={{ verticalAlign: "-2px" }} /> Salir</button>
+          {!ocultarSalir && (
+            <button className="btn-ghost" onClick={onLogout}><LogOut size={14} style={{ verticalAlign: "-2px" }} /> Salir</button>
+          )}
         </div>
       </div>
 
