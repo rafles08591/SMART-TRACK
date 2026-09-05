@@ -305,7 +305,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.7";
+const BUILD_VERSION = "5.5";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -3023,6 +3023,7 @@ export default function App() {
           stats={stats}
           puesto={puesto}
           staffUsername={staffUsername}
+          ventasPeriodo={ventasPeriodo}
           onRegistrarEvento={registrarEventoUso}
           onFile={handleOtcSemanalFile}
           fileInputRef={fileInputRef}
@@ -3106,6 +3107,7 @@ export default function App() {
           onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }}
           peorVendedorNombre={stats.peorVendedorNombre}
           bottom3Nombres={stats.bottom3Nombres}
+          ventasPeriodo={ventasPeriodo}
         />
       )}
 
