@@ -101,7 +101,7 @@ function TarjetaVendedor({ rutaCodigo, nombre, sc, carteraRuta, destacado, medal
   );
 }
 
-export default function ScorecardSemanalView({ data, porVendedor, rol, rutaPropia, puesto }) {
+export default function ScorecardSemanalView({ data, porVendedor, rol, rutaPropia, puesto, ventasPeriodo }) {
   const hoy = todayISO();
 
   const registrosCartera = data?.carteraVencida?.registros || [];
@@ -118,11 +118,11 @@ export default function ScorecardSemanalView({ data, porVendedor, rol, rutaPropi
         vendedor: v,
         rutaCodigo: v.name.replace("RUTA ", "").trim(),
         nombre: NOMBRES[v.name],
-        sc: calcularScorecardSemanal(v, data, hoy),
+        sc: calcularScorecardSemanal(v, data, hoy, ventasPeriodo),
       }))
       .sort((a, b) => b.sc.efectividadPct - a.sc.efectividadPct);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [porVendedor, data, hoy]);
+  }, [porVendedor, data, hoy, ventasPeriodo]);
 
   // Asistencia/puntualidad (checador_marcas) — mismo criterio de quién
   // puede verla que ya usa RelojChecadorView: cada vendedor ve la suya
