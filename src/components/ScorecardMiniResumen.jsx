@@ -18,14 +18,14 @@ function colorEfectividad(pct) {
 // - rol="vendedor": su propia efectividad + lugar en el equipo.
 // - rol="staff": promedio del equipo + quién va al frente.
 // `onAbrir` (opcional) navega a la pestaña completa "scorecard" al tocarlo.
-export default function ScorecardMiniResumen({ data, porVendedor, rol, rutaPropia, onAbrir }) {
+export default function ScorecardMiniResumen({ data, porVendedor, rol, rutaPropia, onAbrir, ventasPeriodo }) {
   const hoy = todayISO();
   const filas = useMemo(() => {
     return (porVendedor || [])
-      .map((v) => ({ v, rutaCodigo: v.name.replace("RUTA ", "").trim(), sc: calcularScorecardSemanal(v, data, hoy) }))
+      .map((v) => ({ v, rutaCodigo: v.name.replace("RUTA ", "").trim(), sc: calcularScorecardSemanal(v, data, hoy, ventasPeriodo) }))
       .sort((a, b) => b.sc.efectividadPct - a.sc.efectividadPct);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [porVendedor, data, hoy]);
+  }, [porVendedor, data, hoy, ventasPeriodo]);
 
   if (filas.length === 0) return null;
 
