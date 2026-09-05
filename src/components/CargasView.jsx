@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
-import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2 } from "lucide-react";
+import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2, AlertTriangle } from "lucide-react";
 import { RUTAS, NOMBRES, DIAS_SEMANA_VISITAS } from "../constants";
 import { fechaHoyISO } from "../utils";
 
@@ -57,7 +57,7 @@ const DIAS_ORDEN = DIAS_SEMANA_VISITAS;
    (desbloqueada y sin envíos previos), por si venía bloqueada o con
    envíos de una semana anterior.
 ------------------------------------------------------------------ */
-export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, onActivarCarga, onEliminarCarga }) {
+export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, bloqueoPendiente, onReintentarBloqueo, onActivarCarga, onEliminarCarga }) {
   const cargasPorDia = data.cargasPorDia || {};
   const cargaActivoDia = data.cargaActivoDia || null;
   const cargaActiva = cargaActivoDia ? (cargasPorDia[cargaActivoDia] || null) : null;
@@ -193,6 +193,17 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                   </button>
                 )}
               </div>
+              {bloqueoPendiente && (
+                <div className="card" style={{ padding: 12, marginBottom: 10, border: "1px solid #F2B134", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "#F2B134" }}>
+                    <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>El archivo se descargó, pero el bloqueo no se pudo confirmar con el servidor (falta de señal). Los vendedores todavía pueden modificar esta carga.</span>
+                  </div>
+                  <button className="btn" onClick={onReintentarBloqueo} style={{ flexShrink: 0 }}>
+                    <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reintentar bloqueo
+                  </button>
+                </div>
+              )}
               {cargaActiva.bloqueado && (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 6, marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: "#FF6B6B" }}>
