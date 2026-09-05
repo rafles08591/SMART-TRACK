@@ -7,6 +7,7 @@ import {
   RUTAS,
   TZ_MX,
   MARCAS_DIA,
+  MARCA_KEYS,
   MARCA_KEYS_ALL,
 } from "./constants";
 
@@ -412,29 +413,46 @@ export function rangoSemanaActual(fechaHoyISOref) {
   return { lunes, sabado: sabadoISO, hoyCapado, diasTranscurridos };
 }
 
-export function calcularScorecardSemanal(vendedorStats, data, fechaHoyISOref) {
+export function calcularScorecardSemanal(vendedorStats, data, fechaHoyISOref, ventasPeriodo) {
   const { lunes, sabado, hoyCapado, diasTranscurridos } = rangoSemanaActual(fechaHoyISOref);
   const nombreLower = (vendedorStats.name || "").trim().toLowerCase();
 
-  const avanceSemana = (data?.avanceDia || []).filter(
+  // Paquetes/marcas de la semana: se toman de `ventasPeriodo` (la carga
+  // acumulada del periodo — tabla `ventas_periodo`, la MISMA fuente que ya
+  // usa App.tsx para MAX/OPEN/CHAMPIONS), filtrando por fecha dentro de la
+  // semana en curso.
+  //
+  // ⚠️ A propósito NO se usa `data.avanceDia` para esto: ese campo se
+  // REEMPLAZA por completo cada vez que se sube "Avance del día"
+  // (persistParcialFresco guarda solo los registros de la carga más
+  // reciente, no acumula historial — ver `procesarFilasAvanceDia` en
+  // App.tsx). Filtrarlo por rango de semana solo encontraba el último día
+  // subido, no la semana completa, lo cual inflaba/desinflaba mal la
+  // efectividad semanal.
+  const ventasSemana = (ventasPeriodo || data?.ventas || []).filter(
     (r) => r.vendedor.trim().toLowerCase() === nombreLower && r.fecha >= lunes && r.fecha <= hoyCapado
   );
+
+  // OTC del día SÍ se acumula históricamente en `data.otcDia` (cada carga
+  // nueva solo reemplaza las fechas que trae, el resto de días se
+  // conserva — ver `procesarFilasOtcDia` en App.tsx), así que aquí es
+  // seguro seguir filtrándolo por semana.
   const otcSemana = (data?.otcDia || []).filter(
     (r) => r.vendedor.trim().toLowerCase() === nombreLower && r.fecha >= lunes && r.fecha <= hoyCapado
   );
 
-  const paquetesSemana = avanceSemana.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+  const paquetesSemana = ventasSemana.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
   const otcMontoSemana = otcSemana.reduce((s, r) => s + (Number(r.monto) || 0), 0);
 
   const marcasSemana = {};
   MARCAS_DIA.forEach((m) => {
-    marcasSemana[m.key] = avanceSemana
-      .filter((r) => MARCA_KEYS_ALL[(r.marca || "").trim().toLowerCase()] === m.key)
+    marcasSemana[m.key] = ventasSemana
+      .filter((r) => MARCA_KEYS[(r.marca || "").trim().toLowerCase()] === m.key)
       .reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
   });
 
   const clientesUnicosSemana = new Set(
-    avanceSemana.map((r) => (r.cliente || "").trim()).filter(Boolean)
+    ventasSemana.map((r) => (r.cliente || "").trim()).filter(Boolean)
   ).size;
 
   const volumenObjetivoDia = vendedorStats.tabs?.max?.ventaPorDiaNecesaria || 0;
