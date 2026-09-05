@@ -42,7 +42,7 @@ import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 // adelante, solo hay que sumarla aquí.
 const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-export default function VendorView({ vendedor, porVendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres }) {
+export default function VendorView({ vendedor, porVendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres, ventasPeriodo }) {
   const [tab, setTab] = useState("dia");
   // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
   // pantalla completa en vez del grid.
@@ -152,6 +152,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
           porVendedor={porVendedor}
           rol="vendedor"
           rutaPropia={rutaCodigo}
+          ventasPeriodo={ventasPeriodo}
           onAbrir={() => { setTab("scorecard"); setPantallaAbierta(true); }}
         />
       )}
@@ -234,7 +235,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
       ) : tab === "otc_ventas" ? (
         <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
       ) : tab === "scorecard" ? (
-        <ScorecardSemanalView data={data} porVendedor={porVendedor} rol="vendedor" rutaPropia={rutaCodigo} />
+        <ScorecardSemanalView data={data} porVendedor={porVendedor} rol="vendedor" rutaPropia={rutaCodigo} ventasPeriodo={ventasPeriodo} />
       ) : tab === "carreras" ? null
       : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
