@@ -73,6 +73,65 @@ if (typeof window !== "undefined" && !window.__ruParcheDom) {
 // otro. Mejor dejar que React maneje el DOM sin interferencias.
 
 
+/* =====================================================================
+   COLA DE GUARDADO PENDIENTE (outbox durable en localStorage)
+   ---------------------------------------------------------------------
+   Antes, cuando `persistParcialFresco` reintentaba un guardado (Cargas,
+   revisiones de Unidades, config de Unidades), todo el progreso del
+   reintento vivía SOLO en memoria: si la app se cerraba, el navegador la
+   mataba en segundo plano (común en Android con mala señal en ruta), o
+   el celular se quedaba sin batería a medio intento, el cambio se
+   perdía por completo y nadie se enteraba salvo por la barra de "no
+   cierres la app" — que de nada sirve si igual se cierra sola.
+
+   Esto agrega una bandeja de salida real: en cuanto se conoce el cambio
+   exacto que hay que guardar (el resultado de `calcularCambios`, un
+   objeto plano — no la función en sí, que no se puede guardar), se
+   escribe de inmediato en localStorage. Desde ahí sobrevive a que se
+   cierre la pestaña/app, y en cuanto vuelve a abrirse (o en cuanto
+   regresa la señal, o cada cierto tiempo como respaldo) se reintenta
+   solo, sin que nadie tenga que repetir la acción a mano. Solo se quita
+   de la cola cuando Supabase confirma que sí se guardó.
+
+   Alcance: por ahora cubre todo lo que pasa por `persistParcialFresco`
+   (Cargas, revisiones de Unidades, config de Unidades). Los guardados
+   que usan `persist()` directo en otras pantallas no pasan por aquí
+   todavía — se les puede aplicar el mismo patrón después si hace falta.
+===================================================================== */
+const CLAVE_COLA_GUARDADO_PENDIENTE = "smarttrack_cola_guardado_pendiente";
+
+function leerColaGuardadoPendiente() {
+  try {
+    const raw = window.localStorage.getItem(CLAVE_COLA_GUARDADO_PENDIENTE);
+    const cola = raw ? JSON.parse(raw) : [];
+    return Array.isArray(cola) ? cola : [];
+  } catch (err) {
+    console.error("No se pudo leer la cola de guardado pendiente:", err);
+    return [];
+  }
+}
+
+function escribirColaGuardadoPendiente(cola) {
+  try {
+    window.localStorage.setItem(CLAVE_COLA_GUARDADO_PENDIENTE, JSON.stringify(cola));
+  } catch (err) {
+    console.error("No se pudo escribir la cola de guardado pendiente:", err);
+  }
+}
+
+function agregarAColaGuardadoPendiente(cambios, etiqueta) {
+  const cola = leerColaGuardadoPendiente();
+  const id = `pend_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  cola.push({ id, cambios, etiqueta: etiqueta || null, creadoEn: new Date().toISOString() });
+  escribirColaGuardadoPendiente(cola);
+  return id;
+}
+
+function quitarDeColaGuardadoPendiente(id) {
+  escribirColaGuardadoPendiente(leerColaGuardadoPendiente().filter((it) => it.id !== id));
+}
+
+
 // Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
 // horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
 // el día siguiente por default al subir una carga.
@@ -305,7 +364,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.9";
+const BUILD_VERSION = "6.0";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -386,7 +445,10 @@ export default function App() {
   // Estado visible del guardado en curso: null | "guardando" | "reintentando"
   // | "sin_conexion" | "error". Se muestra como una barra fija abajo para
   // que nadie cierre la app creyendo que ya guardó cuando sigue pendiente.
-  const [estadoGuardado, setEstadoGuardado] = useState(null);
+  // Se inicializa revisando la cola durable: si ya había algo pendiente de
+  // una sesión anterior (la app se cerró a medio guardar), el aviso
+  // aparece de inmediato al abrir, no hasta que termine el primer intento.
+  const [estadoGuardado, setEstadoGuardado] = useState(() => (leerColaGuardadoPendiente().length > 0 ? "reintentando" : null));
 
   // Si hay un guardado en curso (o esperando conexión), el navegador pide
   // confirmación antes de cerrar la pestaña — así nadie pierde un registro
@@ -398,6 +460,24 @@ export default function App() {
     window.addEventListener("beforeunload", avisar);
     return () => window.removeEventListener("beforeunload", avisar);
   }, [estadoGuardado]);
+
+  // Vacía la cola de guardado pendiente "en cualquier oportunidad": al
+  // abrir la app (por si quedó algo de una sesión anterior que se cerró a
+  // medio guardar), en cuanto el navegador avisa que regresó la conexión, y
+  // como respaldo cada 45s mientras algo siga pendiente (algunos celulares
+  // no disparan el evento "online" de forma confiable en segundo plano).
+  useEffect(() => {
+    vaciarColaGuardadoPendiente();
+    window.addEventListener("online", vaciarColaGuardadoPendiente);
+    const intervalo = setInterval(() => {
+      if (leerColaGuardadoPendiente().length > 0) vaciarColaGuardadoPendiente();
+    }, 45000);
+    return () => {
+      window.removeEventListener("online", vaciarColaGuardadoPendiente);
+      clearInterval(intervalo);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function loadData() {
     try {
@@ -554,6 +634,8 @@ export default function App() {
 
     const ejecutar = async () => {
       let ultimoError = null;
+      let cambios = null;
+      let idPendiente = null;
       for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
         // Si no hay red, no tiene caso intentar: se queda esperando a que
         // vuelva la conexión (hasta 3 min) y entonces sigue solo.
@@ -564,9 +646,19 @@ export default function App() {
         try {
           setEstadoGuardado(intento === 1 ? "guardando" : "reintentando");
           const fresca = await obtenerDataFresca();
-          const cambios = calcularCambios(fresca);
+          if (cambios === null) {
+            cambios = calcularCambios(fresca);
+            // En cuanto se conoce el cambio exacto a guardar (un objeto
+            // plano, ya no la función), se registra en la cola durable de
+            // localStorage — así, aunque la app se cierre a medio intento,
+            // al volver a abrirla (o en cuanto regrese la señal) se retoma
+            // este MISMO cambio solo, sin perderlo ni tener que repetir la
+            // acción a mano.
+            idPendiente = agregarAColaGuardadoPendiente(cambios);
+          }
           const resultado = await persist({ ...fresca, ...cambios });
           if (resultado?.ok) {
+            if (idPendiente) quitarDeColaGuardadoPendiente(idPendiente);
             setEstadoGuardado(null);
             return;
           }
@@ -581,8 +673,13 @@ export default function App() {
           await new Promise((r) => setTimeout(r, espera));
         }
       }
+      // Se agotaron los intentos DE ESTA SESIÓN, pero el cambio se queda en
+      // la cola durable (no se borra) — sigue disponible para que
+      // `vaciarColaGuardadoPendiente` lo retome solo en cualquier
+      // oportunidad futura (al reabrir la app, al volver la señal, o por el
+      // respaldo periódico), sin que nadie tenga que repetir la acción.
       setEstadoGuardado("error");
-      throw new Error(ultimoError?.message || "No se pudo guardar el cambio después de varios intentos.");
+      throw new Error(ultimoError?.message || "No se pudo guardar el cambio después de varios intentos. Se seguirá reintentando solo en cuanto haya señal.");
     };
 
     // Se encadena sobre la cola: este cambio no empieza a leer la base hasta
@@ -592,6 +689,39 @@ export default function App() {
     colaPersistenciaFrescaRef.current = tarea.catch(() => {});
     return tarea;
   }
+
+  // Recorre lo que haya quedado pendiente en la cola durable (de esta
+  // sesión o de una anterior — sobrevive a cerrar la app) e intenta
+  // guardarlo. Se llama al abrir la app, en cuanto vuelve la conexión, y
+  // como respaldo cada cierto tiempo mientras algo siga pendiente — así el
+  // reintento no depende de que alguien deje la pantalla abierta.
+  async function vaciarColaGuardadoPendiente() {
+    const pendientes = leerColaGuardadoPendiente();
+    if (pendientes.length === 0) return;
+    const intentar = async () => {
+      setEstadoGuardado((actual) => (actual === "guardando" ? actual : "reintentando"));
+      for (const item of leerColaGuardadoPendiente()) {
+        try {
+          const fresca = await obtenerDataFresca();
+          const resultado = await persist({ ...fresca, ...item.cambios });
+          if (resultado?.ok) {
+            quitarDeColaGuardadoPendiente(item.id);
+          }
+        } catch (err) {
+          console.error("No se pudo confirmar un pendiente de la cola de guardado:", err);
+          // Se deja en la cola tal cual — se reintenta en la próxima oportunidad.
+        }
+      }
+      const quedan = leerColaGuardadoPendiente();
+      setEstadoGuardado(quedan.length > 0 ? "error" : null);
+    };
+    // También se encadena sobre la misma cola de promesas que
+    // persistParcialFresco, para que nunca compitan por escribir a la vez.
+    const tarea = colaPersistenciaFrescaRef.current.then(intentar, intentar);
+    colaPersistenciaFrescaRef.current = tarea.catch(() => {});
+    return tarea;
+  }
+
 
   // Las cargas ahora viven por DÍA DE LA SEMANA (data.cargasPorDia[dia],
   // dia ∈ "lunes".."sabado"), no por fecha calendario: son 6 cupos fijos
@@ -3032,9 +3162,9 @@ export default function App() {
           }}
         >
           {estadoGuardado === "guardando" && "Guardando..."}
-          {estadoGuardado === "reintentando" && "Conexión inestable — reintentando guardar, no cierres la app..."}
-          {estadoGuardado === "sin_conexion" && "Sin conexión — se guardará solo en cuanto vuelva la señal. No cierres la app."}
-          {estadoGuardado === "error" && "No se pudo guardar. Revisa tu conexión y vuelve a intentarlo."}
+          {estadoGuardado === "reintentando" && "Conexión inestable — reintentando guardar. Aunque cierres la app, el cambio queda guardado en este dispositivo y se sigue intentando solo."}
+          {estadoGuardado === "sin_conexion" && "Sin conexión — el cambio ya quedó guardado en este dispositivo y se enviará solo en cuanto vuelva la señal, aunque cierres la app."}
+          {estadoGuardado === "error" && "Sigue sin confirmarse por falta de señal — el cambio no se pierde, se seguirá reintentando solo. Abre la app cuando tengas conexión para que termine de enviarse."}
         </div>
       )}
 
