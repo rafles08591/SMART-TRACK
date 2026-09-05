@@ -305,7 +305,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.8";
+const BUILD_VERSION = "5.9";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -347,6 +347,11 @@ export default function App() {
   const [ventasPeriodoStatus, setVentasPeriodoStatus] = useState("");
   const [mesaControlStatus, setMesaControlStatus] = useState("");
   const [cargasStatus, setCargasStatus] = useState("");
+  // true cuando el archivo YA se descargó pero el bloqueo de la carga no se
+  // pudo confirmar contra Supabase (falta de señal) — mientras esté en true,
+  // los vendedores técnicamente pueden seguir modificando aunque Gerente ya
+  // haya "cerrado" la carga en su cabeza.
+  const [bloqueoPendiente, setBloqueoPendiente] = useState(false);
   const fileInputRef = useRef(null);
   const objFileInputRef = useRef(null);
   const objetivoVisitasFileInputRef = useRef(null);
@@ -1504,7 +1509,20 @@ export default function App() {
       fresca = await obtenerDataFresca();
     } catch (err) {
       console.error("No se pudo traer la carga más reciente:", err);
-      alert("No se pudo confirmar que tengas la información más reciente (revisa tu conexión). Se descargará con lo que hay en pantalla — vuelve a intentarlo si acabas de recibir una propuesta nueva.");
+      // Antes esto seguía adelante solo con una alerta informativa. Ahora
+      // pide confirmación explícita: generar el archivo con datos que
+      // podrían estar incompletos (y luego BLOQUEAR la carga con base en
+      // ellos) es una decisión que Gerente debe tomar a propósito, no algo
+      // que pase solo por mala señal en ese momento.
+      const continuar = window.confirm(
+        "No se pudo confirmar que tengas la información más reciente (revisa tu conexión).\n\n" +
+        "Si continúas, el archivo se generará con lo que ya tienes en pantalla — podría faltarle la propuesta de algún vendedor si la mandó hace poco y esta pantalla no alcanzó a actualizarse.\n\n" +
+        "¿Generar el archivo de todos modos?"
+      );
+      if (!continuar) {
+        setCargasStatus("Descarga cancelada — vuelve a intentarlo cuando tengas señal, para no arriesgarte a dejar fuera una propuesta reciente.");
+        return;
+      }
       fresca = data;
     }
     const diaActivo = fresca.cargaActivoDia;
@@ -1533,9 +1551,43 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Carga Modificada");
     XLSX.writeFile(wb, `carga_modificada_${cargas.dia || fechaHoyISO()}.xlsx`);
-    setCargasStatus(`Archivo generado con la información más reciente (${filas.length} filas). Se bloqueó la edición para los vendedores.`);
-    // Una vez descargado, se bloquea para que los vendedores ya no puedan modificar.
-    persistCargas(diaActivo, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+
+    // El candado real es este bloqueo, no la descarga en sí (generar el
+    // .xlsx es 100% local, no depende de señal). Antes se disparaba este
+    // guardado SIN esperarlo y sin capturar si fallaba, así que ya se le
+    // decía a Gerente "se bloqueó la edición" aunque el guardado siguiera
+    // reintentando (o terminara fallando) en segundo plano por mala señal.
+    // `persistCargas` (vía persistParcialFresco) ya reintenta solo hasta 6
+    // veces y espera a que vuelva la conexión si hace falta — aquí solo se
+    // espera su resultado real antes de avisarle a Gerente que ya quedó.
+    setCargasStatus(`Archivo descargado (${filas.length} filas). Confirmando el bloqueo de la carga con el servidor...`);
+    try {
+      await persistCargas(diaActivo, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+      setBloqueoPendiente(false);
+      setCargasStatus(`✅ Archivo descargado (${filas.length} filas) y carga bloqueada correctamente — los vendedores ya no pueden modificarla.`);
+    } catch (err) {
+      console.error("No se pudo confirmar el bloqueo de la carga:", err);
+      setBloqueoPendiente(true);
+      setCargasStatus(`⚠️ El archivo SÍ se descargó, pero el bloqueo NO se pudo confirmar por falta de señal. Los vendedores TODAVÍA pueden modificar esta carga — usa "Reintentar bloqueo" en cuanto tengas conexión.`);
+      alert('El archivo se descargó, pero el bloqueo no se pudo confirmar por falta de señal. Los vendedores todavía pueden modificar esta carga. Usa "Reintentar bloqueo" en cuanto tengas conexión.');
+    }
+  }
+
+  // Reintenta SOLO el bloqueo (sin volver a generar/descargar el archivo)
+  // para cuando `descargarCargasModificadas` ya descargó el archivo pero no
+  // pudo confirmar el bloqueo por falta de señal.
+  async function reintentarBloqueoCarga() {
+    const dia = data.cargaActivoDia;
+    if (!dia) return;
+    setCargasStatus("Reintentando confirmar el bloqueo de la carga...");
+    try {
+      await persistCargas(dia, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+      setBloqueoPendiente(false);
+      setCargasStatus("✅ Carga bloqueada correctamente — los vendedores ya no pueden modificarla.");
+    } catch (err) {
+      console.error("Reintento de bloqueo de carga falló:", err);
+      setCargasStatus("⚠️ Sigue sin poder confirmarse el bloqueo por falta de señal. Los vendedores todavía pueden modificar esta carga — vuelve a intentar cuando tengas mejor conexión.");
+    }
   }
 
   function downloadOtcSemanalTemplate() {
@@ -3066,6 +3118,8 @@ export default function App() {
           cargasFileInputRef={cargasFileInputRef}
           cargasStatus={cargasStatus}
           onDescargarCargas={descargarCargasModificadas}
+          bloqueoPendienteCargas={bloqueoPendiente}
+          onReintentarBloqueoCargas={reintentarBloqueoCarga}
           onActivarCarga={activarCarga}
           onEliminarCarga={eliminarCarga}
           onRefresh={refrescarManual}
