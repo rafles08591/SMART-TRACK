@@ -100,6 +100,16 @@ if (typeof window !== "undefined" && !window.__ruParcheDom) {
 ===================================================================== */
 const CLAVE_COLA_GUARDADO_PENDIENTE = "smarttrack_cola_guardado_pendiente";
 
+// Tiempo de inactividad antes de recargar la app sola. La app se queda
+// abierta en algunos dispositivos por horas/días, y como es una SPA, una
+// pestaña ya abierta NUNCA se entera de un despliegue nuevo en Vercel
+// hasta que se recarga — así que con el tiempo se queda usando una
+// versión vieja del código sin que nadie se dé cuenta. Recargar sola tras
+// un rato de inactividad resuelve ambas cosas: limpia memoria acumulada Y
+// trae la versión más reciente. Ajustable aquí si hace falta.
+const MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR = 60;
+const SEGUNDOS_AVISO_ANTES_DE_RECARGAR = 60;
+
 function leerColaGuardadoPendiente() {
   try {
     const raw = window.localStorage.getItem(CLAVE_COLA_GUARDADO_PENDIENTE);
@@ -364,7 +374,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "6.0";
+const BUILD_VERSION = "5.7";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -477,6 +487,48 @@ export default function App() {
       clearInterval(intervalo);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Recarga la app sola tras un rato largo de inactividad — ver el
+  // comentario de MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR arriba. Es seguro
+  // hacerlo aunque haya algo a medio guardar: la cola de guardado
+  // pendiente (ver arriba) vive en localStorage y sobrevive a la recarga,
+  // así que no se pierde nada.
+  const [segundosParaRecargar, setSegundosParaRecargar] = useState(null);
+  useEffect(() => {
+    let temporizadorInactividad;
+    let intervaloAviso;
+
+    const programarRecarga = () => {
+      clearTimeout(temporizadorInactividad);
+      clearInterval(intervaloAviso);
+      setSegundosParaRecargar(null);
+      temporizadorInactividad = setTimeout(() => {
+        // Si la pestaña está en segundo plano (la dejaron abierta y se
+        // fueron a otra cosa, o el celular se bloqueó), no tiene caso
+        // avisar con cuenta regresiva — nadie la va a ver. Se recarga
+        // directo; la próxima vez que la abran ya tendrán la versión
+        // nueva.
+        if (document.hidden) { window.location.reload(); return; }
+        let restante = SEGUNDOS_AVISO_ANTES_DE_RECARGAR;
+        setSegundosParaRecargar(restante);
+        intervaloAviso = setInterval(() => {
+          restante -= 1;
+          if (restante <= 0) { clearInterval(intervaloAviso); window.location.reload(); }
+          else setSegundosParaRecargar(restante);
+        }, 1000);
+      }, MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR * 60 * 1000);
+    };
+
+    const eventos = ["click", "keydown", "touchstart", "scroll"];
+    eventos.forEach((ev) => window.addEventListener(ev, programarRecarga, { passive: true }));
+    programarRecarga();
+
+    return () => {
+      eventos.forEach((ev) => window.removeEventListener(ev, programarRecarga));
+      clearTimeout(temporizadorInactividad);
+      clearInterval(intervaloAviso);
+    };
   }, []);
 
   async function loadData() {
@@ -3165,6 +3217,18 @@ export default function App() {
           {estadoGuardado === "reintentando" && "Conexión inestable — reintentando guardar. Aunque cierres la app, el cambio queda guardado en este dispositivo y se sigue intentando solo."}
           {estadoGuardado === "sin_conexion" && "Sin conexión — el cambio ya quedó guardado en este dispositivo y se enviará solo en cuanto vuelva la señal, aunque cierres la app."}
           {estadoGuardado === "error" && "Sigue sin confirmarse por falta de señal — el cambio no se pierde, se seguirá reintentando solo. Abre la app cuando tengas conexión para que termine de enviarse."}
+        </div>
+      )}
+
+      {segundosParaRecargar !== null && (
+        <div
+          style={{
+            position: "fixed", bottom: estadoGuardado ? 34 : 0, left: 0, right: 0, zIndex: 9998,
+            padding: "8px 14px", fontSize: 12, textAlign: "center", color: "#0F172A",
+            background: "#F2B134", borderTop: "1px solid #d99f1f",
+          }}
+        >
+          La app se va a actualizar sola en {segundosParaRecargar}s por inactividad (para traer la versión más reciente) — toca la pantalla para seguir usándola sin interrupción.
         </div>
       )}
 
