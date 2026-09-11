@@ -42,6 +42,10 @@ function fechaCorta(fechaISO) {
 }
 
 const DIA_LABEL = { lunes: "Lunes", martes: "Martes", miercoles: "Miércoles", jueves: "Jueves", viernes: "Viernes", sabado: "Sábado" };
+function formatFechaHora(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
 // Orden fijo en el que se muestran las 6 casillas — reutiliza la misma
 // lista de días que ya usa el resto de SMART-TRACK (DIAS_SEMANA_VISITAS).
 const DIAS_ORDEN = DIAS_SEMANA_VISITAS;
@@ -67,6 +71,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   const yaEnviado = !!cargaActiva?.enviosPorRuta?.[vendedorActual];
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
   const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
+  const [verHistorial, setVerHistorial] = useState(false);
 
   // Edición 100% local (borrador): mientras se escribe, NO se guarda nada en
   // Supabase — así una sincronización en tiempo real de otro dispositivo
@@ -88,7 +93,24 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
         const valor = borrador[i];
         return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
       });
-      return { ...cargasFrescas, items, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
+      // Historial de envíos: registro de solo-agregar (nunca se edita ni se
+      // borra desde aquí) con lo que cada vendedor mandó y cuándo. Es una
+      // red de seguridad — aunque algo llegara a sobreescribir el valor
+      // "actual" de porRuta, este rastro no se toca, así que nunca se
+      // pierde qué propuso cada quien. Se guarda contra la carga FRESCA
+      // (cargasFrescas), no contra datos viejos en memoria.
+      const cambiosDeEsteEnvio = Object.entries(borrador)
+        .filter(([, v]) => v !== undefined)
+        .map(([i, v]) => ({
+          fa: cargasFrescas.items[i]?.fa || null,
+          marca: cargasFrescas.items[i]?.marca || null,
+          valor: v === "" ? null : Number(v),
+        }));
+      const historialEnvios = [
+        ...(cargasFrescas.historialEnvios || []),
+        { fecha: new Date().toISOString(), ruta: nombreRuta, cambios: cambiosDeEsteEnvio },
+      ].slice(-300); // límite razonable para que el blob no crezca sin fin
+      return { ...cargasFrescas, items, historialEnvios, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
     });
     setBorrador({});
   }
@@ -278,6 +300,35 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                       </div>
                     );
                   })()}
+                  {(cargaActiva.historialEnvios || []).length > 0 && (
+                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
+                      <button
+                        onClick={() => setVerHistorial((v) => !v)}
+                        style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#9AA7BD", cursor: "pointer", fontSize: 12, padding: 0 }}
+                      >
+                        <Clock size={13} /> Historial de envíos ({cargaActiva.historialEnvios.length}) {verHistorial ? "▲" : "▼"}
+                      </button>
+                      <div style={{ fontSize: 10.5, color: "#5b6478", marginTop: 4 }}>
+                        Registro de solo-lectura de cada envío — no se puede editar ni borrar, es tu respaldo por si algo raro pasa con los valores actuales.
+                      </div>
+                      {verHistorial && (
+                        <div style={{ maxHeight: 260, overflowY: "auto", marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                          {[...cargaActiva.historialEnvios].reverse().map((h, idx) => (
+                            <div key={idx} style={{ background: "#141b2c", borderRadius: 8, padding: "8px 10px", fontSize: 11.5 }}>
+                              <div style={{ color: "#E8EDF5", fontWeight: 600, marginBottom: 2 }}>
+                                {h.ruta}{NOMBRES[h.ruta] ? ` · ${NOMBRES[h.ruta]}` : ""} <span style={{ color: "#9AA7BD", fontWeight: 400 }}>— {formatFechaHora(h.fecha)}</span>
+                              </div>
+                              <div style={{ color: "#9AA7BD" }}>
+                                {(h.cambios || []).map((c, i2) => (
+                                  <span key={i2}>{c.marca || c.fa}: <span className="mono" style={{ color: "#E8EDF5" }}>{c.valor ?? "—"}</span>{i2 < h.cambios.length - 1 ? " · " : ""}</span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
