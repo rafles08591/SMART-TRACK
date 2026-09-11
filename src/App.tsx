@@ -109,6 +109,13 @@ const CLAVE_COLA_GUARDADO_PENDIENTE = "smarttrack_cola_guardado_pendiente";
 // trae la versión más reciente. Ajustable aquí si hace falta.
 const MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR = 60;
 const SEGUNDOS_AVISO_ANTES_DE_RECARGAR = 60;
+// Revisión periódica de versión nueva — corrige el caso de una pestaña que
+// se sigue usando ACTIVAMENTE todo el día (la recarga por inactividad de
+// arriba nunca se dispara porque nunca está inactiva) y por eso se queda
+// horas corriendo una versión vieja del código, por ejemplo al procesar o
+// descargar Cargas con lógica ya desactualizada.
+const MINUTOS_ENTRE_REVISION_VERSION = 10;
+const SEGUNDOS_AVISO_VERSION_NUEVA = 90;
 
 function leerColaGuardadoPendiente() {
   try {
@@ -374,7 +381,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.7";
+const BUILD_VERSION = "5.8";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -489,12 +496,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Recarga la app sola tras un rato largo de inactividad — ver el
-  // comentario de MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR arriba. Es seguro
-  // hacerlo aunque haya algo a medio guardar: la cola de guardado
-  // pendiente (ver arriba) vive en localStorage y sobrevive a la recarga,
-  // así que no se pierde nada.
-  const [segundosParaRecargar, setSegundosParaRecargar] = useState(null);
+  // Recarga la app sola tras un rato largo de inactividad, o en cuanto se
+  // detecta que se publicó una versión nueva (ver abajo). Es seguro hacerlo
+  // aunque haya algo a medio guardar: la cola de guardado pendiente vive en
+  // localStorage y sobrevive a la recarga, así que no se pierde nada.
+  //
+  // `recarga` es null o { motivo: "inactividad" | "version_nueva", segundos }.
+  const [recarga, setRecarga] = useState(null);
+
+  // --- Por inactividad: se cancela solo con cualquier interacción ---
   useEffect(() => {
     let temporizadorInactividad;
     let intervaloAviso;
@@ -502,7 +512,7 @@ export default function App() {
     const programarRecarga = () => {
       clearTimeout(temporizadorInactividad);
       clearInterval(intervaloAviso);
-      setSegundosParaRecargar(null);
+      setRecarga((actual) => (actual?.motivo === "inactividad" ? null : actual));
       temporizadorInactividad = setTimeout(() => {
         // Si la pestaña está en segundo plano (la dejaron abierta y se
         // fueron a otra cosa, o el celular se bloqueó), no tiene caso
@@ -511,11 +521,11 @@ export default function App() {
         // nueva.
         if (document.hidden) { window.location.reload(); return; }
         let restante = SEGUNDOS_AVISO_ANTES_DE_RECARGAR;
-        setSegundosParaRecargar(restante);
+        setRecarga({ motivo: "inactividad", segundos: restante });
         intervaloAviso = setInterval(() => {
           restante -= 1;
           if (restante <= 0) { clearInterval(intervaloAviso); window.location.reload(); }
-          else setSegundosParaRecargar(restante);
+          else setRecarga({ motivo: "inactividad", segundos: restante });
         }, 1000);
       }, MINUTOS_INACTIVIDAD_ANTES_DE_RECARGAR * 60 * 1000);
     };
@@ -529,6 +539,49 @@ export default function App() {
       clearTimeout(temporizadorInactividad);
       clearInterval(intervaloAviso);
     };
+  }, []);
+
+  // --- Por versión nueva detectada: NO se cancela con actividad ---
+  // Esto es lo que de verdad corrige que una pestaña vieja, aunque se siga
+  // usando activamente todo el día, se quede corriendo lógica desactualizada
+  // (por ejemplo al procesar o descargar Cargas) sin que nadie se entere. Se
+  // revisa cada cierto tiempo si el archivo principal de la app cambió de
+  // nombre (Vite le pone un hash distinto a cada build) comparándolo contra
+  // el que está cargado ahora mismo — si cambió, es que se publicó una
+  // versión nueva en Vercel.
+  const scriptActualRef = useRef(
+    typeof document !== "undefined" ? document.querySelector('script[type="module"][src]')?.getAttribute("src") || null : null
+  );
+  useEffect(() => {
+    if (!scriptActualRef.current) return; // no se pudo detectar el script actual, no arriesgar falsos positivos
+    let detenido = false;
+    let intervaloRevision;
+    let intervaloAviso;
+
+    async function revisarVersion() {
+      if (detenido) return;
+      try {
+        const resp = await fetch(`${window.location.origin}/?_v=${Date.now()}`, { cache: "no-store" });
+        const html = await resp.text();
+        const match = html.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/i);
+        const scriptNuevo = match ? match[1] : null;
+        if (scriptNuevo && scriptNuevo !== scriptActualRef.current) {
+          clearInterval(intervaloRevision);
+          let restante = SEGUNDOS_AVISO_VERSION_NUEVA;
+          setRecarga({ motivo: "version_nueva", segundos: restante });
+          intervaloAviso = setInterval(() => {
+            restante -= 1;
+            if (restante <= 0) { clearInterval(intervaloAviso); window.location.reload(); }
+            else setRecarga({ motivo: "version_nueva", segundos: restante });
+          }, 1000);
+        }
+      } catch (err) {
+        console.error("No se pudo revisar si hay una versión nueva de la app:", err);
+      }
+    }
+
+    intervaloRevision = setInterval(revisarVersion, MINUTOS_ENTRE_REVISION_VERSION * 60 * 1000);
+    return () => { detenido = true; clearInterval(intervaloRevision); clearInterval(intervaloAviso); };
   }, []);
 
   async function loadData() {
@@ -3220,15 +3273,18 @@ export default function App() {
         </div>
       )}
 
-      {segundosParaRecargar !== null && (
+      {recarga !== null && (
         <div
           style={{
             position: "fixed", bottom: estadoGuardado ? 34 : 0, left: 0, right: 0, zIndex: 9998,
             padding: "8px 14px", fontSize: 12, textAlign: "center", color: "#0F172A",
-            background: "#F2B134", borderTop: "1px solid #d99f1f",
+            background: recarga.motivo === "version_nueva" ? "#38bdf8" : "#F2B134",
+            borderTop: `1px solid ${recarga.motivo === "version_nueva" ? "#1a8fc7" : "#d99f1f"}`,
           }}
         >
-          La app se va a actualizar sola en {segundosParaRecargar}s por inactividad (para traer la versión más reciente) — toca la pantalla para seguir usándola sin interrupción.
+          {recarga.motivo === "version_nueva"
+            ? `Hay una versión nueva de SMART-TRACK disponible — se va a actualizar sola en ${recarga.segundos}s para que no se quede trabajando con información desactualizada. Termina lo que estés haciendo.`
+            : `La app se va a actualizar sola en ${recarga.segundos}s por inactividad (para traer la versión más reciente) — toca la pantalla para seguir usándola sin interrupción.`}
         </div>
       )}
 
