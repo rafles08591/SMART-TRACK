@@ -81,7 +81,12 @@ const CAMPOS = [
   ["cloInd", "CLO", "texto"],
   ["rutaInd", "J'S", "texto"],
   ["nur", "NUR", "texto"],
-  ["sueldoBaseInd", "SUELDO BASE", "dinero"],
+  // ⚠️ Antes había aquí una columna "SUELDO BASE" (individual, tabla de
+  // indicadores) que la plantilla actual ya NO trae — se quitó de este
+  // arreglo el 2026-09 porque su presencia corría todas las columnas
+  // siguientes una posición y hacía que se leyeran mal en silencio. Si en
+  // algún momento regresa a la plantilla, hay que volver a agregarla aquí
+  // en esta posición exacta.
   ["tipoRuta", "TIPO RUTA", "texto"],
   ["volSemana", "Vol Semana", "numero"],
   ["clasificacionInd", "Clasificacion Final Vendedor (VOL+ITO)", "texto"],
@@ -97,7 +102,7 @@ const CAMPOS = [
   ["cobItoSemanalPct", "COB ITO SEMANAL", "porcentaje"],
   ["realItoDiarioPct", "REAL ITO DIARIO", "porcentaje"],
   ["cobItoPct2", "COB ITO", "porcentaje"],
-  ["pagoItoDiario", "PAGO ITO DIARIO", "dinero"],
+  ["pagoItoDiario", "PAGO ITO", "dinero"], // antes se llamaba "PAGO ITO DIARIO" en la plantilla — se acortó el nombre pero es la misma columna
   ["_spacer", "", "texto"],
   ["clo", "CLO", "texto"],
   ["ruta", "RUTA", "texto"],
@@ -159,11 +164,67 @@ function numero(n) {
   return n.toLocaleString("es-MX");
 }
 
-function filaATextoNormalizado(valoresCrudos) {
+function normalizarEncabezadoNomina(s) {
+  return String(s || "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+// El parser de abajo YA NO depende de que cada campo esté en una posición
+// fija de columna — arma un mapa "clave interna -> índice de columna real"
+// buscando cada encabezado de `CAMPOS` dentro del encabezado real del
+// archivo, sin importar en qué orden vengan ni si se insertó/quitó alguna
+// columna en medio (como pasó con "SUELDO BASE"). Así, si la plantilla
+// vuelve a moverse, se sigue leyendo bien solo, sin tener que tocar código.
+//
+// Ojo con los encabezados REPETIDOS (ej. "CLO" aparece dos veces: una en
+// la tabla de indicadores y otra en la de nómina; igual "COB ITO",
+// "Clasificacion Final Vendedor (VOL+ITO)", "Comision Semana $60c/$1.2",
+// "Penalizacion Clasico" y "TIPO NOMINA FINAL"): cada aparición en el
+// archivo se empareja EN ORDEN con la entrada correspondiente de `CAMPOS`
+// (la primera "CLO" del archivo va a la primera "CLO" que pide CAMPOS,
+// la segunda a la segunda, etc.) — así no se pueden cruzar por accidente.
+function construirMapaColumnasNomina(headerRow) {
+  const colasPorHeader = new Map();
+  CAMPOS.forEach(([clave, headerEsperado, tipo]) => {
+    if (clave === "_spacer" || !headerEsperado) return;
+    const key = normalizarEncabezadoNomina(headerEsperado);
+    if (!colasPorHeader.has(key)) colasPorHeader.set(key, []);
+    colasPorHeader.get(key).push({ clave, tipo });
+  });
+
+  const indicePorClave = {};
+  const tipoPorClave = {};
+  headerRow.forEach((headerReal, i) => {
+    const cola = colasPorHeader.get(normalizarEncabezadoNomina(headerReal));
+    if (cola && cola.length > 0) {
+      const { clave, tipo } = cola.shift();
+      indicePorClave[clave] = i;
+      tipoPorClave[clave] = tipo;
+    }
+  });
+
+  // Lo que quedó sin consumir en las colas son columnas que se esperaban
+  // pero no aparecieron en el archivo — se avisa, pero no bloquea la
+  // carga: esos campos simplemente quedan vacíos para todas las filas.
+  const noEncontrados = [];
+  colasPorHeader.forEach((cola) => cola.forEach(({ clave }) => {
+    const entradaCampos = CAMPOS.find((c) => c[0] === clave);
+    noEncontrados.push(entradaCampos ? entradaCampos[1] : clave);
+  }));
+
+  return { indicePorClave, tipoPorClave, noEncontrados: [...new Set(noEncontrados)] };
+}
+
+function filaATextoNormalizado(valoresCrudos, mapaColumnas) {
   const out = {};
-  CAMPOS.forEach(([clave, , tipo], i) => {
+  CAMPOS.forEach(([clave, , tipoDefault]) => {
     if (clave === "_spacer") return;
-    const crudo = valoresCrudos[i];
+    const i = mapaColumnas.indicePorClave[clave];
+    const tipo = mapaColumnas.tipoPorClave[clave] || tipoDefault;
+    const crudo = i === undefined ? undefined : valoresCrudos[i];
     if (tipo === "texto") out[clave] = crudo === undefined || crudo === null ? "" : String(crudo).trim();
     else out[clave] = limpiarNumero(crudo);
   });
@@ -215,12 +276,17 @@ function filaATextoNormalizado(valoresCrudos) {
 function parseNominaTexto(texto) {
   const lineas = texto.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (lineas.length < 2) return { filas: [], advertencias: ["No se encontraron filas de datos (¿pegaste solo el encabezado?)."] };
+  const encabezado = lineas[0].split("\t");
+  const mapaColumnas = construirMapaColumnasNomina(encabezado);
   const filas = [];
   const advertencias = [];
+  if (mapaColumnas.noEncontrados.length > 0) {
+    advertencias.push(`No se encontraron estas columnas en el archivo — quedan vacías: ${mapaColumnas.noEncontrados.join(", ")}.`);
+  }
   for (let i = 1; i < lineas.length; i++) {
     const valores = lineas[i].split("\t");
     if (valores.length < 10) { advertencias.push(`Fila ${i + 1} ignorada: muy pocas columnas (${valores.length}).`); continue; }
-    const fila = filaATextoNormalizado(valores);
+    const fila = filaATextoNormalizado(valores, mapaColumnas);
     if (fila) filas.push(fila);
   }
   if (filas.length === 0) advertencias.push("No se pudo leer ninguna fila válida. Revisa que hayas copiado desde la celda de encabezado (SUPERVISOR) hasta el final de la tabla, incluyendo el encabezado.");
@@ -229,12 +295,17 @@ function parseNominaTexto(texto) {
 
 function parseNominaArchivo(filasCrudas) {
   // filasCrudas: arreglo de arreglos (sheet_to_json con header:1)
+  if (!filasCrudas || filasCrudas.length < 2) return { filas: [], advertencias: ["No se encontraron filas de datos en el archivo."] };
+  const mapaColumnas = construirMapaColumnasNomina(filasCrudas[0] || []);
   const filas = [];
   const advertencias = [];
+  if (mapaColumnas.noEncontrados.length > 0) {
+    advertencias.push(`No se encontraron estas columnas en el archivo — quedan vacías: ${mapaColumnas.noEncontrados.join(", ")}.`);
+  }
   for (let i = 1; i < filasCrudas.length; i++) {
     const valores = filasCrudas[i];
     if (!valores || valores.length < 10) continue;
-    const fila = filaATextoNormalizado(valores);
+    const fila = filaATextoNormalizado(valores, mapaColumnas);
     if (fila) filas.push(fila);
   }
   if (filas.length === 0) advertencias.push("No se pudo leer ninguna fila válida del archivo.");
