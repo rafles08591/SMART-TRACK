@@ -381,7 +381,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "5.8";
+const BUILD_VERSION = "6.1";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -1678,20 +1678,63 @@ export default function App() {
           setCargasStatus("No se encontraron artículos válidos en el archivo.");
           return;
         }
-        // Se guarda bajo su casilla de día de la semana, SIN activarla
-        // todavía — queda pendiente hasta que el Gerente la active
-        // manualmente cuando corresponda. Si ya había una carga guardada
-        // para ese mismo día (de esta semana o de una anterior), se
-        // reemplaza por completo — es justo el punto: la casilla de cada
-        // día se recicla semana tras semana, partiendo siempre del
-        // documento más reciente en Supabase.
-        await persistParcialFresco((fresca) => ({
-          cargasPorDia: {
-            ...(fresca.cargasPorDia || {}),
-            [diaFinal]: { dia: diaFinal, fechaReferencia: sumarDiasISO(fechaHoyISO(), 1), fechaSubida: fechaHoyISO(), bloqueado: false, items: resultado.items, enviosPorRuta: {} },
-          },
-        }));
-        setCargasStatus(`Carga guardada para el ${diaFinal}: ${resultado.items.length} artículos, hoja "${hojaUsada}". Actívala cuando corresponda.`);
+        // Se guarda bajo su casilla de día de la semana. Si ya había una
+        // carga guardada para ese mismo día CON propuestas de vendedores en
+        // curso, esas propuestas NO se pierden: se conservan los valores
+        // "modificada" de cada artículo+ruta que siga apareciendo en el
+        // archivo nuevo (se empareja por código de artículo). Esto protege
+        // contra el caso de que alguien vuelva a subir el archivo (por
+        // confusión, o con una pestaña vieja que no reflejaba que ya había
+        // avance) y borre sin querer lo que los vendedores ya mandaron esta
+        // semana. Solo se resetea limpio si el día no tenía nada guardado
+        // todavía, o no tenía ninguna propuesta enviada.
+        let seConservaronPropuestas = 0;
+        await persistParcialFresco((fresca) => {
+          seConservaronPropuestas = 0;
+          const actual = fresca.cargasPorDia || {};
+          const existente = actual[diaFinal];
+          // Solo se conservan valores si de verdad hay evidencia de que
+          // algún vendedor YA mandó su propuesta en el ciclo actual
+          // (enviosPorRuta con algo marcado) — si la casilla está "limpia"
+          // (nadie ha enviado todavía, o es la reutilización normal de la
+          // semana siguiente), se sigue reemplazando por completo como
+          // antes, para no arrastrar por accidente valores de la semana
+          // pasada a una carga nueva.
+          const huboEnviosEnCiclo = existente && Object.values(existente.enviosPorRuta || {}).some(Boolean);
+          let itemsFinales = resultado.items;
+          if (huboEnviosEnCiclo && existente.items?.length > 0) {
+            const mapaAnteriorPorFa = new Map(existente.items.map((it) => [it.fa, it]));
+            itemsFinales = resultado.items.map((itNuevo) => {
+              const itAnterior = mapaAnteriorPorFa.get(itNuevo.fa);
+              if (!itAnterior) return itNuevo;
+              const porRuta = { ...itNuevo.porRuta };
+              Object.keys(porRuta).forEach((rutaKey) => {
+                const modAnterior = itAnterior.porRuta?.[rutaKey]?.modificada;
+                if (modAnterior != null) {
+                  porRuta[rutaKey] = { ...porRuta[rutaKey], modificada: modAnterior };
+                  seConservaronPropuestas++;
+                }
+              });
+              return { ...itNuevo, porRuta };
+            });
+          }
+          return {
+            cargasPorDia: {
+              ...actual,
+              [diaFinal]: {
+                dia: diaFinal, fechaReferencia: sumarDiasISO(fechaHoyISO(), 1), fechaSubida: fechaHoyISO(),
+                bloqueado: false,
+                items: itemsFinales,
+                enviosPorRuta: existente?.enviosPorRuta || {},
+              },
+            },
+          };
+        });
+        setCargasStatus(
+          `Carga guardada para el ${diaFinal}: ${resultado.items.length} artículos, hoja "${hojaUsada}".` +
+          (seConservaronPropuestas > 0 ? ` Se conservaron ${seConservaronPropuestas} valor(es) que los vendedores ya habían propuesto para este día.` : "") +
+          " Actívala cuando corresponda."
+        );
       } catch (err) {
         console.error(err);
         setCargasStatus("No se pudo leer el archivo. Verifica el formato.");
@@ -1712,6 +1755,16 @@ export default function App() {
       const actual = fresca.cargasPorDia || {};
       const cargaExistente = actual[dia];
       if (!cargaExistente) return { cargaActivoDia: dia };
+      // Si esta carga YA era la activa (ej. alguien con una pestaña vieja
+      // le vuelve a dar "Activar" sin saber que ya lo estaba, o dos
+      // personas lo hacen casi al mismo tiempo), no se reinician los
+      // envíos — volver a "activar" lo que ya está activo no debe borrar
+      // de la vista las propuestas que los vendedores ya mandaron esta
+      // semana. Solo se limpia enviosPorRuta cuando de verdad se está
+      // arrancando un ciclo nuevo (activando un día que no era el activo).
+      if (fresca.cargaActivoDia === dia) {
+        return { cargaActivoDia: dia, cargasPorDia: { ...actual, [dia]: { ...cargaExistente, bloqueado: false } } };
+      }
       return {
         cargaActivoDia: dia,
         cargasPorDia: { ...actual, [dia]: { ...cargaExistente, bloqueado: false, enviosPorRuta: {} } },
