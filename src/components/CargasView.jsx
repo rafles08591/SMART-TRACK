@@ -77,12 +77,74 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   // Supabase — así una sincronización en tiempo real de otro dispositivo
   // nunca puede "regresar" el número a medio escribir. Solo al presionar
   // "Enviar" se manda todo de un jalón.
+  //
+  // Además, el borrador se respalda en localStorage (por ruta+día) — antes
+  // vivía solo en memoria y un `useEffect` lo vaciaba cada vez que
+  // `cargaActivoDia` cambiaba de valor; como ese valor puede "parpadear"
+  // durante cualquier refresco de datos (manual, en tiempo real, o la
+  // recarga automática de la app), eso podía borrar en silencio lo que
+  // alguien tenía a medio escribir sin haber llegado a darle "Enviar".
+  // Ahora, en vez de vaciarlo a ciegas, se CARGA lo que ya hubiera
+  // guardado en este dispositivo para esa ruta+día — así sobrevive
+  // cualquier refresco o recarga sin perder nada.
   const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
-  const [borrador, setBorrador] = useState({});
-  useEffect(() => { setBorrador({}); }, [rutaActiva, cargaActivoDia]);
+  function claveBorradorCargas(ruta, dia) {
+    return `smarttrack_cargas_borrador_${ruta || "x"}_${dia || "x"}`;
+  }
+  function leerBorradorGuardado(ruta, dia) {
+    try {
+      const raw = window.localStorage.getItem(claveBorradorCargas(ruta, dia));
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+  const [borrador, setBorradorEstado] = useState(() => leerBorradorGuardado(rutaActiva, cargaActivoDia));
+  useEffect(() => {
+    setBorradorEstado(leerBorradorGuardado(rutaActiva, cargaActivoDia));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rutaActiva, cargaActivoDia]);
+
+  function setBorrador(actualizador) {
+    setBorradorEstado((prev) => {
+      const siguiente = typeof actualizador === "function" ? actualizador(prev) : actualizador;
+      try {
+        window.localStorage.setItem(claveBorradorCargas(rutaActiva, cargaActivoDia), JSON.stringify(siguiente));
+      } catch (err) {
+        console.error("No se pudo respaldar el borrador de la carga en este dispositivo:", err);
+      }
+      return siguiente;
+    });
+  }
 
   function cambiarLocal(itemIndex, valor) {
     setBorrador((b) => ({ ...b, [itemIndex]: valor }));
+  }
+
+  // `data` (y por lo tanto `cargaActiva.enviosPorRuta`) se actualiza de
+  // forma OPTIMISTA en App.tsx (persist() llama setData(next) antes de
+  // esperar la confirmación de Supabase) — así que no basta con leer
+  // `enviosPorRuta` para saber si el envío YA se confirmó de verdad. Este
+  // estado local sí solo cambia cuando la promesa de `enviarPara` se
+  // resuelve o falla de verdad, y manda sobre lo que se muestra mientras
+  // tanto.
+  const [enviando, setEnviando] = useState(false);
+  const [errorEnvio, setErrorEnvio] = useState(false);
+
+  async function manejarEnviarConConfirmacion(nombreRuta) {
+    setEnviando(true);
+    setErrorEnvio(false);
+    try {
+      await enviarPara(nombreRuta);
+      // Si llegamos aquí sin que truene, Supabase ya confirmó de verdad —
+      // recién ahora `cargaActiva.enviosPorRuta` refleja un envío real, no
+      // solo optimista.
+    } catch (err) {
+      console.error("No se pudo confirmar el envío de la carga:", err);
+      setErrorEnvio(true);
+    } finally {
+      setEnviando(false);
+    }
   }
 
   async function enviarPara(nombreRuta) {
@@ -283,18 +345,26 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                         <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
                           Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargaActiva.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
                         </div>
-                        <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
+                        <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado || enviando} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
+                        {errorEnvio && (
+                          <div style={{ fontSize: 11.5, color: "#FF6B6B", marginTop: 8 }}>
+                            No se pudo confirmar el envío por falta de señal. Ya quedó guardado en este dispositivo y se sigue intentando solo — puedes esperar o volver a intentar.
+                          </div>
+                        )}
                         {!cargaActiva.bloqueado && (
                           <button
                             className="btn"
                             style={{
                               marginTop: 12, width: "100%",
-                              background: enviadoEstaRuta ? "#3DDC97" : undefined, borderColor: enviadoEstaRuta ? "#3DDC97" : undefined,
-                              color: enviadoEstaRuta ? "#0B1220" : undefined,
+                              background: enviando ? "#38bdf8" : (enviadoEstaRuta && !errorEnvio) ? "#3DDC97" : undefined,
+                              borderColor: enviando ? "#38bdf8" : (enviadoEstaRuta && !errorEnvio) ? "#3DDC97" : undefined,
+                              color: enviando || (enviadoEstaRuta && !errorEnvio) ? "#0B1220" : undefined,
                             }}
-                            onClick={() => enviarPara(rutaVistaStaff)}
+                            onClick={() => manejarEnviarConConfirmacion(rutaVistaStaff)}
+                            disabled={enviando}
                           >
-                            <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {enviadoEstaRuta ? "Carga enviada correctamente ✓" : "Enviar / confirmar esta carga"}
+                            <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} />{" "}
+                            {enviando ? "Enviando..." : errorEnvio ? "Reintentar envío" : enviadoEstaRuta ? "Carga enviada correctamente ✓" : "Enviar / confirmar esta carga"}
                           </button>
                         )}
                       </div>
@@ -353,29 +423,49 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             </div>
           )}
           {!cargaActiva.bloqueado && (
-            <div className="card" style={{ padding: 12, marginBottom: 14, border: `1px solid ${yaEnviado ? "#3DDC97" : "#F2B134"}` }}>
-              <div style={{ fontSize: 12, color: yaEnviado ? "#3DDC97" : "#F2B134" }}>
-                {yaEnviado ? "Ya enviaste tus cambios correctamente — no puedes seguir editando hasta que gerente/supervisor lo reactive." : "Aún no has enviado tus cambios."}
+            <div
+              className="card"
+              style={{
+                padding: 12, marginBottom: 14,
+                border: `1px solid ${enviando ? "#38bdf8" : errorEnvio ? "#FF6B6B" : yaEnviado ? "#3DDC97" : "#F2B134"}`,
+              }}
+            >
+              <div style={{ fontSize: 12, color: enviando ? "#38bdf8" : errorEnvio ? "#FF6B6B" : yaEnviado ? "#3DDC97" : "#F2B134" }}>
+                {enviando
+                  ? "Enviando y confirmando con el servidor... no cierres la app todavía."
+                  : errorEnvio
+                  ? "No se pudo confirmar el envío por falta de señal. Tu propuesta ya quedó guardada en este dispositivo y se sigue intentando sola — puedes esperar, o volver a intentar cuando tengas mejor señal."
+                  : yaEnviado
+                  ? "Ya enviaste tus cambios correctamente — no puedes seguir editando hasta que gerente/supervisor lo reactive."
+                  : "Aún no has enviado tus cambios."}
               </div>
             </div>
           )}
           <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
             Escribe la cantidad que consideres — no se guarda hasta que le des "Enviar cambios". Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
           </div>
-          <TablaCargaVendedor items={cargaActiva.items} nombreRuta={vendedorActual} bloqueado={cargaActiva.bloqueado || yaEnviado} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
+          <TablaCargaVendedor
+            items={cargaActiva.items}
+            nombreRuta={vendedorActual}
+            bloqueado={cargaActiva.bloqueado || (yaEnviado && !errorEnvio) || enviando}
+            valoresLocales={borrador}
+            onCambiarLocal={cambiarLocal}
+          />
           {!cargaActiva.bloqueado && (
             <button
               className="btn"
               style={{
                 marginTop: 14, width: "100%",
-                background: yaEnviado ? "#3DDC97" : undefined, borderColor: yaEnviado ? "#3DDC97" : undefined,
-                color: yaEnviado ? "#0B1220" : undefined,
-                cursor: yaEnviado ? "default" : "pointer",
+                background: enviando ? "#38bdf8" : (yaEnviado && !errorEnvio) ? "#3DDC97" : undefined,
+                borderColor: enviando ? "#38bdf8" : (yaEnviado && !errorEnvio) ? "#3DDC97" : undefined,
+                color: enviando || (yaEnviado && !errorEnvio) ? "#0B1220" : undefined,
+                cursor: (yaEnviado && !errorEnvio) || enviando ? "default" : "pointer",
               }}
-              onClick={() => { if (!yaEnviado) enviarPara(vendedorActual); }}
-              disabled={yaEnviado}
+              onClick={() => manejarEnviarConConfirmacion(vendedorActual)}
+              disabled={enviando || (yaEnviado && !errorEnvio)}
             >
-              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> {yaEnviado ? "Cambios enviados correctamente ✓" : "Enviar cambios"}
+              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} />{" "}
+              {enviando ? "Enviando..." : errorEnvio ? "Reintentar envío" : yaEnviado ? "Cambios enviados correctamente ✓" : "Enviar cambios"}
             </button>
           )}
         </>
