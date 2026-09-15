@@ -51,6 +51,7 @@ import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
+import MapaClientesView from "./MapaClientesView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, bloqueoPendienteCargas, onReintentarBloqueoCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets, ventasPeriodo }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -69,6 +70,11 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
   const [tab, setTab] = useState("resumen");
   const [objTab, setObjTab] = useState("dia");
+  // Fecha a la que corresponde el reporte de Visitas NUR que se va a
+  // pegar — por default hoy, pero se puede cambiar si el reporte que se
+  // está subiendo en realidad es de otro día (ej. un catch-up atrasado),
+  // para que no se archive bajo la semana equivocada.
+  const [fechaNur, setFechaNur] = useState(fechaHoyISO());
   // Submenú dentro de la pestaña FACTURAS — aplica para Gerente y
   // Supervisor-1: "clientes" es lo de siempre (registrar clientes que
   // piden factura), "avance" es el mismo panel que ve ADMIN
@@ -652,6 +658,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
           ) : objTab === "scorecard" ? (
             <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
+          ) : objTab === "mapa_clientes" ? (
+            <MapaClientesView data={data} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
@@ -1133,13 +1141,25 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
 
           <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
             <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>VISITAS NUR</div>
-            <PegarTextoBox onProcesar={onVisitasNurTexto} placeholder="Pega aquí el reporte de clientes visitados por NUR (columnas NUR, Cliente, Nombre, Direccion, Colonia, Potencial, Estado, Municipio, Localidad)." />
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11.5, color: "#9AA7BD" }}>Fecha del reporte:</span>
+              <input
+                type="date"
+                value={fechaNur}
+                onChange={(e) => setFechaNur(e.target.value)}
+                style={{ background: "#0F172A", color: "#E7ECF7", border: "1px solid #2A3852", borderRadius: 8, padding: "5px 8px", fontSize: 12.5 }}
+              />
+            </div>
+            <PegarTextoBox onProcesar={(texto) => onVisitasNurTexto(texto, fechaNur)} placeholder="Pega aquí el reporte de clientes visitados por NUR (columnas NUR, Cliente, Nombre, Direccion, Colonia, Potencial, Estado, Municipio, Localidad)." />
             {visitasNurStatus && (
               <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? "#3DDC97" : "#FF6B6B" }}>
                 {visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {visitasNurStatus}
               </span>
             )}
           </div>
+          <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>
+            Si el reporte que vas a pegar es de un día distinto a hoy (ej. lo subes tarde o es un catch-up), cambia la fecha de arriba antes de pegarlo — así no se mezcla con la semana equivocada.
+          </p>
           <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 0 }}>
             Se sube todos los días con lo visitado hasta ese momento — se combina con Mesa de Control en "Sin Visita", cualquiera de los dos cuenta.
           </p>
