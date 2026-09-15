@@ -23,7 +23,7 @@
      <SinVisitaView data={data} rol={rol} puesto={puesto} rutaPropia={rutaPropia} persistFresco={persistFresco} />
 ===================================================================== */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Users, MapPin, CheckCircle2, Calendar } from "lucide-react";
 import { NOMBRES, RUTAS } from "../constants";
 import { supabase } from "../supabaseClient";
