@@ -102,8 +102,13 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const visitasSemana = data?.visitasSemana || {};
   const esVendedor = rol === "vendedor";
 
-  const hoy = new Date();
-  const hoyISO = hoy.toISOString().slice(0, 10);
+  // ⚠️ Antes esto usaba `new Date().toISOString()`, que es hora UTC — pasadas
+  // las ~18:00 hora de México (UTC-6), UTC ya está en el día siguiente, así
+  // que "hoy" se calculaba mal (podía adelantarse un día entero, corriendo
+  // también en qué semana caía). Se calcula igual que en el resto de la app
+  // (ver `todayISO` en utils.js): con la fecha civil de México, no UTC.
+  const hoyISO = new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+  const hoy = new Date(hoyISO + "T12:00:00");
   const esHoySabado = hoy.getDay() === 6;
   const semanaActual = lunesDeSemanaLocal(hoyISO);
 
@@ -207,11 +212,23 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
     const mapa = {};
     clientesRuta.forEach((c) => {
       const diaNorm = normalizarTexto(c.dia);
-      const diaMatch = DIAS_SEMANA.find((d) => normalizarTexto(d.nombre) === diaNorm);
-      if (!diaMatch) return;
-      const clave = `${c.ruta}|${diaMatch.nombre}`;
-      if (!mapa[clave]) mapa[clave] = [];
-      mapa[clave].push(c);
+      // El campo `dia` puede traer más de un nombre de día (ej.
+      // "LUNES,JUEVES" para clientes visitados 2x/semana) y/o texto extra
+      // pegado (ej. "MARTES, UNICA" con la frecuencia) — antes se exigía
+      // que el campo fuera EXACTAMENTE igual al nombre de un día, así que
+      // cualquier variante así hacía que el cliente se cayera de TODOS
+      // los días (no aparecía en ningún lado) o, según el orden de
+      // comparación, se agrupara bajo el día equivocado. Ahora se busca
+      // cada nombre de día como texto contenido dentro del campo (los 6
+      // nombres de día no se confunden entre sí como substring), y el
+      // cliente se asigna a TODOS los días que encuentre — no solo al
+      // primero.
+      const diasEncontrados = DIAS_SEMANA.filter((d) => diaNorm.includes(normalizarTexto(d.nombre)));
+      diasEncontrados.forEach((diaMatch) => {
+        const clave = `${c.ruta}|${diaMatch.nombre}`;
+        if (!mapa[clave]) mapa[clave] = [];
+        mapa[clave].push(c);
+      });
     });
     return mapa;
   }, [clientesRuta]);
@@ -252,14 +269,21 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
           if (info.visitadoManual) return; // descartado a mano, resuelto sin nota
           const fechasVisitado = info.fechasVisitado || [];
           if (fechasVisitado.includes(d.fecha)) return; // visitado justo su día -> resuelto sin nota
+          // ⚠️ Antes, si el cliente aparecía visitado CUALQUIER otro día de
+          // la semana, se quitaba de "pendientes" de este día (solo se
+          // anotaba en `fueraDeDia`) — eso contradice el diseño original
+          // ("cada día descuenta contra el listado de ESE día específico")
+          // y hacía que pareciera que ya se había visitado a todos con que
+          // aparecieran en el reporte de CUALQUIER día. Visitarlo otro día
+          // no resuelve la visita que le tocaba HOY — sigue pendiente para
+          // este día; que también se haya visitado otro día se deja nada
+          // más como nota informativa para Staff (fueraDeDia), sin sacarlo
+          // de pendientes.
+          pendientes.push(c);
           if (fechasVisitado.length > 0) {
-            // Sí se visitó, pero otro día — se descuenta de "sin visita",
-            // pero se deja la observación de que no fue el día que le tocaba.
             const otraFecha = [...fechasVisitado].sort().find((f) => f !== d.fecha) || fechasVisitado[0];
             fueraDeDia.push({ ...c, fechaVisitaReal: otraFecha, diaVisitaReal: nombreDiaDeFecha(otraFecha, semana) });
-            return;
           }
-          pendientes.push(c); // nunca visitado esta semana
         });
         return { dia: d.nombre, fecha: d.fecha, totalAsignados: asignados.length, pendientes, fueraDeDia };
       });
@@ -268,8 +292,49 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
     });
   }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, diasCompletos, semana, rutasVisibles]);
 
-  const rutasConPendientes = tablero.filter((r) => r.totalPendientesRuta > 0).sort((a, b) => b.totalPendientesRuta - a.totalPendientesRuta);
-  const totalPendientes = tablero.reduce((s, r) => s + r.totalPendientesRuta, 0);
+  // Total de la SEMANA (pestaña "Total semana" y los KPIs de arriba): a
+  // diferencia de cada pestaña de día (que exige que la visita haya sido
+  // JUSTO ese día — ver `tablero` arriba), aquí sí cuenta como resuelto
+  // que se haya visitado CUALQUIER día de la semana, sin importar cuál —
+  // es el balance final: "¿a este cliente ya lo vieron esta semana o no?".
+  // Se deduplica por cliente (uno con 2 días asignados en la semana solo
+  // cuenta una vez).
+  const tableroSemanal = useMemo(() => {
+    if (!clientesRuta) return [];
+    return rutasVisibles.map((ruta) => {
+      const codigoRuta = ruta.replace("RUTA ", "");
+      const { porCodigo, porNombre } = visitasSemanaNorm[`${ruta}|${semana}`] || { porCodigo: {}, porNombre: {} };
+      const vistos = new Set();
+      const pendientesSemana = [];
+      let totalAsignadosSemana = 0;
+      diasCompletos.forEach((d) => {
+        const asignados = clientesRutaPorRutaYDia[`${codigoRuta}|${d.nombre}`] || [];
+        asignados.forEach((c) => {
+          const idCliente = normalizarCodigo(c.codigo_cliente) || normalizarTexto(c.nombre);
+          if (vistos.has(idCliente)) return;
+          vistos.add(idCliente);
+          totalAsignadosSemana++;
+          const codigoClienteNorm = normalizarCodigo(c.codigo_cliente);
+          const info = (codigoClienteNorm && porCodigo[codigoClienteNorm]) || porNombre[normalizarTexto(c.nombre)];
+          if (!info) { pendientesSemana.push(c); return; } // nunca apareció en ningún reporte
+          if (info.visitadoManual) return; // descartado a mano
+          const fechasVisitado = info.fechasVisitado || [];
+          if (fechasVisitado.length > 0) return; // se visitó algún día de la semana -> resuelto para el total
+          pendientesSemana.push(c); // nunca visitado ningún día
+        });
+      });
+      return { ruta, pendientesSemana, totalAsignadosSemana };
+    });
+  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, diasCompletos, semana, rutasVisibles]);
+
+  const pendientesSemanaPorRuta = useMemo(() => {
+    const mapa = {};
+    tableroSemanal.forEach((r) => { mapa[r.ruta] = { pendientes: r.pendientesSemana, totalAsignados: r.totalAsignadosSemana }; });
+    return mapa;
+  }, [tableroSemanal]);
+
+  const rutasConPendientes = tableroSemanal.filter((r) => r.pendientesSemana.length > 0).sort((a, b) => b.pendientesSemana.length - a.pendientesSemana.length);
+  const totalPendientes = tableroSemanal.reduce((s, r) => s + r.pendientesSemana.length, 0);
 
   const entradasCobertura = useMemo(
     () => rutasVisibles.map((ruta) => ({ ruta, fechasSubidas: (visitasSemana[`${ruta}|${semana}`]?.fechasMesaControl) || [] })),
@@ -415,7 +480,18 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
               {esVendedor ? "No tienes clientes sin visita esta semana." : "Ninguna ruta tiene clientes sin visita esta semana."}
             </div>
           ) : (() => {
-            const diasFiltrados = (r) => pestanaDia === "Total semana" ? r.dias : r.dias.filter((d) => d.dia === pestanaDia);
+            // La pestaña "Total semana" NO es simplemente juntar los días
+            // (eso duplicaría/mostraría distinto al KPI de arriba, que ya
+            // usa el criterio semanal deduplicado) — arma un único bloque
+            // "día" sintético con la lista semanal ya calculada arriba.
+            const diasFiltrados = (r) => {
+              if (pestanaDia === "Total semana") {
+                const info = pendientesSemanaPorRuta[r.ruta] || { pendientes: [], totalAsignados: 0 };
+                if (info.pendientes.length === 0) return [];
+                return [{ dia: "Total semana", fecha: null, totalAsignados: info.totalAsignados, pendientes: info.pendientes, fueraDeDia: [] }];
+              }
+              return r.dias.filter((d) => d.dia === pestanaDia);
+            };
             const rutasBase = esVendedor ? tablero : tablero;
             const rutasParaMostrar = rutasBase
               .map((r) => ({ ...r, diasVisibles: diasFiltrados(r).filter((d) => d.pendientes.length > 0 || (!esVendedor && d.fueraDeDia.length > 0)) }))
@@ -457,7 +533,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                         {d.pendientes.length > 0 && (
                           <>
                             <div style={{ fontSize: 12, fontWeight: 700, color: T.primary, marginBottom: 6 }}>
-                              {d.dia} ({d.fecha}) · {d.pendientes.length} de {d.totalAsignados} sin visita
+                              {d.dia}{d.fecha ? ` (${d.fecha})` : ""} · {d.pendientes.length} de {d.totalAsignados} sin visita
                             </div>
                             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: (!esVendedor && d.fueraDeDia.length > 0) ? 8 : 0 }}>
                               {d.pendientes.map((c) => {
