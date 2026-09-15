@@ -3251,7 +3251,14 @@ export default function App() {
   }
 
   const [visitasNurStatus, setVisitasNurStatus] = useState("");
-  async function handleVisitasNurTexto(texto) {
+  // Antes esto SIEMPRE archivaba el reporte bajo la fecha en que se subía
+  // (fechaHoyISO()) — si alguien pegaba un reporte que en realidad era de
+  // una fecha/semana distinta (ej. un catch-up de la semana pasada), se
+  // guardaba de todos modos bajo la semana de HOY, mezclándose con datos
+  // reales de la semana actual sin forma de deshacerlo limpio. Ahora acepta
+  // una fecha explícita (`fechaOverride`, viene del selector en StaffView);
+  // si no se pasa ninguna, sigue usando hoy por default.
+  async function handleVisitasNurTexto(texto, fechaOverride) {
     try {
       const registros = parseVisitasNurRaw(texto);
       if (registros.length === 0) {
@@ -3259,7 +3266,7 @@ export default function App() {
         return;
       }
       const sinRuta = registros.filter((r) => !r.rutaCodigo).length;
-      const fechaCarga = fechaHoyISO();
+      const fechaCarga = fechaOverride || fechaHoyISO();
       await persistParcialFresco((fresca) => {
         const visitasSemanaMerged = podarVisitasSemanaAntiguas(
           fusionarVisitasSemanaDesdeNur(fresca.visitasSemana || {}, registros, fechaCarga)
