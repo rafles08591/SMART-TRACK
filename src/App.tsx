@@ -262,13 +262,31 @@ function fusionarVisitasSemana(historialActual, registrosNuevos) {
 
 // Evita que `visitasSemana` crezca para siempre — conserva solo las
 // últimas ~8 semanas.
-function podarVisitasSemanaAntiguas(visitasSemana, semanasAConservar = 8) {
+// Evita que `visitasSemana` crezca para siempre — conserva solo las
+// últimas ~4 semanas (antes eran 8; se redujo porque, junto con `otcDia`,
+// era uno de los dos campos más pesados de todo el blob — 2.33 MB de
+// ~6.2 MB totales, confirmado en Supabase — y como CADA guardado de
+// CUALQUIER pantalla reenvía el blob completo, entre más pesado más
+// lento se guarda todo, no solo lo relacionado a visitas). "Sin Visita"
+// solo necesita historial reciente para tener sentido de todos modos.
+function podarVisitasSemanaAntiguas(visitasSemana, semanasAConservar = 4) {
   const limite = sumarDiasISO(lunesDeSemana(fechaHoyISO()), -7 * semanasAConservar);
   const podado = {};
   Object.entries(visitasSemana || {}).forEach(([clave, v]) => {
     if (v.semanaInicio >= limite) podado[clave] = v;
   });
   return podado;
+}
+
+// `otcDia` se acumula por fecha A PROPÓSITO (para que los rallies
+// multi-día sumen todo su periodo de vigencia) y nunca se borraba nada —
+// con el tiempo se volvió el campo más pesado de todo el blob (2.85 MB de
+// los ~6.2 MB totales, confirmado en Supabase), haciendo cada guardado de
+// CUALQUIER pantalla más lento, no solo el de OTC. Se conservan ~30 días
+// y se poda lo más viejo que eso.
+function podarOtcDiaAntiguo(otcDia, diasAConservar = 30) {
+  const limite = sumarDiasISO(fechaHoyISO(), -diasAConservar);
+  return (otcDia || []).filter((r) => !r.fecha || r.fecha >= limite);
 }
 
 // Cruce automático "sin visita" contra Avance del Día: si un cliente tuvo
@@ -381,7 +399,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "6.1";
+const BUILD_VERSION = "6.2";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -2935,7 +2953,7 @@ export default function App() {
     const fechasNuevas = new Set(registros.map((r) => r.fecha).filter(Boolean));
     await persistParcialFresco((fresca) => {
       const anteriores = (fresca.otcDia || []).filter((r) => !fechasNuevas.has(r.fecha));
-      return { otcDia: [...anteriores, ...registros] };
+      return { otcDia: podarOtcDiaAntiguo([...anteriores, ...registros]) };
     });
     await registrarUltimaCarga("otcDia");
     const fechas = [...fechasNuevas].sort();
