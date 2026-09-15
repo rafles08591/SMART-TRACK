@@ -151,10 +151,38 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const semana = semanasDisponibles.includes(semanaSeleccionada) ? semanaSeleccionada : semanaActual;
   const esSemanaActual = semana === semanaActual;
 
+  // ⚠️ Antes `semanaSeleccionada` se fijaba una sola vez al abrir la
+  // pantalla y nunca se volvía a tocar — si alguien la dejaba abierta
+  // cruzando el fin de semana (o el sábado tarde), se quedaba viendo la
+  // semana anterior para siempre, porque esa semana pasada seguía siendo
+  // una opción "válida" del selector (`semanasDisponibles.includes(...)`
+  // seguía dando true). Este efecto detecta cuándo la semana actual de
+  // verdad avanzó mientras la pantalla seguía abierta y, SOLO si seguían
+  // viendo "esta semana" por default (no si habían elegido a propósito
+  // otra semana pasada), la avanza sola a la nueva semana actual.
+  const semanaActualRef = useRef(semanaActual);
+  useEffect(() => {
+    if (semanaActualRef.current !== semanaActual) {
+      setSemanaSeleccionada((actual) => (actual === semanaActualRef.current ? semanaActual : actual));
+      semanaActualRef.current = semanaActual;
+    }
+  }, [semanaActual]);
+
   // Pestaña de día seleccionada en el tablero de "sin visita": por default
   // el día de hoy (si es lunes-sábado), o "Total semana" el domingo.
   const nombreDiaHoy = DIAS_SEMANA[hoy.getDay() === 0 ? -1 : hoy.getDay() - 1]?.nombre || null;
   const [pestanaDia, setPestanaDia] = useState(nombreDiaHoy || "Total semana");
+  // Mismo problema que con la semana: si la pantalla se queda abierta de
+  // un día para otro, "hoy" avanza pero la pestaña seleccionada no lo hacía
+  // sola. Se avanza automáticamente solo si seguían en la pestaña de "hoy"
+  // por default (no si habían elegido otro día a propósito).
+  const nombreDiaHoyRef = useRef(nombreDiaHoy);
+  useEffect(() => {
+    if (nombreDiaHoyRef.current !== nombreDiaHoy) {
+      setPestanaDia((actual) => (actual === (nombreDiaHoyRef.current || "Total semana") ? (nombreDiaHoy || "Total semana") : actual));
+      nombreDiaHoyRef.current = nombreDiaHoy;
+    }
+  }, [nombreDiaHoy]);
 
   const [guardandoCliente, setGuardandoCliente] = useState(null);
   const puedeMarcarManual = esVendedor && esSemanaActual && esHoySabado && !!persistFresco;
