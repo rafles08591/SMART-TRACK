@@ -293,7 +293,16 @@ export function defaultData() {
 }
 
 export function fechaHoyISO() {
-  return new Date().toLocaleDateString("en-CA");
+  // ⚠️ Antes esto usaba la hora LOCAL del dispositivo (sin fijar zona
+  // horaria) — a diferencia de `todayISO()`, que sí fija explícitamente
+  // México. Si algún dispositivo tenía una hora/zona horaria distinta
+  // (o cruzaba un límite de día de forma distinta), esta función podía
+  // calcular "hoy" como un día diferente al que `todayISO()` calculaba en
+  // ESE MISMO INSTANTE — y como esto se usa para decidir a qué semana
+  // pertenece cada visita (ej. en el cruce con el reporte NUR), un
+  // desfase así podía guardar información bajo la clave de la semana
+  // equivocada. Ahora usa la misma fuente que `todayISO()`.
+  return todayISO();
 }
 
 export function lunesDeSemana(fechaISO) {
