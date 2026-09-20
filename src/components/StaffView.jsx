@@ -51,7 +51,6 @@ import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
-import MapaClientesView from "./MapaClientesView";
 
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, bloqueoPendienteCargas, onReintentarBloqueoCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets, ventasPeriodo }) {
   const esSupervisor2 = puesto === "supervisor2";
@@ -658,8 +657,6 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
           ) : objTab === "scorecard" ? (
             <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
-          ) : objTab === "mapa_clientes" ? (
-            <MapaClientesView data={data} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
