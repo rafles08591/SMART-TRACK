@@ -113,6 +113,8 @@ function statusOverride(status) {
 
 const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, onSelect }) {
   const [pressed, setPressed] = useState(false);
+  // Notification tiles (badge === true) get a much more intense blink than a plain "pulse" status.
+  const intense = pulse && badge;
 
   return (
     <button
@@ -133,6 +135,7 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         transform: pressed ? "scale(0.93)" : "scale(1)",
         transition: "transform .12s ease, border-color .2s ease",
         touchAction: "manipulation",
+        animation: intense ? "neonShake 2.4s ease-in-out infinite" : undefined,
       }}
     >
       {pulse && (
@@ -140,19 +143,25 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
           aria-hidden
           style={{
             position: "absolute", inset: -1, borderRadius: 14,
-            boxShadow: `0 0 16px -2px ${color}`,
-            animation: "neonPulse 2.1s ease-in-out infinite",
+            boxShadow: intense ? `0 0 26px 2px ${color}` : `0 0 16px -2px ${color}`,
+            animation: intense
+              ? "neonPulseIntense 0.9s ease-in-out infinite"
+              : "neonPulse 2.1s ease-in-out infinite",
             pointerEvents: "none",
-            willChange: "opacity",
+            willChange: "opacity, box-shadow",
           }}
         />
       )}
 
       {badge && (
-        <span style={{
-          position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
-          background: color, boxShadow: `0 0 6px ${color}`,
-        }} />
+        <span
+          aria-hidden
+          style={{
+            position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
+            background: color, boxShadow: `0 0 6px ${color}`,
+            animation: "badgeBlink 0.9s ease-in-out infinite",
+          }}
+        />
       )}
 
       <span style={{
@@ -217,6 +226,20 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
         @keyframes neonPulse {
           0%, 100% { opacity: 0.25; }
           50% { opacity: 1; }
+        }
+        @keyframes neonPulseIntense {
+          0%, 100% { opacity: 0.15; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.035); }
+        }
+        @keyframes neonShake {
+          0%, 92%, 100% { transform: scale(1); }
+          94% { transform: scale(1.03); }
+          96% { transform: scale(0.99); }
+          98% { transform: scale(1.03); }
+        }
+        @keyframes badgeBlink {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.35; transform: scale(1.25); }
         }
       `}</style>
     </div>
