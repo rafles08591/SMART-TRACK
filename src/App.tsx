@@ -23,7 +23,17 @@ import {
   normalizarDia, creditosPendientes,
 } from "./utils";
 
-import { parseVisitasNurRaw } from "./visitasNurParser";
+import { parseVisitasNurRaw, RUTA_POR_NUR } from "./visitasNurParser";
+
+// NUR de "medio mayoreo": no pertenece a ninguna ruta fija (el texto de
+// "Vendedor" que trae junto varía de fila a fila — a veces J201, a veces
+// J207 — así que NO es confiable para saber de quién es la venta), por eso
+// sus ventas se llevan aparte: no se le acreditan a ningún vendedor ni
+// cuentan para su objetivo individual, pero sí deben sumar al total
+// general de OPEN/CHAMPIONS/MAX. Ver convertirFilasVentasPeriodo() y el
+// cálculo de `stats` más abajo.
+const NUR_MEDIO_MAYOREO = "802878M050";
+const VENDEDOR_MEDIO_MAYOREO = "MEDIO MAYOREO";
 
 import { supabase } from "./supabaseClient";
 import { paquetesACajetillas, infoProducto } from "./productosFacturables";
@@ -399,7 +409,7 @@ import FacturasAdminView from "./components/FacturasAdminView";
 // version.json vive en /public (se sirve tal cual, sin hashear) y se
 // actualiza cada vez que se hace un deploy nuevo — solo hay que cambiar
 // el valor de "build" ahí (por ejemplo a la fecha/hora del deploy).
-const BUILD_VERSION = "6.2";
+const BUILD_VERSION = "6.3";
 const INTERVALO_CHEQUEO_VERSION_MS = 3 * 60 * 1000; // cada 3 minutos
 
 function useChequeoDeVersion() {
@@ -1224,26 +1234,57 @@ export default function App() {
       return { ...v, volumenVentas, paquetesTotal, visitasEfectivas, volumenEstrategicas, marcasOpen, marcasChampions, champVendido, marcaOtc, ventaOtcSemanal, tasaComisionOtc, comisionOtc, hoy, tabs, proyeccion, ventaPorDia, ventaPorDiaUnidades };
     });
 
+    // ---- Ventas de "medio mayoreo" (NUR 802878M050) ----
+    // A propósito NO se agregan a `porVendedor` (así no se le acreditan a
+    // ninguna ruta ni cuentan para su objetivo individual), pero sí se
+    // suman por separado a los totales de OPEN/CHAMPIONS/MAX más abajo —
+    // si no, esas ventas simplemente desaparecerían de los reportes.
+    const ventasMedioMayoreo = ventas.filter(
+      (r) => r.vendedor === VENDEDOR_MEDIO_MAYOREO && r.fecha >= periodo.inicio && r.fecha <= periodo.fin
+    );
+    const marcasOpenMedioMayoreo = {};
+    MARCAS_OPEN.forEach((m) => {
+      marcasOpenMedioMayoreo[m.key] = ventasMedioMayoreo
+        .filter((r) => MARCA_KEYS[r.marca.trim().toLowerCase()] === m.key)
+        .reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+    });
+    // Igual que paquetesTotal por vendedor: TODOS los paquetes del periodo,
+    // no solo los de las 4 marcas núcleo — para que el avance general de
+    // MAX/OPEN/CHAMPIONS (tabs.*.avance) sume exactamente lo mismo que
+    // aparece repartido en marcasOpenMedioMayoreo + lo que quede fuera de
+    // esas 4 marcas.
+    const paquetesMedioMayoreo = ventasMedioMayoreo.reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+    const extraChampBlossSummMedioMayoreo = ventasMedioMayoreo
+      .filter((r) => r.marca.trim().toLowerCase() === MARCA_CHAM_EXTRA_BLOSS_SUMM)
+      .reduce((s, r) => s + (Number(r.paquetes) || 0), 0);
+    const marcasChampionsMedioMayoreo = {
+      champIce: marcasOpenMedioMayoreo.iceMix,
+      champBlossSumm: marcasOpenMedioMayoreo.blossMix + marcasOpenMedioMayoreo.summMix + extraChampBlossSummMedioMayoreo,
+      champFaronet: marcasOpenMedioMayoreo.faronet,
+    };
+
     const totalTabs = {};
     const totalVolumenVentas = porVendedor.reduce((s, v) => s + v.volumenVentas, 0);
-    const totalPaquetes = porVendedor.reduce((s, v) => s + v.paquetesTotal, 0);
+    const totalPaquetes = porVendedor.reduce((s, v) => s + v.paquetesTotal, 0) + paquetesMedioMayoreo;
     ["max", "open", "champions"].forEach((tabKey) => {
       const objetivo = porVendedor.reduce((s, v) => s + v.tabs[tabKey].objetivo, 0);
-      const avance = porVendedor.reduce((s, v) => s + v.tabs[tabKey].avance, 0);
+      // Medio mayoreo no tiene ruta/objetivo propio, pero su volumen sí
+      // debe sumar al avance general de estas 3 pestañas.
+      const avance = porVendedor.reduce((s, v) => s + v.tabs[tabKey].avance, 0) + paquetesMedioMayoreo;
       totalTabs[tabKey] = tabMetrics(objetivo, avance);
     });
 
     const totalMarcasOpen = {};
     MARCAS_OPEN.forEach((m) => {
       const objetivo = porVendedor.reduce((s, v) => s + v.marcasOpen[m.key].objetivo, 0);
-      const vendido = porVendedor.reduce((s, v) => s + v.marcasOpen[m.key].vendido, 0);
+      const vendido = porVendedor.reduce((s, v) => s + v.marcasOpen[m.key].vendido, 0) + marcasOpenMedioMayoreo[m.key];
       totalMarcasOpen[m.key] = buildMarca(objetivo, vendido);
     });
 
     const totalMarcasChampions = {};
     MARCAS_CHAMPIONS.forEach((m) => {
       const objetivo = porVendedor.reduce((s, v) => s + v.marcasChampions[m.key].objetivo, 0);
-      const vendido = porVendedor.reduce((s, v) => s + v.marcasChampions[m.key].vendido, 0);
+      const vendido = porVendedor.reduce((s, v) => s + v.marcasChampions[m.key].vendido, 0) + marcasChampionsMedioMayoreo[m.key];
       totalMarcasChampions[m.key] = buildMarca(objetivo, vendido);
     });
 
@@ -1305,6 +1346,14 @@ export default function App() {
       promedioComisionVendedores,
       comisionSupervisor,
       comisionGerente,
+      // Venta de "medio mayoreo" (NUR 802878M050) ya incluida arriba en
+      // marcasOpen/marcasChampions/tabs — se deja aparte también aquí para
+      // que la pantalla de OPEN la pueda mostrar como su propia fila.
+      medioMayoreo: {
+        paquetes: paquetesMedioMayoreo,
+        marcasOpen: marcasOpenMedioMayoreo,
+        marcasChampions: marcasChampionsMedioMayoreo,
+      },
     };
 
     const porDiaMapTotal = {};
@@ -2096,17 +2145,36 @@ export default function App() {
 
   // Convierte filas del reporte crudo del sistema al esquema de `ventas` (el que
   // alimenta OPEN, CHAMPIONS y MAX), para la carga acumulada del periodo.
+  //
+  // La ruta de cada venta se determina por NUR (columna "NUR", si el
+  // reporte la trae) en vez de por el texto de "Vendedor" — el texto de
+  // Vendedor puede repetirse igual para NUR distintos (una ruta puede
+  // tener más de un NUR) y para el NUR de "medio mayoreo" ese texto ni
+  // siquiera es consistente entre filas, así que no sirve para atribuir
+  // la venta. Si una fila no trae NUR reconocido (reportes viejos sin esa
+  // columna), se usa el texto de Vendedor como respaldo.
   function convertirFilasVentasPeriodo(rows) {
     const getVal = (row, name) => {
       const key = Object.keys(row).find((k) => k.trim().toLowerCase() === name.toLowerCase());
       return key !== undefined ? row[key] : "";
     };
     const registros = [];
+    const nurSinMapear = new Set();
     rows.forEach((row) => {
-      const vendedorRaw = String(getVal(row, "Vendedor") || "").trim();
-      const codigo = vendedorRaw.split(" - ")[0].trim();
-      if (!codigo) return;
-      const vendedor = `RUTA ${codigo}`;
+      const nur = String(getVal(row, "NUR") || "").trim().toUpperCase();
+
+      let vendedor;
+      if (nur === NUR_MEDIO_MAYOREO) {
+        vendedor = VENDEDOR_MEDIO_MAYOREO;
+      } else if (nur && RUTA_POR_NUR[nur]) {
+        vendedor = `RUTA ${RUTA_POR_NUR[nur]}`;
+      } else {
+        const vendedorRaw = String(getVal(row, "Vendedor") || "").trim();
+        const codigo = vendedorRaw.split(" - ")[0].trim();
+        if (!codigo) return;
+        vendedor = `RUTA ${codigo}`;
+        if (nur) nurSinMapear.add(nur);
+      }
 
       const fechaRaw = String(getVal(row, "Fecha") || "").trim();
       const datePart = fechaRaw.split(" ")[0];
@@ -2122,6 +2190,11 @@ export default function App() {
 
       registros.push({ fecha, vendedor, marca, estrategica: false, monto, paquetes, visitaEfectiva: false, cliente });
     });
+    if (nurSinMapear.size > 0) {
+      console.warn(
+        `Ventas periodo: ${nurSinMapear.size} NUR sin mapear en RUTA_POR_NUR (se usó el texto de "Vendedor" como respaldo): ${[...nurSinMapear].join(", ")}`
+      );
+    }
     return registros;
   }
 
