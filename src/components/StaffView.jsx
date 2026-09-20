@@ -52,6 +52,67 @@ import CarrerasVentas from "./CarrerasVentas";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 
+// Formatea un número de paquetes conservando 1 decimal (el resumen de
+// arriba redondea con fmt()/unidades(), pero el detalle expandible por
+// ruta necesita ver el decimal exacto).
+function decimales(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+// Tabla "POR VENDEDOR" (Avance/Resta/Necesario-día + marcas) para MAX/OPEN/
+// CHAMPIONS. Se usa dos veces (vista normal + modal de pantalla completa),
+// por eso vive como su propio componente en vez de JSX repetido inline.
+// El % de avance ahora se ve como una píldora de color (en vez de texto
+// plano) y las filas se alternan de fondo para que sea más fácil de leer
+// de un vistazo, sobre todo en la captura que se manda por WhatsApp.
+function TablaPorVendedorObjetivo({ porVendedor, objTab, objUnit, marcas, marcasSourceKey }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: (objTab === "open" || objTab === "champions") ? 760 : undefined }}>
+        <thead>
+          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+            <th style={{ padding: "10px 16px" }}>Vendedor</th>
+            <th>Avance</th>
+            <th>Resta</th>
+            <th>Necesario/día</th>
+            {marcas.map((m) => <th key={m.key}>{m.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {porVendedor.map((v, i) => {
+            const pct = v.tabs[objTab].avancePct;
+            const colorPct = metaColor(v.tabs[objTab].avance, v.tabs[objTab].objetivo);
+            const source = v[marcasSourceKey];
+            return (
+              <tr key={v.id} style={{ borderTop: "1px solid #1E2A42", background: i % 2 === 1 ? "#0E1626" : "transparent" }}>
+                <td style={{ padding: "12px 16px", fontWeight: 600 }}>
+                  {v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
+                </td>
+                <td>
+                  <span style={{
+                    display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+                    color: colorPct, background: `${colorPct}22`, border: `1px solid ${colorPct}55`,
+                  }}>
+                    {pct.toFixed(0)}%
+                  </span>
+                </td>
+                <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
+                <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
+                {marcas.map((m) => (
+                  <td key={m.key} style={{ color: metaColor(source[m.key].vendido, source[m.key].objetivo), fontVariantNumeric: "tabular-nums" }}>
+                    {unidades(source[m.key].vendido)} / {unidades(source[m.key].objetivo)}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, bloqueoPendienteCargas, onReintentarBloqueoCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets, ventasPeriodo }) {
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
@@ -83,6 +144,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   // true cuando se abrió una tarjeta del grid (DÍA, ESCALERA, MAX...) y se
   // debe mostrar esa vista a pantalla completa en vez del grid.
   const [pantallaAbierta, setPantallaAbierta] = useState(false);
+  // Detalle por ruta (con decimales) debajo del resumen de MARCAS · OPEN.
+  const [detalleOpenAbierto, setDetalleOpenAbierto] = useState(false);
   const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
   const [newName, setNewName] = useState("");
 
@@ -163,10 +226,12 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
   const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
   const [verTablaHoyCompleta, setVerTablaHoyCompleta] = useState(false);
+  const [verTablaVendedorCompleta, setVerTablaVendedorCompleta] = useState(false);
   const [pwstActualizando, setPwstActualizando] = useState(false);
   const [pwstStatus, setPwstStatus] = useState("");
   const capturaPorRutaHoy = useCapturaImagen();
   const capturaDiaCompleto = useCapturaImagen();
+  const capturaPorVendedorObj = useCapturaImagen();
 
   function addVendedor() {
     if (!newName.trim()) return;
@@ -776,6 +841,76 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               {objTab === "open" && <MarcasBreakdown titulo="MARCAS · OPEN (PAQUETES)" marcas={MARCAS_OPEN} data={stats.total.marcasOpen} />}
               {objTab === "champions" && <MarcasBreakdown titulo="MARCAS · CHAMPIONS (PAQUETES)" marcas={MARCAS_CHAMPIONS} data={stats.total.marcasChampions} />}
 
+              {objTab === "open" && (
+                <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+                  <button
+                    type="button"
+                    onClick={() => setDetalleOpenAbierto((v) => !v)}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+                      background: "none", border: "none", cursor: "pointer", padding: 0,
+                      color: "#9AA7BD", fontSize: 13, fontWeight: 700,
+                    }}
+                  >
+                    <span>DETALLE POR RUTA · OPEN (con decimales)</span>
+                    <span style={{ fontSize: 18, lineHeight: 1 }}>{detalleOpenAbierto ? "−" : "+"}</span>
+                  </button>
+
+                  {detalleOpenAbierto && (
+                    <div style={{ overflowX: "auto", marginTop: 14 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                        <thead>
+                          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
+                            <th style={{ padding: "8px 10px" }}>Ruta</th>
+                            {MARCAS_OPEN.map((m) => (
+                              <th key={m.key} style={{ padding: "8px 10px", textAlign: "right" }}>{m.label}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stats.porVendedor.map((v) => (
+                            <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
+                              <td style={{ padding: "8px 10px" }}>{v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
+                              {MARCAS_OPEN.map((m) => (
+                                <td
+                                  key={m.key}
+                                  style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: metaColor(v.marcasOpen[m.key].vendido, v.marcasOpen[m.key].objetivo) }}
+                                >
+                                  {decimales(v.marcasOpen[m.key].vendido)} / {decimales(v.marcasOpen[m.key].objetivo)}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                          {stats.total.medioMayoreo && stats.total.medioMayoreo.paquetes > 0 && (
+                            <tr style={{ borderTop: "1px solid #1E2A42" }}>
+                              <td style={{ padding: "8px 10px", color: "#F2B134" }}>MEDIO MAYOREO</td>
+                              {MARCAS_OPEN.map((m) => (
+                                <td key={m.key} style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#F2B134" }}>
+                                  {decimales(stats.total.medioMayoreo.marcasOpen[m.key])} / —
+                                </td>
+                              ))}
+                            </tr>
+                          )}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ borderTop: "2px solid #2A3852", fontWeight: 700 }}>
+                            <td style={{ padding: "8px 10px" }}>TOTAL</td>
+                            {MARCAS_OPEN.map((m) => (
+                              <td key={m.key} style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                                {decimales(stats.total.marcasOpen[m.key].vendido)} / {decimales(stats.total.marcasOpen[m.key].objetivo)}
+                              </td>
+                            ))}
+                          </tr>
+                        </tfoot>
+                      </table>
+                      <div style={{ fontSize: 11, color: "#6C7A96", marginTop: 10 }}>
+                        MEDIO MAYOREO (NUR {"802878M050"}) no tiene ruta ni objetivo propio — su venta ya está incluida en el TOTAL de arriba, pero no se le acredita a ningún vendedor.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="card" style={{ padding: 16, marginBottom: 20 }}>
                 <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTA POR DÍA (TODOS){objUnit==="units" ? " · PAQUETES" : ""}</div>
                 <div style={{ height: 200 }}>
@@ -792,42 +927,37 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               </div>
 
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>POR VENDEDOR ({OBJETIVO_TABS.find(t=>t.key===objTab).label})</div>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: (objTab === "open" || objTab === "champions") ? 760 : undefined }}>
-                    <thead>
-                      <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                        <th style={{ padding: "8px 16px" }}>Vendedor</th>
-                        <th>Avance</th>
-                        <th>Resta</th>
-                        <th>Necesario/día</th>
-                        {objTab === "open" && MARCAS_OPEN.map((m) => <th key={m.key}>{m.label}</th>)}
-                        {objTab === "champions" && MARCAS_CHAMPIONS.map((m) => <th key={m.key}>{m.label}</th>)}
-                      </tr>
-                    </thead>
-                    <tbody>
-                  {stats.porVendedor.map((v) => (
-                    <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                      <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                      <td>{v.tabs[objTab].avancePct.toFixed(0)}%</td>
-                      <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
-                      <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
-                      {objTab === "open" && MARCAS_OPEN.map((m) => (
-                        <td key={m.key} style={{ color: metaColor(v.marcasOpen[m.key].vendido, v.marcasOpen[m.key].objetivo) }}>
-                          {unidades(v.marcasOpen[m.key].vendido)} / {unidades(v.marcasOpen[m.key].objetivo)}
-                        </td>
-                      ))}
-                      {objTab === "champions" && MARCAS_CHAMPIONS.map((m) => (
-                        <td key={m.key} style={{ color: metaColor(v.marcasChampions[m.key].vendido, v.marcasChampions[m.key].objetivo) }}>
-                          {unidades(v.marcasChampions[m.key].vendido)} / {unidades(v.marcasChampions[m.key].objetivo)}
-                        </td>
-                      ))}
-                    </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px 0", flexWrap: "wrap", gap: 8 }}>
+                  <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>POR VENDEDOR ({OBJETIVO_TABS.find(t=>t.key===objTab).label})</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <BotonGuardarImagen captura={capturaPorVendedorObj} nombreArchivo={`por_vendedor_${objTab}_${todayISO()}.png`} etiqueta="Guardar / enviar" />
+                    <button className="btn-ghost" onClick={() => setVerTablaVendedorCompleta(true)}>
+                      Ver tabla completa (pantalla)
+                    </button>
+                  </div>
+                </div>
+                <div ref={capturaPorVendedorObj.capturaRef} style={{ padding: 16 }}>
+                  <TablaPorVendedorObjetivo
+                    porVendedor={stats.porVendedor}
+                    objTab={objTab}
+                    objUnit={objUnit}
+                    marcas={objTab === "open" ? MARCAS_OPEN : objTab === "champions" ? MARCAS_CHAMPIONS : []}
+                    marcasSourceKey={objTab === "champions" ? "marcasChampions" : "marcasOpen"}
+                  />
                 </div>
               </div>
+
+              {verTablaVendedorCompleta && (
+                <ModalTablaCompleta titulo={`POR VENDEDOR (${OBJETIVO_TABS.find(t=>t.key===objTab).label})`} onClose={() => setVerTablaVendedorCompleta(false)}>
+                  <TablaPorVendedorObjetivo
+                    porVendedor={stats.porVendedor}
+                    objTab={objTab}
+                    objUnit={objUnit}
+                    marcas={objTab === "open" ? MARCAS_OPEN : objTab === "champions" ? MARCAS_CHAMPIONS : []}
+                    marcasSourceKey={objTab === "champions" ? "marcasChampions" : "marcasOpen"}
+                  />
+                </ModalTablaCompleta>
+              )}
             </>
           )}
             </SwipeBackScreen>
@@ -1106,7 +1236,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               <Trash2 size={14} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Borrar todo
             </button>
             <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
-            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado)." />
+            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas NUR, Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado). Si trae NUR, se usa para saber la ruta real — sobre todo importante en medio mayoreo (NUR 802878M050)." />
             {ventasPeriodoStatus && (
               <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: ventasPeriodoStatus.startsWith("Periodo actualizado") ? "#3DDC97" : "#FF6B6B" }}>
                 {ventasPeriodoStatus.startsWith("Periodo actualizado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {ventasPeriodoStatus}
