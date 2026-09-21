@@ -67,6 +67,14 @@ function decimales(n) {
 // plano) y las filas se alternan de fondo para que sea más fácil de leer
 // de un vistazo, sobre todo en la captura que se manda por WhatsApp.
 function TablaPorVendedorObjetivo({ porVendedor, objTab, objUnit, marcas, marcasSourceKey }) {
+  // Qué ruta está expandida (una a la vez). Tocar el renglón de una ruta
+  // despliega, marca por marca, el vendido exacto (con decimales — 0.5
+  // paq. no se pierde como pasa con unidades()/fmt() que redondean),
+  // objetivo, resta y cuánto necesita vender ese día por marca — no solo
+  // el "Necesario/día" agregado que ya se veía arriba.
+  const [expandedId, setExpandedId] = useState(null);
+  const expandible = marcas.length > 0;
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: (objTab === "open" || objTab === "champions") ? 760 : undefined }}>
@@ -84,27 +92,72 @@ function TablaPorVendedorObjetivo({ porVendedor, objTab, objUnit, marcas, marcas
             const pct = v.tabs[objTab].avancePct;
             const colorPct = metaColor(v.tabs[objTab].avance, v.tabs[objTab].objetivo);
             const source = v[marcasSourceKey];
+            const abierto = expandedId === v.id;
             return (
-              <tr key={v.id} style={{ borderTop: "1px solid #1E2A42", background: i % 2 === 1 ? "#0E1626" : "transparent" }}>
-                <td style={{ padding: "12px 16px", fontWeight: 600 }}>
-                  {v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
-                </td>
-                <td>
-                  <span style={{
-                    display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-                    color: colorPct, background: `${colorPct}22`, border: `1px solid ${colorPct}55`,
-                  }}>
-                    {pct.toFixed(0)}%
-                  </span>
-                </td>
-                <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
-                <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
-                {marcas.map((m) => (
-                  <td key={m.key} style={{ color: metaColor(source[m.key].vendido, source[m.key].objetivo), fontVariantNumeric: "tabular-nums" }}>
-                    {unidades(source[m.key].vendido)} / {unidades(source[m.key].objetivo)}
+              <React.Fragment key={v.id}>
+                <tr
+                  onClick={expandible ? () => setExpandedId(abierto ? null : v.id) : undefined}
+                  style={{
+                    borderTop: "1px solid #1E2A42", background: i % 2 === 1 ? "#0E1626" : "transparent",
+                    cursor: expandible ? "pointer" : "default",
+                  }}
+                >
+                  <td style={{ padding: "12px 16px", fontWeight: 600 }}>
+                    {expandible && (
+                      <span style={{
+                        display: "inline-block", width: 12, marginRight: 4, color: "#6C7A96",
+                        transform: abierto ? "rotate(90deg)" : "none", transition: "transform .15s ease",
+                      }}>
+                        ›
+                      </span>
+                    )}
+                    {v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
                   </td>
-                ))}
-              </tr>
+                  <td>
+                    <span style={{
+                      display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+                      color: colorPct, background: `${colorPct}22`, border: `1px solid ${colorPct}55`,
+                    }}>
+                      {pct.toFixed(0)}%
+                    </span>
+                  </td>
+                  <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
+                  <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
+                  {marcas.map((m) => (
+                    <td key={m.key} style={{ color: metaColor(source[m.key].vendido, source[m.key].objetivo), fontVariantNumeric: "tabular-nums" }}>
+                      {unidades(source[m.key].vendido)} / {unidades(source[m.key].objetivo)}
+                    </td>
+                  ))}
+                </tr>
+
+                {expandible && abierto && (
+                  <tr style={{ background: "#0B121F" }}>
+                    <td colSpan={4 + marcas.length} style={{ padding: "2px 16px 18px" }}>
+                      <div style={{ fontSize: 11, color: "#6C7A96", margin: "8px 0 10px" }}>
+                        DETALLE POR MARCA · {v.name.replace("RUTA ", "")} (con decimales)
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+                        {marcas.map((m) => {
+                          const d = source[m.key];
+                          const color = metaColor(d.vendido, d.objetivo);
+                          return (
+                            <div key={m.key} style={{ border: `1px solid ${color}40`, borderRadius: 10, padding: "10px 12px", background: `${color}10` }}>
+                              <div style={{ fontSize: 11, color: "#9AA7BD", fontWeight: 700, marginBottom: 6 }}>{m.label}</div>
+                              <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
+                                {decimales(d.vendido)} <span style={{ fontWeight: 400, fontSize: 12, color: "#9AA7BD" }}>/ {decimales(d.objetivo)} paq.</span>
+                              </div>
+                              <div style={{ fontSize: 11.5, color: "#9AA7BD", marginTop: 8, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                                <span>Resta: <b style={{ color: "#E8EDF5" }}>{decimales(d.restaPorVender)}</b></span>
+                                <span>Por día: <b style={{ color: "#E8EDF5" }}>{decimales(d.ventaPorDiaNecesaria)}</b></span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             );
           })}
         </tbody>
