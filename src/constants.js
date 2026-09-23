@@ -12,7 +12,7 @@ export const NOMBRES = {
   "RUTA J202": "Riqui Martín",
   "RUTA J203": "Ana Paola",
   "RUTA J204": "Noema Natalia",
-  "RUTA J205": "Manuel",
+  "RUTA J205": "Alejandro Escalera",
   "RUTA J206": "Selene",
   "RUTA J207": "Alfredo Juárez",
   "SUPERVISOR-1": "Christian Velasco",
