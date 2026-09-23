@@ -28,6 +28,7 @@ export const OBJETIVO_TABS = [
   { key: "mesa", label: "MESA DE CONTROL", unit: "special" },
   { key: "carreras", label: "CARRERA", unit: null },
   { key: "scorecard", label: "SCORECARD SEMANAL", unit: "special" },
+  { key: "mural_campeones", label: "MURAL DE CAMPEONES", unit: "special" },
   { key: "max", label: "MAX", unit: "units" },
   { key: "open", label: "OPEN", unit: "units" },
   { key: "champions", label: "CHAMPIONS", unit: "units" },
@@ -102,6 +103,20 @@ export const MARCAS_DIA = [
   { key: "blossMix", label: "BLOSSOM MIX" },
   { key: "summMix", label: "SUMMER MIX" },
   { key: "faronet", label: "FARONET" },
+];
+
+// Áreas fijas del "Mural de Campeones" (empleado/vendedor del mes). No
+// todas las áreas tienen ganador cada mes (Ventas casi siempre sí; el
+// resto puede que no) — por eso cada área se activa/desactiva por
+// separado en MuralCampeonesView, en vez de forzar una tarjeta vacía.
+export const AREAS_MURAL_CAMPEONES = [
+  { key: "ventas", label: "VENTAS" },
+  { key: "administracion", label: "ADMINISTRACIÓN" },
+  { key: "liquidacion", label: "LIQUIDACIÓN" },
+  { key: "almacen", label: "ALMACÉN" },
+  { key: "merch", label: "MERCH" },
+  { key: "supervisor_ventas", label: "SUPERVISOR VENTAS" },
+  { key: "supervisor_merch", label: "SUPERVISOR MERCH" },
 ];
 
 export const UMBRAL_BAJO_DESEMPENO = 0.5;
