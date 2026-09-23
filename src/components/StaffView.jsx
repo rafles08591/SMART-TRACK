@@ -51,6 +51,7 @@ import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
+import MuralCampeonesView from "./MuralCampeonesView";
 
 // Formatea un número de paquetes conservando 1 decimal (el resumen de
 // arriba redondea con fmt()/unidades(), pero el detalle expandible por
@@ -450,7 +451,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
                   ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
                   : esSupervisor2
-                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard"].includes(t.key))
+                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
@@ -775,6 +776,8 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
           ) : objTab === "scorecard" ? (
             <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
+          ) : objTab === "mural_campeones" ? (
+            <MuralCampeonesView puesto={puesto} staffUsername={staffUsername} />
           ) : objTab === "pwst" ? (
             <div className="card" style={{ padding: 30, textAlign: "center" }}>
               <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
