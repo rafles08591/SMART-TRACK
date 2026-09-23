@@ -1,0 +1,363 @@
+// @ts-nocheck
+/* =====================================================================
+   MuralCampeonesView — "empleado/vendedor del mes" por área. Cada área
+   (Ventas, Administración, Liquidación, Almacén, Merch, Supervisor
+   Ventas, Supervisor Merch) puede tener un ganador distinto cada mes,
+   pero no todas las áreas tienen ganador SIEMPRE — Ventas casi siempre
+   sí, las demás puede que sí o puede que no. Por eso cada registro tiene
+   un flag "activo": cuando está apagado (o no existe registro para el
+   periodo actual), esa área simplemente no aparece en el mural para el
+   staff normal, en vez de mostrar una tarjeta vacía. Solo GERENTE ve el
+   botón para subir/cambiar foto y activar/desactivar cada área.
+
+   Se guarda un registro por (área, periodo) — periodo = "YYYY-MM" — así
+   queda historial: cada área puede ver quién ganó en meses anteriores
+   (el histórico siempre muestra los periodos pasados, sin importar el
+   flag "activo" — ese flag solo controla si la tarjeta del MES ACTUAL se
+   ve o se oculta).
+
+   Igual que "Mi Fondo" (FondoPersonalizado.jsx), la foto se sube a
+   Supabase Storage y solo se guarda la URL pública en la tabla.
+
+   SQL necesario en Supabase (una sola vez):
+
+     insert into storage.buckets (id, name, public)
+     values ('mural_campeones', 'mural_campeones', true)
+     on conflict (id) do nothing;
+
+     create policy "Cualquiera puede ver mural" on storage.objects
+       for select using (bucket_id = 'mural_campeones');
+     create policy "Cualquiera puede subir mural" on storage.objects
+       for insert with check (bucket_id = 'mural_campeones');
+     create policy "Cualquiera puede actualizar mural" on storage.objects
+       for update using (bucket_id = 'mural_campeones');
+     create policy "Cualquiera puede borrar mural" on storage.objects
+       for delete using (bucket_id = 'mural_campeones');
+
+     create table if not exists mural_campeones_ganadores (
+       area text not null,
+       periodo text not null,
+       nombre text not null default '',
+       url text,
+       activo boolean not null default true,
+       actualizado_por text,
+       actualizado_en timestamptz not null default now(),
+       primary key (area, periodo)
+     );
+     alter table mural_campeones_ganadores enable row level security;
+     create policy "permitir todo por ahora" on mural_campeones_ganadores
+       for all using (true) with check (true);
+
+   Cómo se usa (en StaffView.jsx, dentro de la rama de la pestaña):
+
+     {objTab === "mural_campeones" && (
+       <MuralCampeonesView puesto={puesto} staffUsername={staffUsername} />
+     )}
+===================================================================== */
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Upload, ChevronDown, ChevronUp, Crown } from "lucide-react";
+import { supabase } from "../supabaseClient";
+import { AREAS_MURAL_CAMPEONES } from "../constants";
+
+const BUCKET = "mural_campeones";
+const TABLA = "mural_campeones_ganadores";
+
+function periodoActualISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function etiquetaPeriodo(periodo) {
+  const [y, m] = String(periodo || "").split("-");
+  const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+  const idx = Number(m) - 1;
+  return `${meses[idx] || m} ${y}`;
+}
+
+export default function MuralCampeonesView({ puesto, staffUsername }) {
+  const esGerente = puesto === "gerente";
+  const periodoActual = periodoActualISO();
+
+  const [registros, setRegistros] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [historialAbierto, setHistorialAbierto] = useState(null); // area key o null
+  const [editando, setEditando] = useState(null); // area key o null
+
+  useEffect(() => {
+    let activo = true;
+    supabase
+      .from(TABLA)
+      .select("*")
+      .order("periodo", { ascending: false })
+      .then(({ data, error }) => {
+        if (!activo) return;
+        if (error) {
+          console.warn("No se pudo cargar el Mural de Campeones:", error);
+          setCargando(false);
+          return;
+        }
+        setRegistros(data || []);
+        setCargando(false);
+      });
+    return () => { activo = false; };
+  }, []);
+
+  const porArea = useMemo(() => {
+    const mapa = {};
+    AREAS_MURAL_CAMPEONES.forEach((a) => { mapa[a.key] = []; });
+    registros.forEach((r) => {
+      if (!mapa[r.area]) mapa[r.area] = [];
+      mapa[r.area].push(r);
+    });
+    return mapa;
+  }, [registros]);
+
+  function actualRegistro(areaKey) {
+    return (porArea[areaKey] || []).find((r) => r.periodo === periodoActual) || null;
+  }
+
+  function historialRegistro(areaKey) {
+    return (porArea[areaKey] || [])
+      .filter((r) => r.periodo !== periodoActual)
+      .sort((x, y) => (x.periodo < y.periodo ? 1 : -1));
+  }
+
+  async function guardarGanador({ area, nombre, file, activo: activoNuevo }) {
+    let url = actualRegistro(area)?.url || null;
+    if (file) {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const rutaArchivo = `${area}-${periodoActual}-${Date.now()}.${ext}`;
+      const { error: errSubida } = await supabase.storage
+        .from(BUCKET)
+        .upload(rutaArchivo, file, { upsert: true, cacheControl: "3600" });
+      if (errSubida) throw errSubida;
+      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(rutaArchivo);
+      url = pub.publicUrl;
+    }
+
+    const registro = {
+      area,
+      periodo: periodoActual,
+      nombre: nombre || "",
+      url,
+      activo: activoNuevo,
+      actualizado_por: staffUsername || null,
+      actualizado_en: new Date().toISOString(),
+    };
+    const { error } = await supabase.from(TABLA).upsert(registro);
+    if (error) throw error;
+
+    setRegistros((prev) => {
+      const sinEste = prev.filter((r) => !(r.area === area && r.periodo === periodoActual));
+      return [...sinEste, registro];
+    });
+  }
+
+  const areasVisibles = AREAS_MURAL_CAMPEONES.filter((a) => {
+    const actual = actualRegistro(a.key);
+    const hayGanador = !!(actual && actual.activo);
+    return hayGanador || esGerente; // staff normal no ve tarjetas vacías
+  });
+
+  return (
+    <div>
+      <div style={{ textAlign: "center", marginBottom: 18 }}>
+        <div className="display" style={{ fontSize: 20, color: "#FFD700", textShadow: "0 0 12px #FFD70090" }}>
+          🏆 MURAL DE CAMPEONES
+        </div>
+        <div style={{ fontSize: 12.5, color: "#9AA7BD", marginTop: 4 }}>
+          {etiquetaPeriodo(periodoActual)} · empleado/vendedor destacado por área
+        </div>
+      </div>
+
+      {cargando ? (
+        <div style={{ textAlign: "center", color: "#9AA7BD", padding: 30 }}>Cargando...</div>
+      ) : areasVisibles.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#6C7A96", padding: 30, fontSize: 13 }}>
+          Todavía no hay campeones publicados este mes.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
+          {areasVisibles.map((a) => {
+            const actual = actualRegistro(a.key);
+            const hist = historialRegistro(a.key);
+            const hayGanador = !!(actual && actual.activo);
+
+            return (
+              <div
+                key={a.key}
+                className="card"
+                style={{
+                  padding: 18, textAlign: "center", position: "relative",
+                  border: hayGanador ? "1px solid #FFD70070" : "1px dashed #2A3852",
+                  boxShadow: hayGanador ? "0 0 18px -6px #FFD700" : "none",
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".04em", color: "#9AA7BD", marginBottom: 10 }}>
+                  {a.label}
+                </div>
+
+                {hayGanador ? (
+                  <>
+                    <div style={{
+                      width: 96, height: 96, borderRadius: "50%", overflow: "hidden", margin: "0 auto 10px",
+                      border: "2px solid #FFD700", boxShadow: "0 0 14px -2px #FFD700",
+                    }}>
+                      {actual.url ? (
+                        <img src={actual.url} alt={actual.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      ) : (
+                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0E1626", color: "#FFD700" }}>
+                          <Crown size={30} />
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8EDF5" }}>{actual.nombre || "—"}</div>
+                    <div style={{ fontSize: 11, color: "#FFD700", marginTop: 2 }}>★ Campeón del mes</div>
+                  </>
+                ) : (
+                  <div style={{ padding: "20px 0", color: "#6C7A96", fontSize: 12.5 }}>
+                    Sin ganador este mes
+                  </div>
+                )}
+
+                {hist.length > 0 && (
+                  <button
+                    className="btn-ghost"
+                    style={{ marginTop: 12, fontSize: 11, padding: "6px 10px" }}
+                    onClick={() => setHistorialAbierto(historialAbierto === a.key ? null : a.key)}
+                  >
+                    {historialAbierto === a.key ? <ChevronUp size={12} style={{ verticalAlign: "-2px" }} /> : <ChevronDown size={12} style={{ verticalAlign: "-2px" }} />} Histórico ({hist.length})
+                  </button>
+                )}
+
+                {historialAbierto === a.key && (
+                  <div style={{ marginTop: 10, textAlign: "left", borderTop: "1px solid #1E2A42", paddingTop: 10 }}>
+                    {hist.map((r) => (
+                      <div key={r.periodo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <div style={{ width: 26, height: 26, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: "1px solid #2A3852" }}>
+                          {r.url && <img src={r.url} alt={r.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                        </div>
+                        <div style={{ fontSize: 11.5 }}>
+                          <div style={{ color: "#E8EDF5" }}>{r.nombre || "—"}{!r.activo ? " (desactivado)" : ""}</div>
+                          <div style={{ color: "#6C7A96" }}>{etiquetaPeriodo(r.periodo)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {esGerente && (
+                  <div style={{ marginTop: 14, borderTop: "1px solid #1E2A42", paddingTop: 12 }}>
+                    {editando === a.key ? (
+                      <FormularioGanador
+                        registroActual={actual}
+                        onCancelar={() => setEditando(null)}
+                        onGuardar={async (payload) => {
+                          await guardarGanador({ area: a.key, ...payload });
+                          setEditando(null);
+                        }}
+                      />
+                    ) : (
+                      <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                        <button className="btn" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => setEditando(a.key)}>
+                          {hayGanador ? "Cambiar" : "Agregar ganador"}
+                        </button>
+                        {actual && actual.activo && (
+                          <button
+                            className="btn-ghost"
+                            style={{ fontSize: 12, padding: "6px 12px" }}
+                            onClick={() => guardarGanador({ area: a.key, nombre: actual.nombre, file: null, activo: false })}
+                          >
+                            Desactivar
+                          </button>
+                        )}
+                        {actual && !actual.activo && (
+                          <button
+                            className="btn-ghost"
+                            style={{ fontSize: 12, padding: "6px 12px" }}
+                            onClick={() => guardarGanador({ area: a.key, nombre: actual.nombre, file: null, activo: true })}
+                          >
+                            Reactivar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FormularioGanador({ registroActual, onGuardar, onCancelar }) {
+  const [nombre, setNombre] = useState(registroActual?.nombre || "");
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(registroActual?.url || null);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef(null);
+
+  function elegirArchivo(e) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!f.type.startsWith("image/")) {
+      setError("Ese archivo no es una imagen. Sube un .jpg, .png o similar.");
+      return;
+    }
+    setError("");
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  }
+
+  async function guardar() {
+    setGuardando(true);
+    setError("");
+    try {
+      await onGuardar({ nombre: nombre.trim(), file, activo: true });
+    } catch (err) {
+      console.error("Error guardando ganador del mural:", err);
+      setError("No se pudo guardar. Verifica que exista el bucket 'mural_campeones' y la tabla 'mural_campeones_ganadores' en Supabase.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <div>
+      {preview && (
+        <div style={{ width: 80, height: 80, borderRadius: "50%", overflow: "hidden", margin: "0 auto 10px", border: "1px solid #2A3852" }}>
+          <img src={preview} alt="Vista previa" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        </div>
+      )}
+      <button className="btn-ghost" type="button" style={{ fontSize: 12, width: "100%", marginBottom: 8 }} onClick={() => inputRef.current?.click()}>
+        <Upload size={12} style={{ verticalAlign: "-2px" }} /> {preview ? "Cambiar foto" : "Subir foto"}
+      </button>
+      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={elegirArchivo} />
+
+      <input
+        type="text"
+        placeholder="Nombre del ganador"
+        value={nombre}
+        onChange={(e) => setNombre(e.target.value)}
+        style={{ width: "100%", marginBottom: 8, fontSize: 12.5 }}
+      />
+
+      {error && <div style={{ fontSize: 11, color: "#FF6B6B", marginBottom: 8 }}>{error}</div>}
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+        <button className="btn" type="button" style={{ fontSize: 12, padding: "6px 12px" }} disabled={guardando || !nombre.trim()} onClick={guardar}>
+          {guardando ? "Guardando..." : "Guardar"}
+        </button>
+        <button className="btn-ghost" type="button" style={{ fontSize: 12, padding: "6px 12px" }} onClick={onCancelar} disabled={guardando}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
