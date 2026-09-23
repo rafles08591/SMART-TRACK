@@ -45,6 +45,14 @@ function TileIcon({ name, ...props }) {
     case "key": return (<svg {...p}><circle cx="7.5" cy="14.5" r="4"/><path d="M10.6 11.4 19 3M15.5 7 18 9.5M18.3 3.8 20.5 6"/></svg>);
     case "megaphone": return (<svg {...p}><path d="M3 10v4h3l7 4V6l-7 4H3Z"/><path d="M13 8.5a4 4 0 0 1 0 7M16 6a7 7 0 0 1 0 12"/><path d="M6 14v4a1.5 1.5 0 0 0 3 0v-4"/></svg>);
     case "sliders": return (<svg {...p}><path d="M4 6h9M17 6h3M4 12h3M9 12h11M4 18h13M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>);
+    case "mural": return (
+      <svg {...p}>
+        <rect x="4" y="3.2" width="16" height="17.6" rx="2.2" />
+        <circle cx="12" cy="9.6" r="2.8" />
+        <path d="M7 16.5c1-2.4 2.8-3.4 5-3.4s4 1 5 3.4" />
+        <path d="M12 2 12.6 3.4 14.1 3.55 13 4.5 13.3 6 12 5.2 10.7 6 11 4.5 9.9 3.55 11.4 3.4Z" fill="currentColor" stroke="none" />
+      </svg>
+    );
     default: return (<svg {...p}><rect x="4" y="4" width="16" height="16" rx="3"/></svg>);
   }
 }
@@ -54,6 +62,11 @@ const META = {
   escalera:          { icon: "ladder",        color: "#c084fc", fam: "🏠 Inicio" },
   mesa:              { icon: "dashboard",     color: "#60a5fa", fam: "🏠 Inicio" },
   carreras:          { icon: "monstertruck",  color: "#ff6b00", fam: "🏠 Inicio" },
+
+  // alwaysPulse: brillo/parpadeo dorado permanente, sin depender de
+  // estadoTabs — es un reconocimiento, no una notificación, así que se
+  // mantiene siempre muy visible en el grid.
+  mural_campeones:   { icon: "mural",    color: "#FFD700", fam: "🏆 Reconocimiento", alwaysPulse: true },
 
   max:               { icon: "rocket",   color: "#f472b6", fam: "🎯 Avances" },
   open:              { icon: "unlock",   color: "#fb923c", fam: "🎯 Avances", img: "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/OPEN.jpeg" },
@@ -93,7 +106,7 @@ const META = {
   permisos:          { icon: "sliders",  color: "#38bdf8", fam: "⚙️ Configuración" },
 };
 
-const FAMILY_ORDER = ["🏠 Inicio", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
+const FAMILY_ORDER = ["🏠 Inicio", "🏆 Reconocimiento", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
 
 function statusOverride(status) {
   switch (status) {
@@ -111,10 +124,12 @@ function statusOverride(status) {
   }
 }
 
-const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, onSelect }) {
+const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, intense: intenseProp, onSelect }) {
   const [pressed, setPressed] = useState(false);
-  // Notification tiles (badge === true) get a much more intense blink than a plain "pulse" status.
-  const intense = pulse && badge;
+  // Notification tiles (badge === true) get a much more intense blink than a
+  // plain "pulse" status. Un tile puede pedir "intense" directo (ej. Mural
+  // de Campeones, que siempre brilla fuerte aunque no tenga badge).
+  const intense = pulse && (badge || intenseProp);
 
   return (
     <button
@@ -213,8 +228,9 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
                   img={meta.img}
                   color={color}
                   active={tab === t.key}
-                  pulse={!!status?.pulse}
+                  pulse={!!status?.pulse || !!meta.alwaysPulse}
                   badge={!!status?.badge}
+                  intense={!!meta.alwaysPulse}
                   onSelect={setTab}
                 />
               );
