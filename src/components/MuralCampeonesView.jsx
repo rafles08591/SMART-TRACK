@@ -31,6 +31,15 @@
    package.json — Vercel la instala sola con "npm install" en el
    siguiente deploy).
 
+   Prop "modo":
+     - "staff" (default) → vista completa agrupada por área, con
+       histórico e (si puesto==="gerente") controles de edición.
+       Usada en StaffView.jsx.
+     - "vendedor" → vista de solo lectura: una tarjeta grande por cada
+       GANADOR activo (sin agrupar por área, sin histórico, sin
+       controles), con icono de copa. Se usa en VendorView.jsx pasando
+       puesto={null} (los vendedores nunca editan el mural).
+
    SQL necesario en Supabase (una sola vez):
 
      insert into storage.buckets (id, name, public)
@@ -61,10 +70,16 @@
      create policy "permitir todo por ahora" on mural_campeones_ganadores
        for all using (true) with check (true);
 
-   Cómo se usa (en StaffView.jsx, dentro de la rama de la pestaña):
+   Cómo se usa:
 
+     // StaffView.jsx
      {objTab === "mural_campeones" && (
        <MuralCampeonesView puesto={puesto} staffUsername={staffUsername} />
+     )}
+
+     // VendorView.jsx
+     {tab === "mural_campeones" && (
+       <MuralCampeonesView puesto={null} staffUsername={vendedor?.name} modo="vendedor" />
      )}
 ===================================================================== */
 
@@ -98,8 +113,9 @@ function lanzarConfeti() {
   }
 }
 
-export default function MuralCampeonesView({ puesto, staffUsername }) {
+export default function MuralCampeonesView({ puesto, staffUsername, modo = "staff" }) {
   const esGerente = puesto === "gerente";
+  const modoVendedor = modo === "vendedor";
   const periodoActual = periodoActualISO();
 
   const [registros, setRegistros] = useState([]);
@@ -208,6 +224,17 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
     return hayGanador || esGerente; // staff normal no ve tarjetas vacías
   });
 
+  // Modo vendedor: una tarjeta grande por cada GANADOR (no por área), sin
+  // agrupar, sin histórico ni controles — "solo tarjetas de los ganadores".
+  const ganadoresFlat = [];
+  if (modoVendedor) {
+    AREAS_MURAL_CAMPEONES.forEach((a) => {
+      registrosActualesActivos(a.key).forEach((r) => {
+        ganadoresFlat.push({ ...r, areaLabel: a.label });
+      });
+    });
+  }
+
   return (
     <div>
       <div style={{ textAlign: "center", marginBottom: 18 }}>
@@ -221,6 +248,42 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
 
       {cargando ? (
         <div style={{ textAlign: "center", color: "#9AA7BD", padding: 30 }}>Cargando...</div>
+      ) : modoVendedor ? (
+        ganadoresFlat.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#6C7A96", padding: 30, fontSize: 13 }}>
+            Todavía no hay campeones publicados este mes.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 16 }}>
+            {ganadoresFlat.map((reg) => (
+              <div
+                key={`${reg.area}-${reg.slot || 1}`}
+                className="card"
+                style={{ padding: 20, textAlign: "center", border: "1px solid #FFD70070", boxShadow: "0 0 18px -6px #FFD700" }}
+              >
+                <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".04em", color: "#9AA7BD", marginBottom: 10 }}>
+                  {reg.areaLabel}
+                </div>
+                <div style={{
+                  width: 108, height: 108, borderRadius: "50%", overflow: "hidden", margin: "0 auto 10px",
+                  border: "2px solid #FFD700", boxShadow: "0 0 16px -2px #FFD700",
+                }}>
+                  {reg.url ? (
+                    <img src={reg.url} alt={reg.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0E1626", color: "#FFD700" }}>
+                      <Crown size={36} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#E8EDF5" }}>{reg.nombre || "—"}</div>
+                <div style={{ fontSize: 12, color: "#FFD700", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
+                  <Crown size={14} /> Campeón del mes
+                </div>
+              </div>
+            ))}
+          </div>
+        )
       ) : areasVisibles.length === 0 ? (
         <div style={{ textAlign: "center", color: "#6C7A96", padding: 30, fontSize: 13 }}>
           Todavía no hay campeones publicados este mes.
