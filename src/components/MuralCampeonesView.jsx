@@ -2,22 +2,34 @@
 /* =====================================================================
    MuralCampeonesView — "empleado/vendedor del mes" por área. Cada área
    (Ventas, Administración, Liquidación, Almacén, Merch, Supervisor
-   Ventas, Supervisor Merch) puede tener un ganador distinto cada mes,
-   pero no todas las áreas tienen ganador SIEMPRE — Ventas casi siempre
-   sí, las demás puede que sí o puede que no. Por eso cada registro tiene
-   un flag "activo": cuando está apagado (o no existe registro para el
-   periodo actual), esa área simplemente no aparece en el mural para el
-   staff normal, en vez de mostrar una tarjeta vacía. Solo GERENTE ve el
-   botón para subir/cambiar foto y activar/desactivar cada área.
+   Ventas, Supervisor Merch) puede tener HASTA 3 ganadores por mes
+   (empates, equipo, etc.) — no todas las áreas tienen ganador SIEMPRE:
+   Ventas casi siempre sí, las demás puede que sí o puede que no. Por
+   eso cada registro tiene un flag "activo": cuando está apagado (o no
+   existe registro para el periodo actual), esa área/slot simplemente
+   no aparece en el mural para el staff normal, en vez de mostrar una
+   tarjeta vacía. Solo GERENTE ve los botones para subir/cambiar foto y
+   activar/desactivar cada ganador.
 
-   Se guarda un registro por (área, periodo) — periodo = "YYYY-MM" — así
-   queda historial: cada área puede ver quién ganó en meses anteriores
-   (el histórico siempre muestra los periodos pasados, sin importar el
-   flag "activo" — ese flag solo controla si la tarjeta del MES ACTUAL se
-   ve o se oculta).
+   Se guarda un registro por (área, periodo, slot) — periodo = "YYYY-MM",
+   slot = 1..3 — así queda historial: cada área puede ver quién ganó en
+   meses anteriores (el histórico siempre muestra los periodos pasados,
+   sin importar el flag "activo" — ese flag solo controla si la
+   tarjeta del MES ACTUAL se ve o se oculta).
 
    Igual que "Mi Fondo" (FondoPersonalizado.jsx), la foto se sube a
    Supabase Storage y solo se guarda la URL pública en la tabla.
+
+   Animación: al entrar a la pestaña (si hay algún ganador activo este
+   mes) y al guardar un ganador nuevo, se lanza un confeti con la
+   librería "canvas-confetti". Hay que agregarla como dependencia:
+
+     npm install canvas-confetti
+
+   (si no tienes el proyecto en tu computadora, agrega manualmente
+   "canvas-confetti": "^1.9.3" dentro de "dependencies" en tu
+   package.json — Vercel la instala sola con "npm install" en el
+   siguiente deploy).
 
    SQL necesario en Supabase (una sola vez):
 
@@ -37,12 +49,13 @@
      create table if not exists mural_campeones_ganadores (
        area text not null,
        periodo text not null,
+       slot integer not null default 1,
        nombre text not null default '',
        url text,
        activo boolean not null default true,
        actualizado_por text,
        actualizado_en timestamptz not null default now(),
-       primary key (area, periodo)
+       primary key (area, periodo, slot)
      );
      alter table mural_campeones_ganadores enable row level security;
      create policy "permitir todo por ahora" on mural_campeones_ganadores
@@ -57,11 +70,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Upload, ChevronDown, ChevronUp, Crown } from "lucide-react";
+import confetti from "canvas-confetti";
 import { supabase } from "../supabaseClient";
 import { AREAS_MURAL_CAMPEONES } from "../constants";
 
 const BUCKET = "mural_campeones";
 const TABLA = "mural_campeones_ganadores";
+const MAX_GANADORES_POR_AREA = 3;
 
 function periodoActualISO() {
   const d = new Date();
@@ -75,6 +90,14 @@ function etiquetaPeriodo(periodo) {
   return `${meses[idx] || m} ${y}`;
 }
 
+function lanzarConfeti() {
+  try {
+    confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 }, colors: ["#FFD700", "#FFFFFF", "#FFB800"] });
+  } catch (e) {
+    // canvas-confetti no instalada todavía; ignorar en silencio
+  }
+}
+
 export default function MuralCampeonesView({ puesto, staffUsername }) {
   const esGerente = puesto === "gerente";
   const periodoActual = periodoActualISO();
@@ -82,7 +105,7 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
   const [registros, setRegistros] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [historialAbierto, setHistorialAbierto] = useState(null); // area key o null
-  const [editando, setEditando] = useState(null); // area key o null
+  const [editando, setEditando] = useState(null); // { area, slot } o null
 
   useEffect(() => {
     let activo = true;
@@ -113,21 +136,44 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
     return mapa;
   }, [registros]);
 
-  function actualRegistro(areaKey) {
-    return (porArea[areaKey] || []).find((r) => r.periodo === periodoActual) || null;
+  function registroSlot(areaKey, slot) {
+    return (porArea[areaKey] || []).find((r) => r.periodo === periodoActual && Number(r.slot || 1) === slot) || null;
+  }
+
+  function registrosActualesActivos(areaKey) {
+    const out = [];
+    for (let s = 1; s <= MAX_GANADORES_POR_AREA; s++) {
+      const r = registroSlot(areaKey, s);
+      if (r && r.activo) out.push(r);
+    }
+    return out;
+  }
+
+  function siguienteSlotLibre(areaKey) {
+    for (let s = 1; s <= MAX_GANADORES_POR_AREA; s++) {
+      if (!registroSlot(areaKey, s)) return s;
+    }
+    return null;
   }
 
   function historialRegistro(areaKey) {
     return (porArea[areaKey] || [])
       .filter((r) => r.periodo !== periodoActual)
-      .sort((x, y) => (x.periodo < y.periodo ? 1 : -1));
+      .sort((x, y) => (x.periodo === y.periodo ? (x.slot || 1) - (y.slot || 1) : x.periodo < y.periodo ? 1 : -1));
   }
 
-  async function guardarGanador({ area, nombre, file, activo: activoNuevo }) {
-    let url = actualRegistro(area)?.url || null;
+  useEffect(() => {
+    if (cargando) return;
+    const hayAlgunGanadorActivo = registros.some((r) => r.periodo === periodoActual && r.activo);
+    if (hayAlgunGanadorActivo) lanzarConfeti();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargando]);
+
+  async function guardarGanador({ area, slot = 1, nombre, file, activo: activoNuevo }) {
+    let url = registroSlot(area, slot)?.url || null;
     if (file) {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const rutaArchivo = `${area}-${periodoActual}-${Date.now()}.${ext}`;
+      const rutaArchivo = `${area}-${periodoActual}-slot${slot}-${Date.now()}.${ext}`;
       const { error: errSubida } = await supabase.storage
         .from(BUCKET)
         .upload(rutaArchivo, file, { upsert: true, cacheControl: "3600" });
@@ -139,6 +185,7 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
     const registro = {
       area,
       periodo: periodoActual,
+      slot,
       nombre: nombre || "",
       url,
       activo: activoNuevo,
@@ -149,14 +196,15 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
     if (error) throw error;
 
     setRegistros((prev) => {
-      const sinEste = prev.filter((r) => !(r.area === area && r.periodo === periodoActual));
+      const sinEste = prev.filter((r) => !(r.area === area && r.periodo === periodoActual && Number(r.slot || 1) === slot));
       return [...sinEste, registro];
     });
+
+    if (activoNuevo) lanzarConfeti();
   }
 
   const areasVisibles = AREAS_MURAL_CAMPEONES.filter((a) => {
-    const actual = actualRegistro(a.key);
-    const hayGanador = !!(actual && actual.activo);
+    const hayGanador = registrosActualesActivos(a.key).length > 0;
     return hayGanador || esGerente; // staff normal no ve tarjetas vacías
   });
 
@@ -180,9 +228,10 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
           {areasVisibles.map((a) => {
-            const actual = actualRegistro(a.key);
+            const ganadores = registrosActualesActivos(a.key);
             const hist = historialRegistro(a.key);
-            const hayGanador = !!(actual && actual.activo);
+            const hayGanador = ganadores.length > 0;
+            const slotLibre = siguienteSlotLibre(a.key);
 
             return (
               <div
@@ -200,20 +249,28 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
 
                 {hayGanador ? (
                   <>
-                    <div style={{
-                      width: 96, height: 96, borderRadius: "50%", overflow: "hidden", margin: "0 auto 10px",
-                      border: "2px solid #FFD700", boxShadow: "0 0 14px -2px #FFD700",
-                    }}>
-                      {actual.url ? (
-                        <img src={actual.url} alt={actual.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      ) : (
-                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0E1626", color: "#FFD700" }}>
-                          <Crown size={30} />
+                    <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+                      {ganadores.map((reg) => (
+                        <div key={reg.slot || 1} style={{ width: 76 }}>
+                          <div style={{
+                            width: 60, height: 60, borderRadius: "50%", overflow: "hidden", margin: "0 auto 6px",
+                            border: "2px solid #FFD700", boxShadow: "0 0 10px -2px #FFD700",
+                          }}>
+                            {reg.url ? (
+                              <img src={reg.url} alt={reg.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            ) : (
+                              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0E1626", color: "#FFD700" }}>
+                                <Crown size={22} />
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11.5, fontWeight: 700, color: "#E8EDF5", lineHeight: 1.2 }}>{reg.nombre || "—"}</div>
                         </div>
-                      )}
+                      ))}
                     </div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#E8EDF5" }}>{actual.nombre || "—"}</div>
-                    <div style={{ fontSize: 11, color: "#FFD700", marginTop: 2 }}>★ Campeón del mes</div>
+                    <div style={{ fontSize: 11, color: "#FFD700", marginTop: 8 }}>
+                      {ganadores.length > 1 ? "★ Campeones del mes" : "★ Campeón del mes"}
+                    </div>
                   </>
                 ) : (
                   <div style={{ padding: "20px 0", color: "#6C7A96", fontSize: 12.5 }}>
@@ -234,7 +291,7 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
                 {historialAbierto === a.key && (
                   <div style={{ marginTop: 10, textAlign: "left", borderTop: "1px solid #1E2A42", paddingTop: 10 }}>
                     {hist.map((r) => (
-                      <div key={r.periodo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <div key={`${r.periodo}-${r.slot || 1}`} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                         <div style={{ width: 26, height: 26, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: "1px solid #2A3852" }}>
                           {r.url && <img src={r.url} alt={r.nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
                         </div>
@@ -249,36 +306,43 @@ export default function MuralCampeonesView({ puesto, staffUsername }) {
 
                 {esGerente && (
                   <div style={{ marginTop: 14, borderTop: "1px solid #1E2A42", paddingTop: 12 }}>
-                    {editando === a.key ? (
+                    {editando && editando.area === a.key ? (
                       <FormularioGanador
-                        registroActual={actual}
+                        registroActual={registroSlot(a.key, editando.slot)}
                         onCancelar={() => setEditando(null)}
                         onGuardar={async (payload) => {
-                          await guardarGanador({ area: a.key, ...payload });
+                          await guardarGanador({ area: a.key, slot: editando.slot, ...payload });
                           setEditando(null);
                         }}
                       />
                     ) : (
-                      <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-                        <button className="btn" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => setEditando(a.key)}>
-                          {hayGanador ? "Cambiar" : "Agregar ganador"}
-                        </button>
-                        {actual && actual.activo && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {[1, 2, 3].map((slot) => {
+                          const reg = registroSlot(a.key, slot);
+                          if (!reg) return null;
+                          return (
+                            <div key={slot} style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 10.5, color: "#6C7A96" }}>{reg.nombre || `Ganador ${slot}`}:</span>
+                              <button className="btn-ghost" style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => setEditando({ area: a.key, slot })}>
+                                Cambiar
+                              </button>
+                              <button
+                                className="btn-ghost"
+                                style={{ fontSize: 11, padding: "4px 8px" }}
+                                onClick={() => guardarGanador({ area: a.key, slot, nombre: reg.nombre, file: null, activo: !reg.activo })}
+                              >
+                                {reg.activo ? "Desactivar" : "Reactivar"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {slotLibre && (
                           <button
-                            className="btn-ghost"
-                            style={{ fontSize: 12, padding: "6px 12px" }}
-                            onClick={() => guardarGanador({ area: a.key, nombre: actual.nombre, file: null, activo: false })}
+                            className="btn"
+                            style={{ fontSize: 12, padding: "6px 12px", marginTop: 4 }}
+                            onClick={() => setEditando({ area: a.key, slot: slotLibre })}
                           >
-                            Desactivar
-                          </button>
-                        )}
-                        {actual && !actual.activo && (
-                          <button
-                            className="btn-ghost"
-                            style={{ fontSize: 12, padding: "6px 12px" }}
-                            onClick={() => guardarGanador({ area: a.key, nombre: actual.nombre, file: null, activo: true })}
-                          >
-                            Reactivar
+                            + Agregar {hayGanador ? "otro " : ""}ganador
                           </button>
                         )}
                       </div>
