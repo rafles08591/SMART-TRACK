@@ -35,6 +35,7 @@ import CoachIAView from "./CoachIAView";
 import CarrerasVentas from "./CarrerasVentas";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
+import MuralCampeonesView from "./MuralCampeonesView";
 import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
 // Rutas que tienen habilitada la pestaña KM (captura directa de
@@ -122,7 +123,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
     .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
     .join("\n");
 
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras" || tab === "scorecard";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras" || tab === "scorecard" || tab === "mural_campeones";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -236,6 +237,8 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
         <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
       ) : tab === "scorecard" ? (
         <ScorecardSemanalView data={data} porVendedor={porVendedor} rol="vendedor" rutaPropia={rutaCodigo} ventasPeriodo={ventasPeriodo} />
+      ) : tab === "mural_campeones" ? (
+        <MuralCampeonesView puesto={null} staffUsername={vendedor.name} modo="vendedor" />
       ) : tab === "carreras" ? null
       : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
