@@ -30,7 +30,7 @@
 
    El "Num" del checador es un número interno del equipo biométrico, no
    el código de ruta — hay que traducirlo. El mapeo se guarda aquí mismo
-   (MAPEO_NUMERO_RUTA) porque así lo dio el Gerente; si el número de
+   (MAPEO_NUMERO_RUTA_BASE) porque así lo dio el Gerente; si el número de
    algún empleado cambia o se agrega alguien nuevo, hay que actualizar
    este objeto. J201 y J203 (vendedores de pueblo) no están mapeados a
    propósito — no se les da seguimiento con este checador.
@@ -52,6 +52,30 @@
      alter table checador_marcas enable row level security;
      create policy "permitir todo por ahora" on checador_marcas
        for all using (true) with check (true);
+
+   COLABORADORES (número del checador → ruta): además del mapeo base
+   que vive en el código, Admin/Gerente pueden agregar o cambiar
+   colaboradores desde la pantalla. Cuando el archivo trae un número que
+   no está mapeado, aparece en "Colaboradores nuevos en el archivo" para
+   asignarle ruta (o ignorarlo) y sus marcas se guardan en ese momento.
+   Se guarda en su propia tabla (ruta = null significa "no dar
+   seguimiento"). Créala una sola vez:
+
+     create table if not exists checador_empleados (
+       numero_empleado text primary key,
+       ruta text,
+       nombre text,
+       identificador text,
+       actualizado_en timestamptz not null default now()
+     );
+     alter table checador_empleados enable row level security;
+     create policy "permitir todo por ahora" on checador_empleados
+       for all using (true) with check (true);
+
+   Cada ruta tiene un solo número activo: si se asigna la ruta a un
+   número nuevo (p. ej. alguien cambió de número en el reloj), el número
+   anterior queda como "no dar seguimiento". Las marcas históricas no se
+   pierden porque la búsqueda del bono y del resumen es por RUTA.
 
    Cómo se conecta:
      <RelojChecadorView
@@ -82,20 +106,34 @@ const T = {
   badSoft: "rgba(255,107,107,0.12)",
 };
 
-const MAPEO_NUMERO_RUTA = {
+// Mapeo base. Lo que se guarde en la tabla checador_empleados tiene
+// prioridad sobre esto.
+const MAPEO_NUMERO_RUTA_BASE = {
   "101": "RUTA J207",
   "40": "RUTA J202",
   "49": "RUTA J204",
-  "132": "RUTA J205",
+  "145": "RUTA J205", // Alejandro Mendoza Escalera (antes 132 — cambió de número en el reloj)
   "67": "GERENTE",
   "126": "RUTA J206",
   "57": "SUPERVISOR-1",
 };
+// Opciones de ruta que se pueden asignar a un colaborador del checador.
+const RUTAS_ASIGNABLES = ["RUTA J201", "RUTA J202", "RUTA J203", "RUTA J204", "RUTA J205", "RUTA J206", "RUTA J207", "SUPERVISOR-1", "SUPERVISOR-2", "GERENTE"];
 // Para el "Bono de puntualidad" (todas las rutas) se incluyen las rutas de
 // venta y además Supervisor-1 — a él también se le evalúa el bono. Gerente
 // no entra a esta lista (se sigue viendo en "Marcas del día", pero no se
 // le mide el bono de puntualidad).
-const RUTAS_CHECADOR = [...new Set(Object.values(MAPEO_NUMERO_RUTA))].filter((r) => r.startsWith("RUTA ") || r === "SUPERVISOR-1");
+function rutasChecadorDe(mapeo) {
+  return [...new Set(Object.values(mapeo))].filter((r) => r && (r.startsWith("RUTA ") || r === "SUPERVISOR-1"));
+}
+// Agrupa las horas de un empleado por día: la más temprana es entrada y
+// la más tardía es salida.
+function construirRegistros({ numero, nombre, identificador, horasPorFecha }, ruta) {
+  return Object.entries(horasPorFecha).map(([fecha, horas]) => {
+    const h = [...horas].sort();
+    return { numero_empleado: numero, nombre, identificador, ruta, fecha, hora_entrada: h[0], hora_salida: h[h.length - 1] };
+  });
+}
 // J201 y J203 (vendedores de pueblo) no tienen número de checador asignado
 // a propósito, pero igual deben aparecer en el resumen semanal como filas
 // en blanco, para poder capturarles observaciones a mano.
@@ -115,6 +153,8 @@ function hoyISO() {
 function nombreRutaBonito(ruta) {
   if (ruta === "GERENTE") return NOMBRES["GERENTE"] ? `Gerente · ${NOMBRES["GERENTE"]}` : "Gerente";
   if (ruta === "SUPERVISOR-1") return NOMBRES["SUPERVISOR-1"] ? `Supervisor 1 · ${NOMBRES["SUPERVISOR-1"]}` : "Supervisor 1";
+  if (ruta === "SUPERVISOR-2") return NOMBRES["SUPERVISOR-2"] ? `Supervisor 2 · ${NOMBRES["SUPERVISOR-2"]}` : "Supervisor 2";
+  if (!ruta) return "Sin ruta";
   const nombre = NOMBRES[ruta];
   return nombre ? `${ruta.replace("RUTA ", "")} · ${nombre}` : ruta;
 }
@@ -155,7 +195,12 @@ async function evaluarPuntualidadSemana(rutaCompleta, semanaInicio) {
     .lte("fecha", sumarDiasISOLocal(semanaInicio, 5));
   if (error) throw error;
   const marcasPorFecha = {};
-  (data || []).forEach((m) => { marcasPorFecha[m.fecha] = m; });
+  // Si la ruta tuvo dos números en la semana (cambio de número), se toma
+  // la entrada más temprana del día.
+  (data || []).forEach((m) => {
+    const previa = marcasPorFecha[m.fecha];
+    if (!previa || !previa.hora_entrada || (m.hora_entrada && m.hora_entrada < previa.hora_entrada)) marcasPorFecha[m.fecha] = m;
+  });
   const dias = NOMBRES_DIA_PUNTUALIDAD.map((nombre, i) => {
     const fecha = sumarDiasISOLocal(semanaInicio, i);
     const marca = marcasPorFecha[fecha];
@@ -176,6 +221,115 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
   const [subiendo, setSubiendo] = useState(false);
   const [resultadoSubida, setResultadoSubida] = useState("");
   const fileInputRef = React.useRef(null);
+
+  /* ---------------- COLABORADORES (número del checador → ruta) ---------------- */
+  const [mapeo, setMapeo] = useState(MAPEO_NUMERO_RUTA_BASE);
+  const [colaboradoresInfo, setColaboradoresInfo] = useState({}); // { numero: { nombre, identificador, ruta } } incl. ignorados
+  const [tablaColaboradoresOk, setTablaColaboradoresOk] = useState(true);
+  const [pendientes, setPendientes] = useState({}); // números del archivo sin mapear: { numero: { numero, nombre, identificador, horasPorFecha } }
+  const [rutaElegida, setRutaElegida] = useState({}); // { numero: ruta | "__ignorar" }
+  const [guardandoColab, setGuardandoColab] = useState("");
+  const [mensajeColab, setMensajeColab] = useState("");
+  const [verColaboradores, setVerColaboradores] = useState(false);
+  const [nuevoColab, setNuevoColab] = useState({ numero: "", nombre: "", ruta: "" });
+
+  async function cargarColaboradores() {
+    const { data, error: err } = await supabase.from("checador_empleados").select("numero_empleado, ruta, nombre, identificador");
+    if (err) {
+      console.warn("checador_empleados no disponible, se usa el mapeo base:", err);
+      setTablaColaboradoresOk(false);
+      return;
+    }
+    setTablaColaboradoresOk(true);
+    const m = { ...MAPEO_NUMERO_RUTA_BASE };
+    const info = {};
+    (data || []).forEach((r) => {
+      info[r.numero_empleado] = { nombre: r.nombre || "", identificador: r.identificador || "", ruta: r.ruta || null };
+      if (r.ruta) m[r.numero_empleado] = r.ruta; else delete m[r.numero_empleado];
+    });
+    setMapeo(m);
+    setColaboradoresInfo(info);
+  }
+  useEffect(() => { cargarColaboradores(); }, []);
+
+  // Guarda la ruta de un número (ruta null = no dar seguimiento). Si la
+  // ruta ya la tenía otro número, ese otro queda sin seguimiento. Si el
+  // número tenía marcas pendientes del último archivo, se guardan ya.
+  async function asignarColaborador(numero, ruta, datos = {}) {
+    numero = String(numero).trim();
+    if (!numero) return;
+    setGuardandoColab(numero);
+    setMensajeColab("");
+    try {
+      const pendiente = pendientes[numero];
+      const nombre = datos.nombre ?? pendiente?.nombre ?? colaboradoresInfo[numero]?.nombre ?? "";
+      const identificador = datos.identificador ?? pendiente?.identificador ?? colaboradoresInfo[numero]?.identificador ?? "";
+      const desplazados = ruta ? Object.entries(mapeo).filter(([n, r]) => r === ruta && n !== numero).map(([n]) => n) : [];
+      const filas = [
+        { numero_empleado: numero, ruta: ruta || null, nombre, identificador, actualizado_en: new Date().toISOString() },
+        ...desplazados.map((n) => ({
+          numero_empleado: n, ruta: null,
+          nombre: colaboradoresInfo[n]?.nombre || "", identificador: colaboradoresInfo[n]?.identificador || "",
+          actualizado_en: new Date().toISOString(),
+        })),
+      ];
+      const { error: err } = await supabase.from("checador_empleados").upsert(filas, { onConflict: "numero_empleado" });
+      if (err) throw err;
+
+      let mensaje = ruta ? `Número ${numero} asignado a ${nombreRutaBonito(ruta)}.` : `Número ${numero} marcado como "no dar seguimiento".`;
+      if (desplazados.length) mensaje += ` El número anterior (${desplazados.join(", ")}) ya no se sigue para esa ruta.`;
+
+      if (pendiente && ruta) {
+        const registros = construirRegistros(pendiente, ruta);
+        const { error: errMarcas } = await supabase.from("checador_marcas").upsert(registros, { onConflict: "numero_empleado,fecha" });
+        if (errMarcas) throw errMarcas;
+        mensaje += ` Se guardaron ${registros.length} día(s) de marcas.`;
+        if (registros.some((r) => r.fecha === fecha)) cargar();
+      }
+      if (pendiente) setPendientes((p) => { const c = { ...p }; delete c[numero]; return c; });
+      setMensajeColab(mensaje);
+      await cargarColaboradores();
+    } catch (err) {
+      console.error("Error guardando colaborador:", err);
+      setMensajeColab(tablaColaboradoresOk
+        ? "No se pudo guardar el colaborador. Revisa tu conexión."
+        : "No se pudo guardar: falta crear la tabla 'checador_empleados' en Supabase (ver SQL al inicio de este archivo).");
+    } finally {
+      setGuardandoColab("");
+    }
+  }
+
+  async function ignorarTodosPendientes() {
+    const nums = Object.keys(pendientes);
+    if (!nums.length) return;
+    setGuardandoColab("__todos");
+    try {
+      const filas = nums.map((n) => ({
+        numero_empleado: n, ruta: null, nombre: pendientes[n].nombre, identificador: pendientes[n].identificador,
+        actualizado_en: new Date().toISOString(),
+      }));
+      const { error: err } = await supabase.from("checador_empleados").upsert(filas, { onConflict: "numero_empleado" });
+      if (err) throw err;
+      setPendientes({});
+      setMensajeColab(`${nums.length} número(s) marcados como "no dar seguimiento". Ya no se volverán a preguntar.`);
+      await cargarColaboradores();
+    } catch (err) {
+      console.error(err);
+      setMensajeColab("No se pudo guardar. Verifica que exista la tabla 'checador_empleados'.");
+    } finally {
+      setGuardandoColab("");
+    }
+  }
+
+  // Lista para el panel de administración: mapeados + ignorados guardados.
+  const listaColaboradores = useMemo(() => {
+    const nums = new Set([...Object.keys(mapeo), ...Object.keys(colaboradoresInfo)]);
+    return [...nums]
+      .map((n) => ({ numero: n, ruta: mapeo[n] || null, nombre: colaboradoresInfo[n]?.nombre || "", identificador: colaboradoresInfo[n]?.identificador || "" }))
+      .sort((a, b) => (a.ruta ? 0 : 1) - (b.ruta ? 0 : 1) || String(a.ruta).localeCompare(String(b.ruta)) || Number(a.numero) - Number(b.numero));
+  }, [mapeo, colaboradoresInfo]);
+
+  const rutasChecador = useMemo(() => rutasChecadorDe(mapeo), [mapeo]);
 
   async function cargar() {
     setMarcas(null);
@@ -210,8 +364,8 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
         const hoja = libro.Sheets[libro.SheetNames[0]];
         const filas = XLSX.utils.sheet_to_json(hoja, { defval: "" });
 
-        const grupos = {};
-        let sinReconocer = new Set();
+        // Agrupar por empleado → día → horas.
+        const empleados = {};
         filas.forEach((f) => {
           const num = String(f["Num"] || "").trim();
           const nombre = String(f["Department"] || f["Name"] || "").trim();
@@ -220,41 +374,37 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           if (!num || !fechaHora) return;
           const [fechaFila, horaFila] = fechaHora.split(" ");
           if (!fechaFila || !horaFila) return;
-          const ruta = MAPEO_NUMERO_RUTA[num] || null;
-          if (!ruta) { sinReconocer.add(`${num} (${nombre})`); return; }
-          const clave = `${num}|${fechaFila}`;
-          if (!grupos[clave]) grupos[clave] = { numero_empleado: num, nombre, identificador, ruta, fecha: fechaFila, horas: [] };
-          grupos[clave].horas.push(horaFila);
+          if (!empleados[num]) empleados[num] = { numero: num, nombre, identificador, horasPorFecha: {} };
+          (empleados[num].horasPorFecha[fechaFila] ||= []).push(horaFila);
         });
 
-        const registros = Object.values(grupos).map((g) => {
-          const horasOrdenadas = [...g.horas].sort();
-          return {
-            numero_empleado: g.numero_empleado,
-            nombre: g.nombre,
-            identificador: g.identificador,
-            ruta: g.ruta,
-            fecha: g.fecha,
-            hora_entrada: horasOrdenadas[0],
-            hora_salida: horasOrdenadas[horasOrdenadas.length - 1],
-          };
+        const registros = [];
+        const nuevos = {};
+        let ignorados = 0;
+        Object.values(empleados).forEach((emp) => {
+          const ruta = mapeo[emp.numero];
+          if (ruta) registros.push(...construirRegistros(emp, ruta));
+          else if (colaboradoresInfo[emp.numero]) ignorados++; // marcado como "no dar seguimiento"
+          else nuevos[emp.numero] = emp;
         });
 
-        if (registros.length === 0) {
-          setResultadoSubida("No se encontraron marcas de rutas reconocidas en el archivo.");
-          setSubiendo(false);
-          return;
+        if (registros.length > 0) {
+          const { error: err } = await supabase
+            .from("checador_marcas")
+            .upsert(registros, { onConflict: "numero_empleado,fecha" });
+          if (err) throw err;
         }
 
-        const { error: err } = await supabase
-          .from("checador_marcas")
-          .upsert(registros, { onConflict: "numero_empleado,fecha" });
-        if (err) throw err;
-
-        let mensaje = `Se guardaron ${registros.length} registro(s).`;
-        if (sinReconocer.size > 0) {
-          mensaje += ` Números sin mapear (no se guardaron): ${Array.from(sinReconocer).join(", ")}.`;
+        setPendientes(nuevos);
+        setRutaElegida({});
+        setMensajeColab("");
+        let mensaje = registros.length > 0
+          ? `Se guardaron ${registros.length} registro(s).`
+          : "No se encontraron marcas de colaboradores ya asignados.";
+        if (Object.keys(nuevos).length > 0) {
+          mensaje += ` Hay ${Object.keys(nuevos).length} número(s) nuevo(s) en el archivo — asígnales ruta abajo para guardar sus marcas.`;
         }
+        if (ignorados > 0) mensaje += ` ${ignorados} número(s) sin seguimiento se omitieron.`;
         setResultadoSubida(mensaje);
         if (registros.some((r) => r.fecha === fecha)) cargar();
       } catch (err) {
@@ -296,9 +446,9 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
 
   const rutasAEvaluar = useMemo(() => {
     if (rutaPropia) return [`RUTA ${rutaPropia}`];
-    if (puedeVerBono) return RUTAS_CHECADOR;
+    if (puedeVerBono) return rutasChecador;
     return [];
-  }, [rutaPropia, puedeVerBono]);
+  }, [rutaPropia, puedeVerBono, rutasChecador]);
 
   useEffect(() => {
     if (vista !== "puntualidad" || rutasAEvaluar.length === 0) return;
@@ -319,7 +469,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
       .finally(() => { if (activo) setCargandoPuntualidad(false); });
     return () => { activo = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vista, semanaPuntualidad, rutaPropia, puedeVerBono]);
+  }, [vista, semanaPuntualidad, rutasAEvaluar]);
 
   const rutasOrdenadas = useMemo(() => {
     if (!resultadosPuntualidad) return [];
@@ -350,7 +500,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
       const { data, error } = await supabase
         .from("checador_marcas")
         .select("numero_empleado, nombre, identificador, ruta, fecha, hora_entrada")
-        .in("ruta", RUTAS_CHECADOR)
+        .in("ruta", rutasChecador)
         .gte("fecha", semanaPuntualidad)
         .lte("fecha", fechaHasta);
       if (error) throw error;
@@ -359,14 +509,21 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
         fecha: sumarDiasISOLocal(semanaPuntualidad, i), nombreDia, hora: null,
       }));
 
-      const filasConChecador = Object.entries(MAPEO_NUMERO_RUTA)
-        .filter(([, ruta]) => RUTAS_CHECADOR.includes(ruta))
-        .map(([numeroEmpleado, ruta]) => {
-          const registrosEmpleado = (data || []).filter((r) => r.numero_empleado === numeroEmpleado);
-          const nombre = registrosEmpleado.find((r) => r.nombre)?.nombre || "";
-          const identificador = registrosEmpleado.find((r) => r.identificador)?.identificador || "";
+      // Una fila por ruta. Se busca por ruta (no por número) para que, si
+      // alguien cambió de número en el reloj, no se pierda su historial.
+      const filasConChecador = rutasChecador
+        .map((ruta) => {
+          const numeroActual = Object.keys(mapeo).find((n) => mapeo[n] === ruta);
+          const registrosRuta = (data || []).filter((r) => r.ruta === ruta);
+          const delActual = registrosRuta.filter((r) => r.numero_empleado === numeroActual);
+          const fuente = delActual.length ? delActual : registrosRuta;
+          const numeroEmpleado = delActual.length ? numeroActual : (registrosRuta[0]?.numero_empleado || numeroActual);
+          const nombre = fuente.find((r) => r.nombre)?.nombre || colaboradoresInfo[numeroActual]?.nombre || "";
+          const identificador = fuente.find((r) => r.identificador)?.identificador || colaboradoresInfo[numeroActual]?.identificador || "";
           const porDia = {};
-          registrosEmpleado.forEach((r) => { porDia[r.fecha] = r.hora_entrada; });
+          registrosRuta.forEach((r) => {
+            if (r.hora_entrada && (!porDia[r.fecha] || r.hora_entrada < porDia[r.fecha])) porDia[r.fecha] = r.hora_entrada;
+          });
           const dias = NOMBRES_DIA_PUNTUALIDAD.map((nombreDia, i) => {
             const fecha = sumarDiasISOLocal(semanaPuntualidad, i);
             return { fecha, nombreDia, hora: porDia[fecha] || null };
@@ -374,12 +531,14 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
           const diasProblema = dias.filter((d) => !d.hora || d.hora > HORA_LIMITE_PUNTUALIDAD);
           const aplicaBono = diasProblema.length === 0;
           const puesto = ruta === "SUPERVISOR-1" ? "SUPERVISOR" : "VENTAS";
-          return { numeroEmpleado, ruta, puesto, nombre, identificador, dias, aplicaBono, sinChecador: false };
+          return { clave: ruta, numeroEmpleado, ruta, puesto, nombre, identificador, dias, aplicaBono, sinChecador: false };
         });
 
       // Filas en blanco para J201 y J203: sin reloj/RFC/horas, pero con
-      // espacio para observaciones igual que las demás.
-      const filasSinChecador = RUTAS_SIN_CHECADOR.map((ruta) => ({
+      // espacio para observaciones igual que las demás. (Si algún día se
+      // les asigna número de checador, dejan de salir en blanco.)
+      const filasSinChecador = RUTAS_SIN_CHECADOR.filter((r) => !rutasChecador.includes(r)).map((ruta) => ({
+        clave: ruta,
         numeroEmpleado: `sin-checador-${ruta}`,
         ruta,
         puesto: "VENTAS",
@@ -407,7 +566,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
   useEffect(() => {
     if (vista === "resumen") cargarResumen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vista, semanaPuntualidad]);
+  }, [vista, semanaPuntualidad, mapeo]);
 
   function formatoHoraLarga(hora) {
     if (!hora) return "—";
@@ -431,7 +590,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
       };
       f.dias.forEach((d, i) => { fila[encabezadoDias[i]] = formatoHoraLarga(d.hora); });
       fila["APLICA BONO"] = f.aplicaBono ? BONO_PUNTUALIDAD_MONTO : "";
-      fila["OBSERVACIONES"] = observaciones[f.numeroEmpleado] || "";
+      fila["OBSERVACIONES"] = observaciones[f.clave] || "";
       return fila;
     });
     const hoja = XLSX.utils.json_to_sheet(filasExcel);
@@ -492,6 +651,142 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
               </button>
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={procesarArchivo} />
               {resultadoSubida && <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>{resultadoSubida}</div>}
+
+              {Object.keys(pendientes).length > 0 && (
+                <div style={{ marginTop: 14, border: `1px solid ${T.primary}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: T.primary }}>
+                      Colaboradores nuevos en el archivo ({Object.keys(pendientes).length})
+                    </div>
+                    <button className="rc-btn-ghost" disabled={!!guardandoColab} onClick={ignorarTodosPendientes}>
+                      No dar seguimiento a todos
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 10 }}>
+                    Estos números del checador no están asignados a ninguna ruta. Asígnale ruta a quien sí se le da seguimiento y sus marcas de este archivo se guardan al momento.
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {Object.values(pendientes).sort((a, b) => Number(a.numero) - Number(b.numero)).map((p) => (
+                      <div key={p.numero} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: T.cardSoft, borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700 }}>
+                            <span className="nm-mono" style={{ color: T.primary }}>#{p.numero}</span> · {p.nombre}
+                          </div>
+                          <div style={{ fontSize: 11, color: T.muted }}>
+                            {p.identificador} · {Object.keys(p.horasPorFecha).length} día(s) con marcas
+                          </div>
+                        </div>
+                        <select
+                          className="rc-select"
+                          value={rutaElegida[p.numero] || ""}
+                          onChange={(e) => setRutaElegida((r) => ({ ...r, [p.numero]: e.target.value }))}
+                        >
+                          <option value="">Elegir ruta…</option>
+                          {RUTAS_ASIGNABLES.map((r) => (
+                            <option key={r} value={r}>
+                              {nombreRutaBonito(r)}{Object.keys(mapeo).some((n) => mapeo[n] === r) ? ` (reemplaza #${Object.keys(mapeo).find((n) => mapeo[n] === r)})` : ""}
+                            </option>
+                          ))}
+                          <option value="__ignorar">— No dar seguimiento —</option>
+                        </select>
+                        <button
+                          className="rc-btn"
+                          style={{ padding: "7px 12px", fontSize: 12 }}
+                          disabled={!rutaElegida[p.numero] || !!guardandoColab}
+                          onClick={() => asignarColaborador(p.numero, rutaElegida[p.numero] === "__ignorar" ? null : rutaElegida[p.numero])}
+                        >
+                          {guardandoColab === p.numero ? "Guardando…" : "Guardar"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {mensajeColab && <div style={{ fontSize: 12, color: T.ok, marginTop: 10 }}>{mensajeColab}</div>}
+            </div>
+          )}
+
+          {puedeSubir && (
+            <div className="rc-card" style={{ padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setVerColaboradores((v) => !v)}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>Colaboradores del checador</div>
+                <span style={{ fontSize: 12, color: T.muted }}>{verColaboradores ? "Ocultar" : `Ver (${Object.keys(mapeo).length})`}</span>
+              </div>
+              {verColaboradores && (
+                <>
+                  {!tablaColaboradoresOk && (
+                    <div style={{ fontSize: 11.5, color: T.bad, marginTop: 10 }}>
+                      Falta crear la tabla 'checador_empleados' en Supabase (SQL al inicio de RelojChecadorView). Mientras tanto se usa el mapeo base y no se pueden guardar cambios.
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11.5, color: T.muted, margin: "8px 0 10px" }}>
+                    "Reloj" es el número del empleado en el checador (columna Num del archivo). Si alguien cambia de número, asígnale su ruta al número nuevo y el anterior se desactiva solo.
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left" }}>
+                          {["Reloj", "Nombre", "Ruta"].map((h) => (
+                            <th key={h} style={{ padding: "6px 8px", color: T.muted, fontWeight: 600 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {listaColaboradores.map((c) => (
+                          <tr key={c.numero} style={{ borderTop: `1px solid ${T.border}`, opacity: c.ruta ? 1 : 0.55 }}>
+                            <td className="nm-mono" style={{ padding: "6px 8px" }}>{c.numero}</td>
+                            <td style={{ padding: "6px 8px" }}>{c.nombre || "—"}</td>
+                            <td style={{ padding: "6px 8px" }}>
+                              <select
+                                className="rc-select"
+                                value={c.ruta || "__ignorar"}
+                                disabled={!!guardandoColab || !tablaColaboradoresOk}
+                                onChange={(e) => asignarColaborador(c.numero, e.target.value === "__ignorar" ? null : e.target.value)}
+                              >
+                                {RUTAS_ASIGNABLES.map((r) => <option key={r} value={r}>{nombreRutaBonito(r)}</option>)}
+                                <option value="__ignorar">— No dar seguimiento —</option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ fontWeight: 700, fontSize: 12.5, margin: "14px 0 8px" }}>Agregar colaborador</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <input
+                      className="rc-input" style={{ width: 90 }} placeholder="Reloj #" inputMode="numeric"
+                      value={nuevoColab.numero}
+                      onChange={(e) => setNuevoColab((n) => ({ ...n, numero: e.target.value.replace(/\D/g, "") }))}
+                    />
+                    <input
+                      className="rc-input" style={{ flex: "1 1 160px" }} placeholder="Nombre (opcional)"
+                      value={nuevoColab.nombre}
+                      onChange={(e) => setNuevoColab((n) => ({ ...n, nombre: e.target.value }))}
+                    />
+                    <select className="rc-select" value={nuevoColab.ruta} onChange={(e) => setNuevoColab((n) => ({ ...n, ruta: e.target.value }))}>
+                      <option value="">Ruta…</option>
+                      {RUTAS_ASIGNABLES.map((r) => <option key={r} value={r}>{nombreRutaBonito(r)}</option>)}
+                    </select>
+                    <button
+                      className="rc-btn" style={{ padding: "7px 12px", fontSize: 12 }}
+                      disabled={!nuevoColab.numero || !nuevoColab.ruta || !!guardandoColab || !tablaColaboradoresOk}
+                      onClick={async () => {
+                        await asignarColaborador(nuevoColab.numero, nuevoColab.ruta, { nombre: nuevoColab.nombre });
+                        setNuevoColab({ numero: "", nombre: "", ruta: "" });
+                      }}
+                    >
+                      Agregar
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: 8 }}>
+                    Después de agregar a alguien, vuelve a subir el archivo del checador para cargar sus marcas.
+                  </div>
+                  {mensajeColab && <div style={{ fontSize: 12, color: T.ok, marginTop: 10 }}>{mensajeColab}</div>}
+                </>
+              )}
             </div>
           )}
 
@@ -647,7 +942,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
                   </thead>
                   <tbody>
                     {filasResumen.map((f) => (
-                      <tr key={f.numeroEmpleado} style={{ borderTop: `1px solid ${T.border}`, background: f.sinChecador ? T.cardSoft : "transparent" }}>
+                      <tr key={f.clave} style={{ borderTop: `1px solid ${T.border}`, background: f.sinChecador ? T.cardSoft : "transparent" }}>
                         <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{f.puesto}</td>
                         <td style={{ padding: "8px 10px", fontWeight: 700, whiteSpace: "nowrap" }}>{f.ruta.replace("RUTA ", "")}</td>
                         <td className="nm-mono" style={{ padding: "8px 10px", color: f.sinChecador ? T.muted : T.ink }}>{f.sinChecador ? "—" : f.numeroEmpleado}</td>
@@ -670,8 +965,8 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
                         <td style={{ padding: "6px 8px", minWidth: 160 }}>
                           <input
                             type="text"
-                            value={observaciones[f.numeroEmpleado] || ""}
-                            onChange={(e) => setObservaciones((o) => ({ ...o, [f.numeroEmpleado]: e.target.value }))}
+                            value={observaciones[f.clave] || ""}
+                            onChange={(e) => setObservaciones((o) => ({ ...o, [f.clave]: e.target.value }))}
                             placeholder="—"
                             style={{ width: "100%", boxSizing: "border-box", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, color: T.ink, padding: "5px 8px", fontSize: 11.5 }}
                           />
