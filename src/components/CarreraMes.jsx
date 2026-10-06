@@ -1,270 +1,187 @@
-import { useState, memo } from "react";
+import { useRive } from "@rive-app/react-canvas";
+import { useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 
-const SW = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
+const DURACION_TOTAL = 1;
+const DURACION_ANIMACION_MS = 45000;
+const CURVA = "quart";
 
-function TileIcon({ name, ...props }) {
-  const p = { viewBox: "0 0 24 24", ...SW, ...props };
-  switch (name) {
-    case "calendar": return (<svg {...p}><rect x="3.5" y="5" width="17" height="15.5" rx="2.2"/><path d="M3.5 9.5h17"/><path d="M8 3v3.6M16 3v3.6"/><circle cx="15.3" cy="14.4" r="1.3" fill="currentColor" stroke="none"/></svg>);
-    case "ladder": return (<svg {...p}><path d="M8 3v18M16 3v18"/><path d="M8 7h8M8 11h8M8 15h8M8 19h8"/></svg>);
-    case "dashboard": return (<svg {...p}><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M7 20h10M12 17v3"/><path d="M6.5 13.5l2.5-3 2 2 3.5-4.5"/></svg>);
-    case "rocket": return (<svg {...p}><path d="M12 2.5c3 2 4.5 5.6 4.5 9.3 0 2-.5 3.7-1.2 5l-3.3 3-3.3-3c-.7-1.3-1.2-3-1.2-5 0-3.7 1.5-7.3 4.5-9.3Z"/><circle cx="12" cy="10.5" r="1.7"/><path d="M8.3 15.3 5.5 17l.6-3.6M15.7 15.3l2.8 1.7-.6-3.6"/><path d="M10.3 19.8 9.5 22M13.7 19.8l.8 2.2"/></svg>);
-    case "trophy": return (<svg {...p}><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 5H4a3 3 0 0 0 3 5M17 5h3a3 3 0 0 1-3 5"/><path d="M12 14v3M8.5 21h7M9.5 17.5h5l.5 3.5h-6l.5-3.5Z"/></svg>);
-    case "flag": return (<svg {...p}><path d="M5 3v18"/><path d="M5 4h5l1.2 1.6L12.4 4H17l-1.5 3.5L17 11h-4.6l-1.2-1.6L10 11H5V4Z"/></svg>);
-    case "cart": return (<svg {...p}><path d="M3 4h2.2L8 15h9l2-8H6.4"/><circle cx="9.5" cy="19.5" r="1.4"/><circle cx="16.5" cy="19.5" r="1.4"/></svg>);
-    case "receipt": return (<svg {...p}><path d="M6 3h12v18l-2-1.3L14 21l-2-1.3L10 21l-2-1.3L6 21V3Z"/><path d="M9 8h6M9 12h6M9 16h3.5"/></svg>);
-    case "card": return (<svg {...p}><rect x="3" y="6" width="18" height="13" rx="2.2"/><path d="M3 10.5h18"/><path d="M6.5 15h4"/></svg>);
-    case "warning": return (<svg {...p}><path d="M12 3.5 22 20.5H2L12 3.5Z"/><path d="M12 10v4.2"/><circle cx="12" cy="17.2" r="1" fill="currentColor" stroke="none"/></svg>);
-    case "userplus": return (<svg {...p}><circle cx="9.5" cy="8.5" r="3.6"/><path d="M3.5 20.5c1-3.6 3.5-5.5 6-5.5s5 1.9 6 5.5"/><path d="M18.5 8v5M16 10.5h5"/></svg>);
-    case "ticket": return (<svg {...p}><path d="M3.5 9.5a2 2 0 0 0 0-4V4h17v1.5a2 2 0 0 0 0 4v1a2 2 0 0 0 0 4v1a2 2 0 0 0 0 4V20h-17v-1.5a2 2 0 0 0 0-4v-1a2 2 0 0 0 0-4Z"/><path d="M14 5v14" strokeDasharray="2.2 2.2"/></svg>);
-    case "truck": return (<svg {...p}><rect x="2.5" y="7.5" width="11" height="9"/><path d="M13.5 10.5H17l3.5 3.2v2.8h-3"/><circle cx="7" cy="18.5" r="1.6"/><circle cx="16.5" cy="18.5" r="1.6"/></svg>);
-    case "monstertruck": return (
-      <svg {...p}>
-        <path d="M3 13.2V10.8h3l1.7-2.7h6.4l1.5 2.7H21v2.4" />
-        <path d="M8.2 8.1h5.6" />
-        <path d="M4 13.2h16" />
-        <path d="M6.3 13.2v2.2M17.7 13.2v2.2" />
-        <circle cx="7.2" cy="18.2" r="2.4" />
-        <circle cx="16.8" cy="18.2" r="2.4" />
-        <circle cx="7.2" cy="18.2" r=".7" fill="currentColor" stroke="none" />
-        <circle cx="16.8" cy="18.2" r=".7" fill="currentColor" stroke="none" />
-        <path d="M19.5 10.8V8.4h2.2" />
-      </svg>
-    );
-    case "carrera_mes": return (
-      <svg {...p}>
-        <rect x="3.2" y="4.2" width="17.6" height="16.2" rx="2.2" />
-        <path d="M3.2 8.4h17.6" />
-        <path d="M8 2.6v3.2M16 2.6v3.2" />
-        <path d="M6.2 15.4h2.2M10.8 15.4h2.2M15.4 15.4h2.2" />
-        <circle cx="8.4" cy="12.2" r="1.15" />
-        <circle cx="12" cy="12.2" r="1.15" />
-        <circle cx="15.6" cy="12.2" r="1.15" />
-        <path d="M7.2 18.6h9.6" />
-      </svg>
-    );
-    case "cash": return (<svg {...p}><rect x="2.5" y="6.5" width="19" height="12" rx="1.8"/><circle cx="12" cy="12.5" r="3"/></svg>);
-    case "clock": return (<svg {...p}><circle cx="12" cy="12.5" r="8.5"/><path d="M12 7.5v5l3.3 2"/><path d="M9 2.5h6"/></svg>);
-    case "box": return (<svg {...p}><path d="M12 3 21 7.5v9L12 21 3 16.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>);
-    case "road": return (<svg {...p}><path d="M8 3 4 21M16 3l4 18"/><path d="M12 3v2.5M12 9v2.5M12 15v2.5"/></svg>);
-    case "noentry": return (<svg {...p}><circle cx="12" cy="12" r="8.5"/><path d="M6.5 12h11"/></svg>);
-    case "map": return (<svg {...p}><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z"/><path d="M9 4v14M15 6v14"/><circle cx="17.3" cy="10" r="1" fill="currentColor" stroke="none"/></svg>);
-    case "pin": return (<svg {...p}><path d="M12 21.5S5 14.7 5 9.5a7 7 0 0 1 14 0c0 5.2-7 12-7 12Z"/><circle cx="12" cy="9.5" r="2.6"/></svg>);
-    case "bell": return (<svg {...p}><path d="M12 3.5a5.5 5.5 0 0 0-5.5 5.5v3.2L4.5 16h15L17.5 12.2V9A5.5 5.5 0 0 0 12 3.5Z"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></svg>);
-    case "piggy": return (<svg {...p}><path d="M4.5 12.5a6.5 6.5 0 0 1 6.5-6.5h3a5 5 0 0 1 5 5v.5l2 1.5-2 1v1a2 2 0 0 1-2 2h-1v2h-3v-2H9.5v2h-3v-3.2A6.5 6.5 0 0 1 4.5 12.5Z"/><circle cx="15" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><path d="M7 6.5 5.5 4.5M9.5 6 8.5 4"/></svg>);
-    case "checklist": return (<svg {...p}><rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8.5l1.4 1.4L12 7.3M8 14.5l1.4 1.4L12 13.3"/><path d="M14 8.5h4M14 14.5h4"/></svg>);
-    case "calc": return (<svg {...p}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M7.5 7h9"/><circle cx="8" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="16.5" r=".9" fill="currentColor" stroke="none"/></svg>);
-    case "key": return (<svg {...p}><circle cx="7.5" cy="14.5" r="4"/><path d="M10.6 11.4 19 3M15.5 7 18 9.5M18.3 3.8 20.5 6"/></svg>);
-    case "megaphone": return (<svg {...p}><path d="M3 10v4h3l7 4V6l-7 4H3Z"/><path d="M13 8.5a4 4 0 0 1 0 7M16 6a7 7 0 0 1 0 12"/><path d="M6 14v4a1.5 1.5 0 0 0 3 0v-4"/></svg>);
-    case "sliders": return (<svg {...p}><path d="M4 6h9M17 6h3M4 12h3M9 12h11M4 18h13M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>);
-    case "mural": return (
-      <svg {...p}>
-        <rect x="4" y="3.2" width="16" height="17.6" rx="2.2" />
-        <circle cx="12" cy="9.6" r="2.8" />
-        <path d="M7 16.5c1-2.4 2.8-3.4 5-3.4s4 1 5 3.4" />
-        <path d="M12 2 12.6 3.4 14.1 3.55 13 4.5 13.3 6 12 5.2 10.7 6 11 4.5 9.9 3.55 11.4 3.4Z" fill="currentColor" stroke="none" />
-      </svg>
-    );
-    default: return (<svg {...p}><rect x="4" y="4" width="16" height="16" rx="3"/></svg>);
-  }
+const TIMELINES = [
+  "Timeline J201",
+  "Timeline J202",
+  "Timeline J203",
+  "Timeline J204",
+  "Timeline J205",
+  "Timeline J206",
+  "Timeline J207",
+];
+
+const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
+
+function easeOutCubic(x) {
+  return 1 - Math.pow(1 - x, 3);
 }
 
-const META = {
-  dia:               { icon: "calendar",      color: "#38bdf8", fam: "🏠 Inicio" },
-  escalera:          { icon: "ladder",        color: "#c084fc", fam: "🏠 Inicio" },
-  mesa:              { icon: "dashboard",     color: "#60a5fa", fam: "🏠 Inicio" },
-  carreras:          { icon: "monstertruck",  color: "#ff6b00", fam: "🏠 Inicio" },
-  carrera_mes:       { icon: "carrera_mes",   color: "#FFD700", fam: "🏠 Inicio" },
-
-  mural_campeones:   { icon: "mural",    color: "#FFD700", fam: "🏆 Reconocimiento", alwaysPulse: true },
-
-  max:               { icon: "rocket",   color: "#f472b6", fam: "🎯 Avances" },
-  open:              { icon: "unlock",   color: "#fb923c", fam: "🎯 Avances", img: "https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/promociones/OPEN.jpeg" },
-  champions:         { icon: "trophy",   color: "#fbbf24", fam: "🎯 Avances" },
-  rally_otc:         { icon: "flag",     color: "#4ade80", fam: "🎯 Avances" },
-  otc_ventas:        { icon: "cart",     color: "#2dd4bf", fam: "🎯 Avances" },
-
-  facturas:          { icon: "receipt",  color: "#38bdf8", fam: "💰 Ventas" },
-  creditos:          { icon: "card",     color: "#a78bfa", fam: "💰 Ventas" },
-  cartera_vencida:   { icon: "warning",  color: "#f87171", fam: "💰 Ventas" },
-  altas_cliente:     { icon: "userplus", color: "#34d399", fam: "💰 Ventas" },
-  alta_cliente:      { icon: "userplus", color: "#34d399", fam: "💰 Ventas" },
-
-  cuponera:          { icon: "ticket",   color: "#fb923c", fam: "🎟️ Promociones" },
-  promociones_coach: { icon: "megaphone",color: "#fbbf24", fam: "🎟️ Promociones" },
-
-  unidades:          { icon: "truck",    color: "#f87171", fam: "📋 Operación" },
-  nomina:            { icon: "cash",     color: "#4ade80", fam: "📋 Operación" },
-  reloj_checador:    { icon: "clock",    color: "#38bdf8", fam: "📋 Operación" },
-  cargas:            { icon: "box",      color: "#fbbf24", fam: "📋 Operación" },
-  km:                { icon: "road",     color: "#a78bfa", fam: "📋 Operación" },
-  sin_visita:        { icon: "noentry",  color: "#f87171", fam: "📋 Operación" },
-  rutas:             { icon: "map",      color: "#2dd4bf", fam: "📋 Operación" },
-  tepic:             { icon: "pin",      color: "#60a5fa", fam: "📋 Operación" },
-  tiempos:           { icon: "clock",    color: "#7dd3fc", fam: "📋 Operación" },
-  actividad:         { icon: "checklist",color: "#a3e635", fam: "📋 Operación" },
-  actividades_dia:   { icon: "checklist",color: "#4ade80", fam: "📋 Operación" },
-  actividades_semana:{ icon: "checklist",color: "#38bdf8", fam: "📋 Operación" },
-  actividades_mes:   { icon: "checklist",color: "#a78bfa", fam: "📋 Operación" },
-  cotizador:         { icon: "calc",     color: "#fbbf24", fam: "📋 Operación" },
-  pwst:              { icon: "box",      color: "#94a3b8", fam: "📋 Operación" },
-
-  avisos:            { icon: "bell",     color: "#f87171", fam: "🔔 Avisos" },
-
-  mi_fondo:          { icon: "piggy",    color: "#fbbf24", fam: "⚙️ Configuración" },
-  reset_pin:         { icon: "key",      color: "#f59e0b", fam: "⚙️ Configuración" },
-  permisos:          { icon: "sliders",  color: "#38bdf8", fam: "⚙️ Configuración" },
-};
-
-const FAMILY_ORDER = ["🏠 Inicio", "🏆 Reconocimiento", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
-
-function statusOverride(status) {
-  switch (status) {
-    case "pendiente_urgente":
-    case "aviso_nuevo":
-      return { color: "#f87171", pulse: true, badge: true };
-    case "parpadeo_verde":
-      return { color: "#4ade80", pulse: true, badge: false };
-    case "completo":
-      return { color: "#4ade80", pulse: false, badge: false };
-    case "aviso_azul":
-      return { color: "#60a5fa", pulse: true, badge: true };
-    default:
-      return null;
-  }
+function easeOutQuart(x) {
+  return 1 - Math.pow(1 - x, 4);
 }
 
-const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, intense: intenseProp, onSelect }) {
-  const [pressed, setPressed] = useState(false);
-  const intense = pulse && (badge || intenseProp);
+function easeOutExpo(x) {
+  return x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
+}
 
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(tKey)}
-      onTouchStart={() => setPressed(true)}
-      onTouchEnd={() => setPressed(false)}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      onMouseLeave={() => setPressed(false)}
+function suavizar(x) {
+  if (CURVA === "cubic") return easeOutCubic(x);
+  if (CURVA === "expo") return easeOutExpo(x);
+  return easeOutQuart(x);
+}
+
+function porcentajeMes(v) {
+  const pct = Number(v?.tabs?.max?.avancePct);
+  if (!Number.isFinite(pct)) return 0;
+  return Math.min(Math.max(pct, 0), 100);
+}
+
+export default function CarreraMes({ porVendedor, onCerrar }) {
+  const { rive, RiveComponent } = useRive({
+    src: "/carrera_mes.riv",
+    animations: TIMELINES,
+    autoplay: false,
+  });
+
+  const ranking = useMemo(() => {
+    const pctPorRuta = {};
+    (porVendedor || []).forEach((v) => {
+      const match = String(v.name || "").toUpperCase().match(/J20[1-7]/);
+      if (!match) return;
+      pctPorRuta[match[0]] = porcentajeMes(v);
+    });
+    return RUTAS.map((ruta) => ({
+      ruta,
+      pct: pctPorRuta[ruta] ?? 0,
+    })).sort((a, b) => b.pct - a.pct);
+  }, [porVendedor]);
+
+  const rankingKey = ranking.map((r) => `${r.ruta}:${r.pct.toFixed(1)}`).join("|");
+  const yaAnimoRef = useRef("");
+
+  useEffect(() => {
+    if (!rive || ranking.length === 0) return;
+    if (yaAnimoRef.current === rankingKey) return;
+    yaAnimoRef.current = rankingKey;
+
+    let frameId = 0;
+    let cancelado = false;
+
+    const objetivos = ranking.map(({ ruta, pct }) => ({
+      nombreTimeline: `Timeline ${ruta}`,
+      segundosDestino: (pct / 100) * DURACION_TOTAL,
+    }));
+
+    rive.play(TIMELINES);
+    rive.pause(TIMELINES);
+    objetivos.forEach(({ nombreTimeline }) => rive.scrub(nombreTimeline, 0));
+    rive.drawFrame();
+
+    const inicio = performance.now();
+
+    const tick = (ahora) => {
+      if (cancelado) return;
+      const progreso = Math.min(Math.max((ahora - inicio) / DURACION_ANIMACION_MS, 0), 1);
+      const factor = suavizar(progreso);
+
+      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
+        rive.scrub(nombreTimeline, segundosDestino * factor);
+      });
+      rive.drawFrame();
+
+      if (progreso < 1) frameId = requestAnimationFrame(tick);
+    };
+
+    frameId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelado = true;
+      if (frameId) cancelAnimationFrame(frameId);
+    };
+  }, [rive, ranking, rankingKey]);
+
+  const contenido = (
+    <div
       style={{
-        position: "relative",
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        gap: 7, padding: "14px 6px", borderRadius: 14, cursor: "pointer", textAlign: "center",
-        border: `1px solid ${active ? color : color + "38"}`,
-        background: `radial-gradient(120% 140% at 50% -10%, ${color}22, transparent 60%), linear-gradient(155deg, #0e1626 0%, #0a1220 100%)`,
-        boxShadow: active ? `0 0 16px -3px ${color}` : "none",
-        transform: pressed ? "scale(0.93)" : "scale(1)",
-        transition: "transform .12s ease, border-color .2s ease",
-        touchAction: "manipulation",
-        animation: intense ? "neonShake 2.4s ease-in-out infinite" : undefined,
+        position: "fixed",
+        top: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        background: "#0a0a0a",
+        zIndex: 999999,
+        display: "flex",
+        flexDirection: "column",
       }}
     >
-      {pulse && (
-        <span
-          aria-hidden
+      {onCerrar && (
+        <button
+          onClick={onCerrar}
           style={{
-            position: "absolute", inset: -1, borderRadius: 14,
-            boxShadow: intense ? `0 0 26px 2px ${color}` : `0 0 16px -2px ${color}`,
-            animation: intense
-              ? "neonPulseIntense 0.9s ease-in-out infinite"
-              : "neonPulse 2.1s ease-in-out infinite",
-            pointerEvents: "none",
-            willChange: "opacity, box-shadow",
+            position: "absolute",
+            top: 16,
+            left: 16,
+            zIndex: 1000000,
+            background: "rgba(0,0,0,0.6)",
+            color: "#fff",
+            border: "1px solid #555",
+            borderRadius: 8,
+            padding: "8px 14px",
+            fontSize: 14,
+            cursor: "pointer",
           }}
-        />
+        >
+          ← Regresar
+        </button>
       )}
 
-      {badge && (
-        <span
-          aria-hidden
-          style={{
-            position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
-            background: color, boxShadow: `0 0 6px ${color}`,
-            animation: "badgeBlink 0.9s ease-in-out infinite",
-          }}
-        />
-      )}
+      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
+        <RiveComponent style={{ width: "100%", height: "100%" }} />
+      </div>
 
-      <span style={{
-        width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center",
-        color, borderRadius: 8, boxShadow: `0 0 8px -1px ${color}90`,
-      }}>
-        {img ? (
-          <img src={img} alt={label} style={{ width: 24, height: "auto", borderRadius: 4 }} />
-        ) : (
-          <TileIcon name={icon} width={22} height={22} />
-        )}
-      </span>
-
-      <span style={{
-        fontSize: 10.5, fontWeight: 700, lineHeight: 1.15, color,
-        textShadow: `0 0 4px ${color}90`,
-      }}>
-        {label}
-      </span>
-    </button>
-  );
-});
-
-export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
-  const grouped = FAMILY_ORDER.map((fam) => ({
-    fam,
-    items: (tabs || []).filter((t) => (META[t.key]?.fam || "📋 Operación") === fam),
-  })).filter((g) => g.items.length > 0);
-
-  return (
-    <div style={{ marginBottom: 6 }}>
-      {grouped.map((g) => (
-        <div key={g.fam} style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#cbd5e1", marginBottom: 8 }}>
-            {g.fam}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          overflowX: "auto",
+          padding: "10px 12px",
+          flexShrink: 0,
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {ranking.map((r, i) => (
+          <div
+            key={r.ruta}
+            style={{
+              flex: "0 0 auto",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              background: i === 0 ? "#3a2f0a" : "#1a1a1a",
+              border: i === 0 ? "1px solid #FFD700" : "1px solid #333",
+              borderRadius: 20,
+              padding: "6px 12px",
+              fontSize: 12,
+              color: "#fff",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span style={{ color: i === 0 ? "#FFD700" : "#9AA7BD", fontWeight: 700 }}>
+              {i + 1}°
+            </span>
+            <span style={{ fontWeight: 600 }}>{r.ruta}</span>
+            <span style={{ color: "#9AA7BD" }}>{r.pct.toFixed(0)}%</span>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 10 }}>
-            {g.items.map((t) => {
-              const meta = META[t.key] || { icon: "box", color: "#94a3b8" };
-              const status = statusOverride(estadoTabs[t.key]);
-              const color = status ? status.color : meta.color;
-
-              return (
-                <Tile
-                  key={t.key}
-                  tKey={t.key}
-                  label={t.label}
-                  icon={meta.icon}
-                  img={meta.img}
-                  color={color}
-                  active={tab === t.key}
-                  pulse={!!status?.pulse || !!meta.alwaysPulse}
-                  badge={!!status?.badge}
-                  intense={!!meta.alwaysPulse}
-                  onSelect={setTab}
-                />
-              );
-            })}
-          </div>
-        </div>
-      ))}
-      <style>{`
-        @keyframes neonPulse {
-          0%, 100% { opacity: 0.25; }
-          50% { opacity: 1; }
-        }
-        @keyframes neonPulseIntense {
-          0%, 100% { opacity: 0.15; transform: scale(1); }
-          50% { opacity: 1; transform: scale(1.035); }
-        }
-        @keyframes neonShake {
-          0%, 92%, 100% { transform: scale(1); }
-          94% { transform: scale(1.03); }
-          96% { transform: scale(0.99); }
-          98% { transform: scale(1.03); }
-        }
-        @keyframes badgeBlink {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.35; transform: scale(1.25); }
-        }
-      `}</style>
+        ))}
+      </div>
     </div>
   );
+
+  return createPortal(contenido, document.body);
 }
