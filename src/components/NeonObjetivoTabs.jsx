@@ -31,6 +31,18 @@ function TileIcon({ name, ...props }) {
         <path d="M19.5 10.8V8.4h2.2" />
       </svg>
     );
+    case "carrera_mes": return (
+      <svg {...p}>
+        <rect x="3.2" y="4.2" width="17.6" height="16.2" rx="2.2" />
+        <path d="M3.2 8.4h17.6" />
+        <path d="M8 2.6v3.2M16 2.6v3.2" />
+        <path d="M6.2 15.4h2.2M10.8 15.4h2.2M15.4 15.4h2.2" />
+        <circle cx="8.4" cy="12.2" r="1.15" />
+        <circle cx="12" cy="12.2" r="1.15" />
+        <circle cx="15.6" cy="12.2" r="1.15" />
+        <path d="M7.2 18.6h9.6" />
+      </svg>
+    );
     case "cash": return (<svg {...p}><rect x="2.5" y="6.5" width="19" height="12" rx="1.8"/><circle cx="12" cy="12.5" r="3"/></svg>);
     case "clock": return (<svg {...p}><circle cx="12" cy="12.5" r="8.5"/><path d="M12 7.5v5l3.3 2"/><path d="M9 2.5h6"/></svg>);
     case "box": return (<svg {...p}><path d="M12 3 21 7.5v9L12 21 3 16.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>);
@@ -62,10 +74,8 @@ const META = {
   escalera:          { icon: "ladder",        color: "#c084fc", fam: "🏠 Inicio" },
   mesa:              { icon: "dashboard",     color: "#60a5fa", fam: "🏠 Inicio" },
   carreras:          { icon: "monstertruck",  color: "#ff6b00", fam: "🏠 Inicio" },
+  carrera_mes:       { icon: "carrera_mes",   color: "#FFD700", fam: "🏠 Inicio" },
 
-  // alwaysPulse: brillo/parpadeo dorado permanente, sin depender de
-  // estadoTabs — es un reconocimiento, no una notificación, así que se
-  // mantiene siempre muy visible en el grid.
   mural_campeones:   { icon: "mural",    color: "#FFD700", fam: "🏆 Reconocimiento", alwaysPulse: true },
 
   max:               { icon: "rocket",   color: "#f472b6", fam: "🎯 Avances" },
@@ -126,9 +136,6 @@ function statusOverride(status) {
 
 const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, intense: intenseProp, onSelect }) {
   const [pressed, setPressed] = useState(false);
-  // Notification tiles (badge === true) get a much more intense blink than a
-  // plain "pulse" status. Un tile puede pedir "intense" directo (ej. Mural
-  // de Campeones, que siempre brilla fuerte aunque no tenga badge).
   const intense = pulse && (badge || intenseProp);
 
   return (
