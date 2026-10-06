@@ -49,6 +49,7 @@ import ResetPinView from "./ResetPinView";
 import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 import PromocionesCoachView from "./PromocionesCoachView";
 import CarrerasVentas from "./CarrerasVentas";
+import CarreraMes from "./CarreraMes";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 import MuralCampeonesView from "./MuralCampeonesView";
@@ -673,6 +674,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               <EscaleraStaffView data={data} persistFresco={persistFresco} stats={stats} revisorNombre={revisorNombre} />
             )
           ) : objTab === "carreras" ? null
+          : objTab === "carrera_mes" ? null
           : objTab === "actividad" ? (
             puesto === "gerente" ? (
               <ActividadView />
@@ -1020,6 +1022,9 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           )}
           {pantallaAbierta && objTab === "carreras" && (
             <CarrerasVentas porVendedor={stats.porVendedor} onCerrar={() => setPantallaAbierta(false)} />
+          )}
+          {pantallaAbierta && objTab === "carrera_mes" && (
+            <CarreraMes porVendedor={stats.porVendedor} onCerrar={() => setPantallaAbierta(false)} />
           )}
         </>
       )}
