@@ -33,6 +33,7 @@ import OtcVentasView from "./OtcVentasView";
 import AltaClienteView from "./AltaClienteView";
 import CoachIAView from "./CoachIAView";
 import CarrerasVentas from "./CarrerasVentas";
+import CarreraMes from "./CarreraMes";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 import MuralCampeonesView from "./MuralCampeonesView";
@@ -123,7 +124,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
     .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
     .join("\n");
 
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras" || tab === "scorecard" || tab === "mural_campeones";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras" || tab === "carrera_mes" || tab === "scorecard" || tab === "mural_campeones";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -240,6 +241,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
       ) : tab === "mural_campeones" ? (
         <MuralCampeonesView puesto={null} staffUsername={vendedor.name} modo="vendedor" />
       ) : tab === "carreras" ? null
+      : tab === "carrera_mes" ? null
       : !m ? (
         // Guardia de seguridad: si algún día se agrega una pestaña nueva a
         // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
@@ -290,6 +292,9 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
       )}
       {pantallaAbierta && tab === "carreras" && (
         <CarrerasVentas porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
+      )}
+      {pantallaAbierta && tab === "carrera_mes" && (
+        <CarreraMes porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
       )}
     </div>
   );
