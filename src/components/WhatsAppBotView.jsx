@@ -41,6 +41,27 @@ const PLANTILLAS_DEFAULT = {
     "⚠️ Atención:",
     "{abajo}",
   ].join("\n"),
+  dia: [
+    "📦 *Avance del día* · corte {hora}",
+    "{nombre}, llevas *{dia_vendido}* de {dia_objetivo} (*{pct_dia}*)",
+    "",
+    "🎯 Efectividad: {efectividad} · {visitas} visitas efectivas",
+    "🏁 Lugar {lugar_dia} de {total_rutas} en el día {medalla_dia}",
+    "",
+    "{frase_dia}",
+  ].join("\n"),
+  equipo_dia: [
+    "📦 *Avance del día · Equipo* · corte {hora}",
+    "",
+    "Equipo: *{pct_dia_equipo}* ({dia_vendido_equipo} de {dia_objetivo_equipo})",
+    "Rutas con meta del día cumplida: {rutas_meta_dia} de {total_rutas}",
+    "",
+    "🏆 Arriba hoy:",
+    "{top_dia}",
+    "",
+    "⚠️ Atención:",
+    "{abajo_dia}",
+  ].join("\n"),
 };
 
 const VARIABLES = {
@@ -60,6 +81,18 @@ const VARIABLES = {
   ],
 };
 VARIABLES.alerta = VARIABLES.matutino;
+VARIABLES.dia = [
+  ["nombre", "Primer nombre"], ["ruta", "Ruta"], ["fecha", "Fecha"], ["hora", "Hora del corte"],
+  ["dia_vendido", "Vendido hoy"], ["dia_objetivo", "Meta de hoy"], ["pct_dia", "% del día"], ["falta_dia", "Falta hoy"],
+  ["efectividad", "Efectividad"], ["visitas", "Visitas efectivas"], ["lugar_dia", "Lugar del día"],
+  ["total_rutas", "Total rutas"], ["medalla_dia", "🥇🥈🥉"], ["otc_dia", "OTC de hoy"], ["otc_objetivo", "Meta OTC"],
+  ["marcas_dia", "Marcas de hoy"], ["frase_dia", "Frase automática"],
+];
+VARIABLES.equipo_dia = [
+  ["fecha", "Fecha"], ["hora", "Hora del corte"], ["pct_dia_equipo", "% día equipo"], ["dia_vendido_equipo", "Vendido equipo"],
+  ["dia_objetivo_equipo", "Meta equipo"], ["rutas_meta_dia", "Rutas con meta"], ["total_rutas", "Total rutas"],
+  ["top_dia", "Top 3 del día"], ["abajo_dia", "3 más abajo"], ["ranking_dia", "Ranking del día"], ["nombre", "Nombre de quien recibe"],
+];
 
 const EJEMPLO = {
   nombre: "Francisco", nombre_completo: "Francisco Javier", ruta: "J201", fecha: "mar 06/10", pct_mes: "62%",
@@ -72,6 +105,13 @@ const EJEMPLO = {
   top: "🥇 J202 Luis – 72%\n🥈 J204 Ana – 66%\n🥉 J201 Francisco – 62%",
   abajo: "🔻 J205 Pedro – 48%\n🔻 J207 Raúl – 51%\n🔻 J206 Mario – 55%",
   ranking: "🥇 J202 Luis – 72%\n🥈 J204 Ana – 66%\n…",
+  hora: "1:35 pm", lugar_dia: "4", medalla_dia: "", otc_dia: "$1,450", otc_objetivo: "$2,000",
+  frase_dia: "Vas a la mitad. Te faltan 33 paq, ¡a darle!",
+  marcas_dia: "• ICE MIX: 30 paq de 40 paq\n• BLOSSOM MIX: ✅ 12 paq",
+  dia_vendido_equipo: "500 paq", dia_objetivo_equipo: "742 paq", rutas_meta_dia: "1",
+  top_dia: "🥇 J202 Riqui – 110%\n🥈 J206 Selene – 91%\n🥉 J207 Alfredo – 72%",
+  abajo_dia: "🔻 J203 Ana – 35%\n🔻 J205 Alejandro – 40%\n🔻 J204 Noema – 61%",
+  ranking_dia: "1. J202 Riqui – 110%\n2. J206 Selene – 91%\n…",
 };
 
 function llenar(tpl, vars) {
@@ -121,6 +161,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const [plantillas, setPlantillas] = useState({ ...PLANTILLAS_DEFAULT, ...(guardado.plantillas || {}) });
   const [aviso, setAviso] = useState(guardado.aviso || "");
   const [umbral, setUmbral] = useState(guardado.umbralAlerta || 70);
+  const [avanceDiaActivo, setAvanceDiaActivo] = useState(guardado.avanceDiaActivo !== false);
   const [tipoPlantilla, setTipoPlantilla] = useState("matutino");
   const [estado, setEstado] = useState("");
   const [sucio, setSucio] = useState(false);
@@ -132,6 +173,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
     setPlantillas({ ...PLANTILLAS_DEFAULT, ...(guardado.plantillas || {}) });
     setAviso(guardado.aviso || "");
     setUmbral(guardado.umbralAlerta || 70);
+    setAvanceDiaActivo(guardado.avanceDiaActivo !== false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.whatsappBot]);
 
@@ -143,7 +185,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const agregar = marcar((tipo) =>
     setContactos((cs) => [
       ...cs,
-      { id: nuevoId(), tipo, ruta: tipo === "vendedor" ? "" : "", nombre: "", telefono: "", activo: true, matutino: true, alerta: tipo === "vendedor" },
+      { id: nuevoId(), tipo, ruta: tipo === "vendedor" ? "" : "", nombre: "", telefono: "", activo: true, matutino: true, dia: true, alerta: tipo === "vendedor" },
     ])
   );
   const quitar = marcar((id) => {
@@ -173,7 +215,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
     const limpios = contactos.map((c) => ({
       id: c.id, tipo: c.tipo === "equipo" ? "equipo" : "vendedor", ruta: c.tipo === "equipo" ? "" : c.ruta,
       nombre: String(c.nombre).trim(), telefono: solo10(c.telefono),
-      activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.tipo === "vendedor" && c.alerta !== false,
+      activo: c.activo !== false, matutino: c.matutino !== false, dia: c.dia !== false, alerta: c.tipo === "vendedor" && c.alerta !== false,
     }));
     // Solo se guardan las plantillas que cambiaron (las demás siguen el texto original).
     const plantillasEditadas = {};
@@ -189,6 +231,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           plantillas: plantillasEditadas,
           aviso: String(aviso || "").trim(),
           umbralAlerta: Math.min(100, Math.max(1, Number(umbral) || 70)),
+          avanceDiaActivo,
           actualizado: new Date().toISOString(),
         },
       }));
@@ -213,7 +256,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       <div style={S.header}>
         <div>
           <div style={S.titulo}>💬 Bot de WhatsApp</div>
-          <div style={S.sub}>Resumen 8:00 am · Alerta de la tarde · Respuestas automáticas</div>
+          <div style={S.sub}>Resumen 8:00 am · Avance del día al cargar · Alerta de la tarde · Respuestas automáticas</div>
         </div>
         {puedeEditar && (
           <button style={{ ...S.btnPrimario, opacity: sucio ? 1 : 0.5 }} onClick={guardar} disabled={!sucio}>
@@ -282,6 +325,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
               <div style={S.toggles}>
                 <Toggle on={c.activo !== false} disabled={deshabilitado} label="Activo" onChange={(v) => editarContacto(c.id, "activo", v)} />
                 <Toggle on={c.matutino !== false} disabled={deshabilitado} label={c.tipo === "equipo" ? "Tarjeta del equipo 8 am" : "Resumen 8 am"} onChange={(v) => editarContacto(c.id, "matutino", v)} />
+                <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
                 {c.tipo === "vendedor" && (
                   <Toggle on={c.alerta !== false} disabled={deshabilitado} label="Alerta de la tarde" onChange={(v) => editarContacto(c.id, "alerta", v)} />
                 )}
@@ -306,7 +350,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       {seccion === "mensajes" && (
         <div>
           <div style={S.tabs}>
-            {[["matutino", "☀️ Resumen 8 am"], ["alerta", "⏰ Alerta tarde"], ["equipo", "📊 Equipo"]].map(([k, l]) => (
+            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
               <button key={k} onClick={() => setTipoPlantilla(k)} style={tipoPlantilla === k ? S.tabOn : S.tab}>{l}</button>
             ))}
           </div>
@@ -343,7 +387,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
               <VistaWhatsApp
                 texto={
                   llenar(plantillas[tipoPlantilla], EJEMPLO) +
-                  (tipoPlantilla !== "alerta" && aviso.trim() ? `\n\n📣 ${aviso.trim()}` : "")
+                  ((tipoPlantilla === "matutino" || tipoPlantilla === "equipo") && aviso.trim() ? `\n\n📣 ${aviso.trim()}` : "")
                 }
               />
               {tipoPlantilla !== "alerta" && <div style={S.nota}>+ se envía junto con la tarjeta en imagen.</div>}
@@ -351,6 +395,9 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           </div>
 
           <div style={S.card}>
+            <Toggle on={avanceDiaActivo} disabled={deshabilitado}
+              label="📦 Mandar la tarjeta del Avance del día cada vez que se cargue un avance"
+              onChange={marcar((v) => setAvanceDiaActivo(v))} />
             <label style={S.campo}>
               <span style={S.lbl}>📣 Aviso del día (opcional) — se agrega al final del resumen de la mañana</span>
               <input style={S.input} value={aviso} disabled={deshabilitado} placeholder="Ej. Hoy hay promo ICE MIX 2x1 en mayoristas"
