@@ -1433,6 +1433,18 @@ export default function App() {
         proyectado_mes: v.proyeccion?.max?.proyectado,
         otc_dia: v.hoy?.otc?.vendido,
         otc_dia_objetivo: v.hoy?.otc?.objetivo,
+        // Marcas OPEN (mismos datos que el bloque "MARCAS · OPEN (PAQUETES)")
+        marcas: MARCAS_OPEN.map((m) => {
+          const mo = v.marcasOpen?.[m.key] || {};
+          return {
+            clave: m.key,
+            nombre: m.label || m.key,
+            vendido: mo.vendido ?? null,
+            objetivo: mo.objetivo ?? null,
+            resta: mo.restaPorVender ?? null,
+            por_dia: mo.ventaPorDiaNecesaria ?? null,
+          };
+        }),
       },
     };
   }), [stats]);
