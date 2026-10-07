@@ -164,7 +164,7 @@ export async function listaContactos(cfg) {
     .map((c) => ({
       id: c.id, ruta: c.ruta || '', nombre: c.nombre || '', telefono: tel10(c.telefono),
       tipo: c.tipo === 'equipo' ? 'equipo' : 'vendedor',
-      activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.alerta !== false,
+      activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.alerta !== false, dia: c.dia !== false,
     }))
     .filter((c) => c.telefono.length === 10);
 }
@@ -218,6 +218,27 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '⚠️ Atención:',
     '{abajo}',
+  ].join('\n'),
+  dia: [
+    '📦 *Avance del día* · corte {hora}',
+    '{nombre}, llevas *{dia_vendido}* de {dia_objetivo} (*{pct_dia}*)',
+    '',
+    '🎯 Efectividad: {efectividad} · {visitas} visitas efectivas',
+    '🏁 Lugar {lugar_dia} de {total_rutas} en el día {medalla_dia}',
+    '',
+    '{frase_dia}',
+  ].join('\n'),
+  equipo_dia: [
+    '📦 *Avance del día · Equipo* · corte {hora}',
+    '',
+    'Equipo: *{pct_dia_equipo}* ({dia_vendido_equipo} de {dia_objetivo_equipo})',
+    'Rutas con meta del día cumplida: {rutas_meta_dia} de {total_rutas}',
+    '',
+    '🏆 Arriba hoy:',
+    '{top_dia}',
+    '',
+    '⚠️ Atención:',
+    '{abajo_dia}',
   ].join('\n'),
 };
 
@@ -403,5 +424,105 @@ export function varsEquipo(eq) {
     top: conPct.slice(0, 3).map(linea).join('\n'),
     abajo: abajo.join('\n'),
     ranking: conPct.map(linea).join('\n'),
+  };
+}
+
+
+// ---------------------------------------------------------------- Avance del día
+export function horaMX(iso) {
+  if (!iso) return null;
+  try {
+    return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+      .format(new Date(iso)).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+  } catch {
+    return null;
+  }
+}
+
+// Ranking del día (por % del día) entre las filas de la misma fecha.
+export function rankingDia(fila, companeras) {
+  const lista = companeras
+    .map((c) => ({ ruta: c.ruta, p: num(c.objetivo_dia) ? (num(c.venta_dia) || 0) / num(c.objetivo_dia) : null }))
+    .filter((c) => c.p !== null)
+    .sort((a, b) => b.p - a.p);
+  const i = lista.findIndex((c) => c.ruta === fila.ruta);
+  return { lugar: i >= 0 ? i + 1 : null, total: lista.length, lista };
+}
+
+export function fraseDia(m) {
+  if (m.pctDia === null) return '';
+  const falta = Math.max(0, (m.objDia || 0) - (m.ventaDia || 0));
+  if (m.pctDia >= 100) return '¡Meta del día cumplida! 🎉 Todo lo que vendas ahora suma de más.';
+  if (m.pctDia >= 80) return `¡Ya casi! Te faltan ${cantidad(falta, m.unidad)} para la meta de hoy 💪`;
+  if (m.pctDia >= 50) return `Vas a la mitad. Te faltan ${cantidad(falta, m.unidad)}, ¡a darle!`;
+  return `Te faltan ${cantidad(falta, m.unidad)} para tu meta de hoy. ¡Todavía hay tiempo! 🔥`;
+}
+
+export function marcasDiaDe(fila) {
+  return (Array.isArray(fila.extra?.marcas_dia) ? fila.extra.marcas_dia : []).filter((x) => num(x.objetivo) > 0);
+}
+
+export function varsDia(fila, m, companeras, contacto = null) {
+  const base = varsVendedor(fila, m, contacto);
+  const r = rankingDia(fila, companeras);
+  const marcas = marcasDiaDe(fila)
+    .map((x) => {
+      const v = num(x.vendido) || 0, o = num(x.objetivo);
+      return v >= o ? `• ${x.nombre}: ✅ ${cantidad(v, m.unidad)}` : `• ${x.nombre}: ${cantidad(v, m.unidad)} de ${cantidad(o, m.unidad)}`;
+    })
+    .join('\n');
+  const otcV = num(fila.extra?.otc_dia), otcO = num(fila.extra?.otc_dia_objetivo);
+  return {
+    ...base,
+    hora: horaMX(fila.actualizado_en),
+    lugar_dia: r.lugar ? String(r.lugar) : null,
+    total_rutas: r.total ? String(r.total) : base.total_rutas,
+    medalla_dia: medalla(r.lugar),
+    frase_dia: fraseDia(m),
+    marcas_dia: marcas,
+    otc_dia: otcV === null ? null : dinero(otcV),
+    otc_objetivo: otcO ? dinero(otcO) : null,
+  };
+}
+
+export function calcularEquipoDia(filas, contactosLista = []) {
+  const eq = calcularEquipo(filas, contactosLista);
+  const rutas = [...eq.rutas]
+    .filter((r) => r.m.pctDia !== null || r.m.ventaDia !== null)
+    .sort((a, b) => (b.m.pctDia ?? -1) - (a.m.pctDia ?? -1));
+  const marcasMap = new Map();
+  for (const f of filas) {
+    for (const mk of marcasDiaDe(f)) {
+      const k = mk.clave || mk.nombre;
+      const acc = marcasMap.get(k) || { clave: k, nombre: mk.nombre || k, vendido: 0, objetivo: 0 };
+      acc.vendido += num(mk.vendido) || 0;
+      acc.objetivo += num(mk.objetivo) || 0;
+      marcasMap.set(k, acc);
+    }
+  }
+  const ultimo = filas.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || null;
+  return {
+    ...eq,
+    rutasDia: rutas,
+    marcasDia: [...marcasMap.values()].filter((x) => x.objetivo > 0),
+    metaCumplida: rutas.filter((r) => r.m.pctDia !== null && r.m.pctDia >= 100).length,
+    actualizado: ultimo,
+  };
+}
+
+export function varsEquipoDia(eq) {
+  const nom = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+  const conPct = eq.rutasDia.filter((r) => r.m.pctDia !== null);
+  return {
+    fecha: eq.fecha ? fechaCorta(eq.fecha) : null,
+    hora: horaMX(eq.actualizado),
+    pct_dia_equipo: eq.pctDia === null ? null : pct(eq.pctDia),
+    dia_vendido_equipo: cantidad(eq.ventaDia, eq.unidad),
+    dia_objetivo_equipo: cantidad(eq.objDia, eq.unidad),
+    rutas_meta_dia: String(eq.metaCumplida),
+    total_rutas: String(conPct.length),
+    top_dia: conPct.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
+    abajo_dia: conPct.slice(-3).reverse().map((r) => `🔻 ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
+    ranking_dia: conPct.map((r, i) => `${i + 1}. ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
   };
 }
