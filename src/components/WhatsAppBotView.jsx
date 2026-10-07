@@ -162,6 +162,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const [aviso, setAviso] = useState(guardado.aviso || "");
   const [umbral, setUmbral] = useState(guardado.umbralAlerta || 70);
   const [avanceDiaActivo, setAvanceDiaActivo] = useState(guardado.avanceDiaActivo !== false);
+  const [tonoBot, setTonoBot] = useState(guardado.tonoBot || "picante");
   const [tipoPlantilla, setTipoPlantilla] = useState("matutino");
   const [estado, setEstado] = useState("");
   const [sucio, setSucio] = useState(false);
@@ -174,6 +175,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
     setAviso(guardado.aviso || "");
     setUmbral(guardado.umbralAlerta || 70);
     setAvanceDiaActivo(guardado.avanceDiaActivo !== false);
+    setTonoBot(guardado.tonoBot || "picante");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.whatsappBot]);
 
@@ -232,6 +234,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           aviso: String(aviso || "").trim(),
           umbralAlerta: Math.min(100, Math.max(1, Number(umbral) || 70)),
           avanceDiaActivo,
+          tonoBot,
           actualizado: new Date().toISOString(),
         },
       }));
@@ -395,6 +398,14 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           </div>
 
           <div style={S.card}>
+            <label style={S.campo}>
+              <span style={S.lbl}>🤖 Tono del bot cuando le escriben (respuestas con IA y sus números reales)</span>
+              <select style={{ ...S.input, maxWidth: 420 }} value={tonoBot} disabled={deshabilitado} onChange={marcar((e) => setTonoBot(e.target.value))}>
+                <option value="picante">🌶️ Picante — carrilla pesada y groserías de compa</option>
+                <option value="compa">😎 Compa — informal, con carrilla, sin groserías</option>
+                <option value="normal">🙂 Normal — amable y profesional</option>
+              </select>
+            </label>
             <Toggle on={avanceDiaActivo} disabled={deshabilitado}
               label="📦 Mandar la tarjeta del Avance del día cada vez que se cargue un avance"
               onChange={marcar((v) => setAvanceDiaActivo(v))} />
