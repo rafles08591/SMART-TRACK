@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
-const DURACION_MS = 12000;
+const DURACION_MS = 24000;
 
 const CAMINO = [
   [198, 150],
