@@ -107,6 +107,14 @@ export function primerNombre(nombre, ruta) {
 export const tel10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
 export const numeroEnvio = (telefono) => `52${tel10(telefono)}`;
 
+// ---------------------------------------------------------------- Rutas
+// "RUTA J201", "j201 ", "J201" → "J201". Así no importa cómo se escribió la ruta.
+export function claveRuta(ruta) {
+  const s = String(ruta || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const m = s.match(/J\s?-?\d{3}/);
+  return m ? m[0].replace(/[\s-]/g, '') : s;
+}
+
 // ---------------------------------------------------------------- Datos
 // Última fila por ruta (opcionalmente solo fechas < o <= a una fecha).
 export async function ultimosPorRuta({ antesDe = null, hasta = null } = {}) {
@@ -116,7 +124,7 @@ export async function ultimosPorRuta({ antesDe = null, hasta = null } = {}) {
   if (hasta) q += `&fecha=lte.${hasta}`;
   const filas = await sb(q);
   const porRuta = {};
-  for (const f of filas) if (!porRuta[f.ruta]) porRuta[f.ruta] = f;
+  for (const f of filas) { const k = claveRuta(f.ruta); if (!porRuta[k]) porRuta[k] = f; }
   return porRuta;
 }
 
@@ -131,8 +139,8 @@ export async function contactos({ campo = null } = {}) {
 }
 
 export async function contactoPorRuta(ruta) {
-  const r = await sb(`vendedores_whatsapp?select=*&activo=is.true&ruta=eq.${encodeURIComponent(ruta)}&limit=1`);
-  return r[0] || null;
+  const r = await sb('vendedores_whatsapp?select=*&activo=is.true');
+  return r.find((c) => claveRuta(c.ruta) === claveRuta(ruta)) || null;
 }
 
 export async function contactoPorTelefono(numero) {
