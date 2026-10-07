@@ -1,4 +1,3 @@
-
 import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
