@@ -1,86 +1,217 @@
-// src/utils/resumenWhatsApp.js
-// Guarda en Supabase (tabla resumen_vendedores) el resumen por ruta que usa el
-// bot de WhatsApp. Se llama desde App.tsx con los MISMOS números que ya calcula
-// la app, así el bot nunca dice algo distinto a lo que se ve en pantalla.
+// api/wa-resumen.js — arma los mensajes que n8n envía por Evolution API.
 //
-// Solo debe ejecutarse en sesiones de Gerente / Supervisores (quien carga datos).
+//   GET  /api/wa-resumen?modo=matutino   → tarjeta + texto para cada vendedor (cierre de ayer)
+//   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a quien va abajo hoy
+//   POST /api/wa-resumen?modo=bot        → body { numero, texto }  → respuesta del bot
+//
+// Todas requieren el header  x-bot-token: <BOT_TOKEN>
 
-import { useEffect, useRef } from 'react';
+import {
+  autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
+  ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, estadoMes,
+  frase, icono, medalla,
+} from './_wa-lib.js';
 
-const CAMPOS_NUM = [
-  'venta_dia', 'objetivo_dia', 'venta_mes', 'objetivo_mes',
-  'efectividad_pct', 'clientes_programados', 'clientes_visitados',
-];
+export const config = { runtime: 'edge' };
 
-export function fechaHoyMX() {
-  const p = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date());
-  const g = (t) => p.find((x) => x.type === t).value;
-  return `${g('year')}-${g('month')}-${g('day')}`;
+const UMBRAL_ALERTA_PCT = 70; // avisar en la tarde si hoy va por debajo de este %
+
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
+
+function baseUrl(req) {
+  return (process.env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, '');
 }
 
-const aNum = (v) => {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(String(v).replace(/[$,%\s]/g, ''));
-  return Number.isFinite(n) ? n : null;
-};
-
-function limpiar(filas, fecha, quien) {
-  return (filas || [])
-    .filter((f) => f && f.ruta)
-    .map((f) => {
-      const out = {
-        ruta: String(f.ruta).toUpperCase(),
-        fecha: f.fecha || fecha,
-        nombre: f.nombre || null,
-        extra: f.extra || {},
-        actualizado_por: quien || null,
-        actualizado_en: new Date().toISOString(),
-      };
-      for (const c of CAMPOS_NUM) out[c] = aNum(f[c]);
-      if (out.clientes_programados !== null) out.clientes_programados = Math.round(out.clientes_programados);
-      if (out.clientes_visitados !== null) out.clientes_visitados = Math.round(out.clientes_visitados);
-      return out;
-    })
-    // no guardar filas completamente vacías
-    .filter((f) => CAMPOS_NUM.some((c) => f[c] !== null));
+async function urlTarjeta(req, ruta, fecha, actualizadoEn) {
+  const s = await firmar(ruta, fecha);
+  const v = actualizadoEn ? new Date(actualizadoEn).getTime() : Date.now();
+  return `${baseUrl(req)}/api/tarjeta?ruta=${encodeURIComponent(ruta)}&f=${fecha}&s=${s}&v=${v}`;
 }
 
-const huella = (filas) =>
-  JSON.stringify(filas.map(({ actualizado_en, actualizado_por, ...r }) => r));
-
-/**
- * Upsert directo. Devuelve { ok, guardadas, error }.
- * filas: [{ ruta, nombre, venta_dia, objetivo_dia, venta_mes, objetivo_mes,
- *           efectividad_pct, clientes_programados, clientes_visitados, extra? , fecha? }]
- */
-export async function guardarResumenVendedores(supabase, filas, { quien, fecha } = {}) {
-  const limpias = limpiar(filas, fecha || fechaHoyMX(), quien);
-  if (!limpias.length) return { ok: true, guardadas: 0 };
-  const { error } = await supabase
-    .from('resumen_vendedores')
-    .upsert(limpias, { onConflict: 'ruta,fecha' });
-  if (error) console.warn('[resumenWhatsApp] error al guardar:', error.message);
-  return { ok: !error, guardadas: error ? 0 : limpias.length, error };
+// Cache sencillo de filas por fecha dentro de una misma petición (para ranking).
+async function companerasDe(fecha, cache) {
+  if (!cache[fecha]) cache[fecha] = await filasDeFecha(fecha);
+  return cache[fecha];
 }
 
-/**
- * Hook: guarda automáticamente cuando cambian los números (con debounce y
- * sin reescribir si nada cambió).
- */
-export function useSnapshotWhatsApp({ supabase, filas, habilitado, quien, fecha, esperaMs = 4000 }) {
-  const ultima = useRef(null);
-  useEffect(() => {
-    if (!habilitado || !supabase) return undefined;
-    const limpias = limpiar(filas, fecha || fechaHoyMX(), quien);
-    if (!limpias.length) return undefined;
-    const h = huella(limpias);
-    if (h === ultima.current) return undefined;
-    const t = setTimeout(async () => {
-      const r = await guardarResumenVendedores(supabase, filas, { quien, fecha });
-      if (r.ok) ultima.current = h;
-    }, esperaMs);
-    return () => clearTimeout(t);
-  }, [supabase, filas, habilitado, quien, fecha, esperaMs]);
+// ------------------------------------------------------------------ textos
+function textoResumen(fila, m, { saludo = true } = {}) {
+  const e = estadoMes(m);
+  const lineas = [];
+  if (saludo) lineas.push(`☀️ *Buenos días, ${primerNombre(fila.nombre, fila.ruta)}*`);
+  lineas.push(`Ruta ${fila.ruta} · corte del ${fechaCorta(fila.fecha)}`, '');
+  if (m.pctMes !== null)
+    lineas.push(`📈 Mes: *${pct(m.pctMes)}* (ritmo esperado ${pct(m.esperado)}) ${icono(e)}`);
+  if (m.pctDia !== null)
+    lineas.push(`📦 Día: ${cantidad(m.ventaDia, m.unidad)} de ${cantidad(m.objDia, m.unidad)} (${pct(m.pctDia)})`);
+  if (m.efectividad !== null)
+    lineas.push(`🎯 Efectividad: ${pct(m.efectividad)}${m.prog ? ` (${m.vis ?? 0}/${m.prog} clientes)` : m.vis !== null ? ` · ${m.vis} visitas efectivas` : ''}`);
+  if (m.ranking) lineas.push(`🏁 Lugar ${m.ranking} de ${m.totalRutas} ${medalla(m.ranking)}`.trim());
+  lineas.push('', frase(m), '', 'Escribe *menu* para ver qué más te puedo decir.');
+  return lineas.join('\n');
+}
+
+const MENU = [
+  '🤖 *Bot SMART-TRACK*',
+  'Escríbeme una palabra:',
+  '',
+  '• *avance* – tu tarjeta con los números',
+  '• *hoy* – cómo vas en el día',
+  '• *ranking* – tu lugar en el equipo',
+  '• *clientes* – tus visitas',
+].join('\n');
+
+function normalizar(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+function comando(texto) {
+  const t = normalizar(texto);
+  if (/\b(avance|resumen|mes|cuota|numeros|meta|tarjeta)\b/.test(t)) return 'avance';
+  if (/\b(hoy|dia)\b/.test(t)) return 'hoy';
+  if (/\b(ranking|lugar|posicion|tabla)\b/.test(t)) return 'ranking';
+  if (/\b(clientes|visitas|efectividad)\b/.test(t)) return 'clientes';
+  return 'menu';
+}
+
+// ------------------------------------------------------------------ modos
+async function modoMatutino(req) {
+  const hoy = fechaMX();
+  const [lista, ultimos] = await Promise.all([
+    contactos({ campo: 'recibir_matutino' }),
+    ultimosPorRuta({ antesDe: hoy }), // cierre más reciente ANTES de hoy
+  ]);
+  const cache = {};
+  const mensajes = [];
+  for (const c of lista) {
+    const fila = ultimos[c.ruta];
+    if (!fila) continue;
+    const m = calcular(fila, await companerasDe(fila.fecha, cache));
+    const nombreFila = { ...fila, nombre: c.nombre || fila.nombre };
+    mensajes.push({
+      ruta: c.ruta,
+      numero: numeroEnvio(c.telefono),
+      caption: textoResumen(nombreFila, m),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
+  }
+  return json({ fecha: hoy, total: mensajes.length, mensajes });
+}
+
+async function modoAlerta() {
+  const hoy = fechaMX();
+  const [lista, filasHoy] = await Promise.all([contactos({ campo: 'recibir_alerta' }), filasDeFecha(hoy)]);
+  const porRuta = Object.fromEntries(filasHoy.map((f) => [f.ruta, f]));
+  const mensajes = [];
+  for (const c of lista) {
+    const fila = porRuta[c.ruta];
+    if (!fila) continue;
+    const m = calcular(fila, filasHoy);
+    if (m.pctDia === null || m.pctDia >= UMBRAL_ALERTA_PCT) continue;
+    const falta = Math.max(0, (m.objDia || 0) - (m.ventaDia || 0));
+    mensajes.push({
+      ruta: c.ruta,
+      numero: numeroEnvio(c.telefono),
+      texto: [
+        `⏰ *${primerNombre(c.nombre, c.ruta)}*, así vas hoy:`,
+        `${cantidad(m.ventaDia, m.unidad)} de ${cantidad(m.objDia, m.unidad)} (${pct(m.pctDia)})`,
+        '',
+        `Te faltan *${cantidad(falta, m.unidad)}* para tu meta del día. ¡Todavía da tiempo! 💪`,
+      ].join('\n'),
+    });
+  }
+  return json({ fecha: hoy, total: mensajes.length, mensajes });
+}
+
+async function modoBot(req) {
+  let body = {};
+  try { body = await req.json(); } catch { /* vacío */ }
+  const numero = String(body.numero || '').replace(/\D/g, '');
+  const responder = (extra) => json({ numero, ...extra });
+
+  const c = await contactoPorTelefono(numero);
+  if (!c) {
+    return responder({
+      tipo: 'texto',
+      texto: 'Hola 👋 Este número no está registrado en SMART-TRACK. Pídele a tu supervisor que te dé de alta.',
+    });
+  }
+
+  const cmd = comando(body.texto);
+  if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU });
+
+  const hoy = fechaMX();
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[c.ruta];
+  if (!fila) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados para tu ruta. Intenta más tarde.' });
+
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const nombre = primerNombre(c.nombre, c.ruta);
+  const esDeHoy = fila.fecha === hoy;
+  const aviso = esDeHoy ? '' : `\n\n_Los datos de hoy aún no se cargan; esto es del ${fechaCorta(fila.fecha)}._`;
+
+  if (cmd === 'avance') {
+    return responder({
+      tipo: 'imagen',
+      caption: textoResumen({ ...fila, nombre: c.nombre }, m, { saludo: false }),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
+  }
+
+  if (cmd === 'hoy') {
+    if (m.pctDia === null) return responder({ tipo: 'texto', texto: `No tengo tu avance del día todavía.${aviso}` });
+    const falta = Math.max(0, (m.objDia || 0) - (m.ventaDia || 0));
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `📦 *${nombre}*, en el día llevas:`,
+        `${cantidad(m.ventaDia, m.unidad)} de ${cantidad(m.objDia, m.unidad)} (*${pct(m.pctDia)}*)`,
+        falta > 0 ? `Te faltan ${cantidad(falta, m.unidad)} para la meta.` : '¡Meta del día cumplida! 🎉',
+      ].join('\n') + aviso,
+    });
+  }
+
+  if (cmd === 'ranking') {
+    if (!m.ranking) return responder({ tipo: 'texto', texto: `Aún no hay ranking disponible.${aviso}` });
+    const top = m.rankingLista.slice(0, 3)
+      .map((r, i) => `${medalla(i + 1)} ${r.ruta} – ${pct(r.p * 100)}`).join('\n');
+    return responder({
+      tipo: 'texto',
+      texto: `🏁 *${nombre}*, vas en el lugar *${m.ranking} de ${m.totalRutas}* (${pct(m.pctMes)} del mes).\n\nTop 3:\n${top}${aviso}`,
+    });
+  }
+
+  if (cmd === 'clientes') {
+    if (m.efectividad === null && m.vis === null) return responder({ tipo: 'texto', texto: `No tengo datos de visitas todavía.${aviso}` });
+    const pendientes = m.prog ? Math.max(0, m.prog - (m.vis || 0)) : null;
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `🎯 *${nombre}*, efectividad del día: *${pct(m.efectividad)}*`,
+        m.prog ? `Visitas efectivas: ${m.vis ?? 0} de ${m.prog}` : m.vis !== null ? `Visitas efectivas hoy: ${m.vis}` : null,
+        pendientes ? `Te quedan ${pendientes} clientes por visitar.` : null,
+      ].filter(Boolean).join('\n') + aviso,
+    });
+  }
+
+  return responder({ tipo: 'texto', texto: MENU });
+}
+
+// ------------------------------------------------------------------ handler
+export default async function handler(req) {
+  if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
+  const modo = new URL(req.url).searchParams.get('modo');
+  try {
+    if (modo === 'matutino') return await modoMatutino(req);
+    if (modo === 'alerta') return await modoAlerta(req);
+    if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
+    return json({ error: 'modo inválido (matutino | alerta | bot)' }, 400);
+  } catch (e) {
+    return json({ error: String(e.message || e) }, 500);
+  }
 }
