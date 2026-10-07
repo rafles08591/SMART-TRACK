@@ -82,6 +82,20 @@ export function dineroCorto(v) {
   return dinero(n);
 }
 
+// Cantidad según unidad: '$' (dinero) o 'paq' (paquetes, la unidad de SMART-TRACK)
+const miles = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+export function cantidad(v, unidad = 'paq') {
+  const n = num(v);
+  if (n === null) return '—';
+  return unidad === '$' ? dinero(n) : `${miles(n)} paq`;
+}
+export function cantidadCorta(v, unidad = 'paq') {
+  const n = num(v);
+  if (n === null) return '—';
+  if (unidad === '$') return dineroCorto(n);
+  return Math.abs(n) >= 10000 ? `${(n / 1000).toFixed(1)}k` : miles(n);
+}
+
 export const pct = (v) => (num(v) === null ? '—' : `${Math.round(num(v))}%`);
 
 export function primerNombre(nombre, ruta) {
@@ -116,6 +130,11 @@ export async function contactos({ campo = null } = {}) {
   return sb(q);
 }
 
+export async function contactoPorRuta(ruta) {
+  const r = await sb(`vendedores_whatsapp?select=*&activo=is.true&ruta=eq.${encodeURIComponent(ruta)}&limit=1`);
+  return r[0] || null;
+}
+
 export async function contactoPorTelefono(numero) {
   const t = tel10(numero);
   if (t.length !== 10) return null;
@@ -130,11 +149,18 @@ export function calcular(fila, companeras = []) {
   const pctDia = ventaDia !== null && objDia ? (ventaDia / objDia) * 100 : null;
   const pctMes = ventaMes !== null && objMes ? (ventaMes / objMes) * 100 : null;
 
-  const { tot, trans, restantes } = diasHabiles(fila.fecha);
-  const esperado = tot ? (trans / tot) * 100 : null;
+  // Si la app mandó sus propios días (periodo real y días no laborables), se usan esos;
+  // si no, se calcula lunes–sábado del mes calendario.
+  const ex = fila.extra || {};
+  const unidad = ex.unidad || 'paq';
+  const cal = diasHabiles(fila.fecha);
+  const tot = num(ex.dias_totales) ?? cal.tot;
+  const trans = num(ex.dias_transcurridos) ?? cal.trans;
+  const restantes = num(ex.dias_restantes) ?? cal.restantes;
+  const esperado = tot ? Math.min(100, (trans / tot) * 100) : null;
   const diferencia = pctMes !== null && esperado !== null ? pctMes - esperado : null;
   const faltaMes = ventaMes !== null && objMes ? Math.max(0, objMes - ventaMes) : null;
-  const necesitaDiario = faltaMes !== null ? faltaMes / Math.max(1, restantes) : null;
+  const necesitaDiario = num(ex.necesita_diario) ?? (faltaMes !== null ? faltaMes / Math.max(1, restantes) : null);
 
   const prog = num(fila.clientes_programados), vis = num(fila.clientes_visitados);
   const efectividad = num(fila.efectividad_pct) ?? (prog ? ((vis || 0) / prog) * 100 : null);
@@ -151,7 +177,7 @@ export function calcular(fila, companeras = []) {
   }
 
   return {
-    ventaDia, objDia, pctDia, ventaMes, objMes, pctMes, esperado, diferencia,
+    unidad, ventaDia, objDia, pctDia, ventaMes, objMes, pctMes, esperado, diferencia,
     faltaMes, necesitaDiario, restantes, prog, vis, efectividad, ranking, totalRutas, rankingLista: conPct,
   };
 }
@@ -168,8 +194,8 @@ export function frase(m) {
   const e = estadoMes(m);
   if (m.pctMes !== null && m.pctMes >= 100) return '¡Ya pasaste tu meta del mes! Todo lo que venga es ganancia 🏆';
   if (e === 'arriba') return 'Vas arriba del ritmo. ¡A mantenerlo! 💪';
-  if (e === 'ritmo') return `Vas en el ritmo. Con ${dinero(m.necesitaDiario)} diarios cierras en 100%.`;
-  if (e === 'abajo') return `Vas abajo del ritmo. Necesitas ${dinero(m.necesitaDiario)} diarios para llegar al 100%.`;
+  if (e === 'ritmo') return `Vas en el ritmo. Con ${cantidad(m.necesitaDiario, m.unidad)} diarios cierras en 100%.`;
+  if (e === 'abajo') return `Vas abajo del ritmo. Necesitas ${cantidad(m.necesitaDiario, m.unidad)} diarios para llegar al 100%.`;
   return '¡Éxito en la ruta de hoy!';
 }
 
