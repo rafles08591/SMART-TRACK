@@ -55,7 +55,7 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
     src: "/carrera_mes.riv",
     artboard: "SmartTrack",
     stateMachines: "Race",
-    autoplay: false,
+    autoplay: true,
     autoBind: true,
   });
 
@@ -74,7 +74,7 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
 
   useEffect(() => {
     if (!rive) return;
-    try { rive.pause(); } catch { /* sin animación activa */ }
+    try { rive.play(); } catch { /* ya está corriendo */ }
 
     let frameId = 0;
     let cancelado = false;
@@ -95,7 +95,6 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
           ponerBool(vm, `Candidate ${r.ruta}`, r.pct >= 100);
         });
       }
-      try { rive.drawFrame(); } catch { /* sigue el siguiente frame */ }
       frameId = requestAnimationFrame(aplicar);
     };
     frameId = requestAnimationFrame(aplicar);
