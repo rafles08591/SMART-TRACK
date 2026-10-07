@@ -1,40 +1,21 @@
+
 import { useRive } from "@rive-app/react-canvas";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-
-const DURACION_TOTAL = 1;
-const DURACION_ANIMACION_MS = 45000;
-const CURVA = "quart";
-
-const TIMELINES = [
-  "Timeline J201",
-  "Timeline J202",
-  "Timeline J203",
-  "Timeline J204",
-  "Timeline J205",
-  "Timeline J206",
-  "Timeline J207",
-];
 
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 
-function easeOutCubic(x) {
-  return 1 - Math.pow(1 - x, 3);
-}
-
-function easeOutQuart(x) {
-  return 1 - Math.pow(1 - x, 4);
-}
-
-function easeOutExpo(x) {
-  return x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
-}
-
-function suavizar(x) {
-  if (CURVA === "cubic") return easeOutCubic(x);
-  if (CURVA === "expo") return easeOutExpo(x);
-  return easeOutQuart(x);
-}
+// Camino en el artboard 390 x 844, de INICIO a META.
+const CAMINO = [
+  [198, 168],
+  [214, 230],
+  [168, 300],
+  [214, 390],
+  [150, 480],
+  [206, 575],
+  [168, 660],
+  [196, 735],
+];
 
 function porcentajeMes(v) {
   const pct = Number(v?.tabs?.max?.avancePct);
@@ -42,11 +23,42 @@ function porcentajeMes(v) {
   return Math.min(Math.max(pct, 0), 100);
 }
 
+function puntoEnCamino(pct) {
+  const t = Math.min(Math.max(pct, 0), 100) / 100;
+  const tramo = t * (CAMINO.length - 1);
+  const i = Math.min(Math.floor(tramo), CAMINO.length - 2);
+  const f = tramo - i;
+  const a = CAMINO[i];
+  const b = CAMINO[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+}
+
+function lugarEstacionado(puesto) {
+  return [36 + (puesto - 1) * 46, 792];
+}
+
+function ponerNumero(vm, nombre, valor) {
+  const prop = vm?.number?.(nombre);
+  if (prop && "value" in prop) prop.value = valor;
+}
+
+function ponerTexto(vm, nombre, valor) {
+  const prop = vm?.string?.(nombre);
+  if (prop && "value" in prop) prop.value = valor;
+}
+
+function ponerBool(vm, nombre, valor) {
+  const prop = vm?.boolean?.(nombre);
+  if (prop && "value" in prop) prop.value = valor;
+}
+
 export default function CarreraMes({ porVendedor, onCerrar }) {
   const { rive, RiveComponent } = useRive({
     src: "/carrera_mes.riv",
-    animations: TIMELINES,
-    autoplay: false,
+    artboard: "SmartTrack",
+    stateMachines: "Race",
+    autoplay: true,
+    autoBind: true,
   });
 
   const ranking = useMemo(() => {
@@ -59,61 +71,32 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
     return RUTAS.map((ruta) => ({
       ruta,
       pct: pctPorRuta[ruta] ?? 0,
-    })).sort((a, b) => b.pct - a.pct);
+    })).sort((a, b) => b.pct - a.pct || a.ruta.localeCompare(b.ruta));
   }, [porVendedor]);
 
-  const rankingKey = ranking.map((r) => `${r.ruta}:${r.pct.toFixed(1)}`).join("|");
-  const yaAnimoRef = useRef("");
-
   useEffect(() => {
-    if (!rive || ranking.length === 0) return;
-    if (yaAnimoRef.current === rankingKey) return;
-    yaAnimoRef.current = rankingKey;
+    if (!rive) return;
+    const vm = rive.viewModelInstance;
+    if (!vm) return;
 
-    let frameId = 0;
-    let cancelado = false;
-
-    const objetivos = ranking.map(({ ruta, pct }) => ({
-      nombreTimeline: `Timeline ${ruta}`,
-      segundosDestino: (pct / 100) * DURACION_TOTAL,
-    }));
-
-    rive.play(TIMELINES);
-    rive.pause(TIMELINES);
-    objetivos.forEach(({ nombreTimeline }) => rive.scrub(nombreTimeline, 0));
-    rive.drawFrame();
-
-    const inicio = performance.now();
-
-    const tick = (ahora) => {
-      if (cancelado) return;
-      const progreso = Math.min(Math.max((ahora - inicio) / DURACION_ANIMACION_MS, 0), 1);
-      const factor = suavizar(progreso);
-
-      objetivos.forEach(({ nombreTimeline, segundosDestino }) => {
-        rive.scrub(nombreTimeline, segundosDestino * factor);
-      });
-      rive.drawFrame();
-
-      if (progreso < 1) frameId = requestAnimationFrame(tick);
-    };
-
-    frameId = requestAnimationFrame(tick);
-
-    return () => {
-      cancelado = true;
-      if (frameId) cancelAnimationFrame(frameId);
-    };
-  }, [rive, ranking, rankingKey]);
+    ranking.forEach((r, i) => {
+      const puesto = i + 1;
+      const [x, y] = r.pct >= 100 ? lugarEstacionado(puesto) : puntoEnCamino(r.pct);
+      ponerNumero(vm, `PassX ${r.ruta}`, x);
+      ponerNumero(vm, `PassY ${r.ruta}`, y);
+      ponerNumero(vm, `Rank ${r.ruta}`, puesto);
+      ponerTexto(vm, `Rank text ${r.ruta}`, `${puesto}°`);
+      ponerBool(vm, `Glow ${r.ruta}`, puesto === 1);
+      ponerBool(vm, `Candidate ${r.ruta}`, r.pct >= 100);
+    });
+    try { rive.drawFrame(); } catch { /* el state machine sigue solo */ }
+  }, [rive, ranking]);
 
   const contenido = (
     <div
       style={{
         position: "fixed",
-        top: 0,
-        left: 0,
-        width: "100vw",
-        height: "100vh",
+        inset: 0,
         background: "#0a0a0a",
         zIndex: 999999,
         display: "flex",
@@ -141,20 +124,11 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
         </button>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, width: "100%" }}>
-        <RiveComponent style={{ width: "100%", height: "100%" }} />
+      <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", justifyContent: "center" }}>
+        <RiveComponent style={{ width: "100%", maxWidth: 480, height: "100%" }} />
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          overflowX: "auto",
-          padding: "10px 12px",
-          flexShrink: 0,
-          WebkitOverflowScrolling: "touch",
-        }}
-      >
+      <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "10px 12px", flexShrink: 0 }}>
         {ranking.map((r, i) => (
           <div
             key={r.ruta}
@@ -172,9 +146,7 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
               whiteSpace: "nowrap",
             }}
           >
-            <span style={{ color: i === 0 ? "#FFD700" : "#9AA7BD", fontWeight: 700 }}>
-              {i + 1}°
-            </span>
+            <span style={{ color: i === 0 ? "#FFD700" : "#9AA7BD", fontWeight: 700 }}>{i + 1}°</span>
             <span style={{ fontWeight: 600 }}>{r.ruta}</span>
             <span style={{ color: "#9AA7BD" }}>{r.pct.toFixed(0)}%</span>
           </div>
