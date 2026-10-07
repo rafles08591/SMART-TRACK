@@ -9,7 +9,7 @@
 import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, estadoMes,
-  frase, icono, medalla,
+  frase, icono, medalla, claveRuta,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -43,7 +43,7 @@ function textoResumen(fila, m, { saludo = true } = {}) {
   const e = estadoMes(m);
   const lineas = [];
   if (saludo) lineas.push(`☀️ *Buenos días, ${primerNombre(fila.nombre, fila.ruta)}*`);
-  lineas.push(`Ruta ${fila.ruta} · corte del ${fechaCorta(fila.fecha)}`, '');
+  lineas.push(`Ruta ${claveRuta(fila.ruta)} · corte del ${fechaCorta(fila.fecha)}`, '');
   if (m.pctMes !== null)
     lineas.push(`📈 Mes: *${pct(m.pctMes)}* (ritmo esperado ${pct(m.esperado)}) ${icono(e)}`);
   if (m.pctDia !== null)
@@ -88,7 +88,7 @@ async function modoMatutino(req) {
   const cache = {};
   const mensajes = [];
   for (const c of lista) {
-    const fila = ultimos[c.ruta];
+    const fila = ultimos[claveRuta(c.ruta)];
     if (!fila) continue;
     const m = calcular(fila, await companerasDe(fila.fecha, cache));
     const nombreFila = { ...fila, nombre: c.nombre || fila.nombre };
@@ -105,10 +105,10 @@ async function modoMatutino(req) {
 async function modoAlerta() {
   const hoy = fechaMX();
   const [lista, filasHoy] = await Promise.all([contactos({ campo: 'recibir_alerta' }), filasDeFecha(hoy)]);
-  const porRuta = Object.fromEntries(filasHoy.map((f) => [f.ruta, f]));
+  const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
   const mensajes = [];
   for (const c of lista) {
-    const fila = porRuta[c.ruta];
+    const fila = porRuta[claveRuta(c.ruta)];
     if (!fila) continue;
     const m = calcular(fila, filasHoy);
     if (m.pctDia === null || m.pctDia >= UMBRAL_ALERTA_PCT) continue;
@@ -146,7 +146,7 @@ async function modoBot(req) {
 
   const hoy = fechaMX();
   const ultimos = await ultimosPorRuta({ hasta: hoy });
-  const fila = ultimos[c.ruta];
+  const fila = ultimos[claveRuta(c.ruta)];
   if (!fila) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados para tu ruta. Intenta más tarde.' });
 
   const companeras = await filasDeFecha(fila.fecha);
