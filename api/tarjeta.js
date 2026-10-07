@@ -4,7 +4,7 @@
 
 import { ImageResponse } from '@vercel/og';
 import {
-  firmar, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
+  firmar, claveRuta, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -76,7 +76,7 @@ function tarjeta(fila, m) {
       h('div', {
         fontSize: 34, fontWeight: 800, padding: '10px 28px', borderRadius: 999,
         border: `3px solid ${C.cian}`, color: C.cian,
-      }, fila.ruta),
+      }, claveRuta(fila.ruta)),
     ),
     h('div', { fontSize: 60, fontWeight: 800, marginTop: 24, lineHeight: 1.15 }, fila.nombre || fila.ruta),
     h('div', { fontSize: 30, color: C.gris, marginTop: 4 }, `Corte del ${fechaCorta(fila.fecha)}`),
@@ -122,7 +122,7 @@ export default async function handler(req) {
   const q = new URL(req.url).searchParams;
   const ruta = q.get('ruta') || '';
   const fecha = q.get('f') || '';
-  if (!/^[A-Za-z0-9-]{2,12}$/.test(ruta) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+  if (!/^[A-Za-z0-9 _-]{2,24}$/.test(ruta) || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
     return new Response('parámetros inválidos', { status: 400 });
   }
   if (q.get('s') !== (await firmar(ruta, fecha))) return new Response('firma inválida', { status: 403 });
@@ -133,7 +133,7 @@ export default async function handler(req) {
 
   const m = calcular(fila, filas);
   // Nombre real del vendedor (la app guarda la ruta; el nombre vive en vendedores_whatsapp)
-  if (!fila.nombre || fila.nombre.toUpperCase() === fila.ruta.toUpperCase()) {
+  if (!fila.nombre || claveRuta(fila.nombre) === claveRuta(fila.ruta)) {
     try { const c = await contactoPorRuta(ruta); if (c) fila.nombre = c.nombre; } catch { /* sin nombre */ }
   }
   const f = await cargarFuentes();
