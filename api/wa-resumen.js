@@ -84,14 +84,18 @@ function normalizar(t) {
   return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
+// El número del bot es el de la empresa (también le escriben clientes), así que
+// SOLO se contesta a mensajes cortos que sean un comando. Todo lo demás se ignora.
 function comando(texto) {
-  const t = normalizar(texto);
+  const t = normalizar(texto).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.split(' ').length > 3) return 'nada';
+  if (/^(menu|ayuda|bot|comandos|opciones)$/.test(t)) return 'menu';
   if (/\b(marcas?|ice|bloss|summ|faronet)\b/.test(t)) return 'marcas';
   if (/\b(avance|resumen|mes|cuota|numeros|meta|tarjeta|equipo)\b/.test(t)) return 'avance';
   if (/\b(hoy|dia)\b/.test(t)) return 'hoy';
   if (/\b(ranking|lugar|posicion|tabla)\b/.test(t)) return 'ranking';
   if (/\b(clientes|visitas|efectividad)\b/.test(t)) return 'clientes';
-  return 'menu';
+  return 'nada';
 }
 
 // ------------------------------------------------------------------ matutino
@@ -244,6 +248,8 @@ async function modoBot(req) {
   }
 
   const cmd = comando(body.texto);
+  // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
+  if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
   if (c.tipo === 'equipo') return botEquipo(req, c, cmd, cfg, responder);
   if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
 
@@ -312,6 +318,75 @@ async function modoBot(req) {
   }
 
   return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
+}
+
+// ------------------------------------------------------------------ IA (conversación libre)
+const TONOS = {
+  normal: 'Habla en español mexicano, amable y profesional. Nada de groserías.',
+  compa: 'Habla como compa de ruta: informal, con carrilla y frases mexicanas (qué onda, échale ganas, ¿cómo ves?), pero SIN groserías.',
+  picante: 'Habla como vendedor de ruta mexicano bien entrón: directo, con carrilla pesada, albures ligeros y groserías comunes (güey, cabrón, chingón, a huevo, no mames, ponte las pilas). Si el vendedor te insulta, regrésale la carrilla con humor y llévalo a sus números.',
+};
+
+async function contextoDatos(c) {
+  const hoy = fechaMX();
+  if (c.tipo === 'equipo') {
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    if (!fecha) return { sin_datos: true };
+    const filas = await filasDeFecha(fecha);
+    const todos = await listaContactos(await configBot());
+    const v = varsEquipo(calcularEquipo(filas, todos));
+    const d = varsEquipoDia(calcularEquipoDia(filas, todos));
+    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d };
+  }
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return { sin_datos: true };
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsDia(fila, m, companeras, c);
+  return {
+    rol: 'vendedor', ruta: v.ruta, corte: fila.fecha, datos_de_hoy: fila.fecha === hoy,
+    mes: { avance: v.pct_mes, ritmo_esperado: v.esperado, vendido: v.venta_mes, objetivo: v.objetivo_mes, necesita_por_dia: v.necesita, dias_restantes: v.dias_restantes, lugar: v.lugar, de_rutas: v.total_rutas },
+    dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
+    marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
+  };
+}
+
+async function respuestaIA(c, texto, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  const fallback = 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.';
+  if (!key) return fallback;
+  try {
+    const datos = await contextoDatos(c);
+    const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+    const sistema = [
+      'Eres el Bot de SMART-TRACK, el compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
+      tono,
+      'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
+      'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
+      'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
+      'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
+      `Te habla: ${c.nombre || 'un vendedor'} (${c.tipo === 'equipo' ? 'supervisor/gerente' : 'ruta ' + claveRuta(c.ruta)}).`,
+      `Datos (JSON): ${JSON.stringify(datos)}`,
+    ].join('\n');
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.8,
+        max_tokens: 300,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: String(texto || '').slice(0, 800) }],
+      }),
+    });
+    if (!r.ok) return fallback;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 // ------------------------------------------------------------------ diagnóstico
