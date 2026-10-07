@@ -132,22 +132,115 @@ export async function filasDeFecha(fecha) {
   return sb(`resumen_vendedores?select=*&fecha=eq.${fecha}`);
 }
 
-export async function contactos({ campo = null } = {}) {
-  let q = 'vendedores_whatsapp?select=*&activo=is.true';
-  if (campo) q += `&${campo}=is.true`;
-  return sb(q);
+// ---------------------------------------------------------------- Configuración del bot
+// Vive en el blob de la app: ventas_app_state.data.whatsappBot
+// { contactos: [{id, ruta, nombre, telefono, tipo:'vendedor'|'equipo', activo, matutino, alerta}],
+//   plantillas: { matutino, alerta, equipo }, aviso, umbralAlerta }
+export async function configBot() {
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=wb:data->whatsappBot');
+    return (r[0] && r[0].wb) || {};
+  } catch {
+    return {};
+  }
 }
 
-export async function contactoPorRuta(ruta) {
-  const r = await sb('vendedores_whatsapp?select=*&activo=is.true');
-  return r.find((c) => claveRuta(c.ruta) === claveRuta(ruta)) || null;
+// Contactos: los de la pestaña de SMART-TRACK; si nunca se han guardado ahí,
+// se usan los de la tabla vendedores_whatsapp (compatibilidad).
+export async function listaContactos(cfg) {
+  let lista;
+  if (Array.isArray(cfg?.contactos)) {
+    lista = cfg.contactos;
+  } else {
+    try {
+      lista = (await sb('vendedores_whatsapp?select=*')).map((c) => ({
+        ...c, tipo: 'vendedor', matutino: c.recibir_matutino, alerta: c.recibir_alerta,
+      }));
+    } catch {
+      lista = [];
+    }
+  }
+  return lista
+    .map((c) => ({
+      id: c.id, ruta: c.ruta || '', nombre: c.nombre || '', telefono: tel10(c.telefono),
+      tipo: c.tipo === 'equipo' ? 'equipo' : 'vendedor',
+      activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.alerta !== false,
+    }))
+    .filter((c) => c.telefono.length === 10);
 }
 
-export async function contactoPorTelefono(numero) {
+export async function contactos({ campo = null, cfg = null } = {}) {
+  const lista = await listaContactos(cfg || (await configBot()));
+  return lista.filter((c) => c.activo && (!campo || c[campo]));
+}
+
+export async function contactoPorRuta(ruta, cfg = null) {
+  const lista = await contactos({ cfg });
+  return lista.find((c) => c.tipo === 'vendedor' && claveRuta(c.ruta) === claveRuta(ruta)) || null;
+}
+
+export async function contactoPorTelefono(numero, cfg = null) {
   const t = tel10(numero);
   if (t.length !== 10) return null;
-  const r = await sb(`vendedores_whatsapp?select=*&activo=is.true&telefono=eq.${t}&limit=1`);
-  return r[0] || null;
+  const lista = await contactos({ cfg });
+  return lista.find((c) => c.telefono === t) || null;
+}
+
+// ---------------------------------------------------------------- Plantillas
+export const PLANTILLAS_DEFAULT = {
+  matutino: [
+    '☀️ *Buenos días, {nombre}*',
+    'Ruta {ruta} · corte del {fecha}',
+    '',
+    '📈 Mes: *{pct_mes}* (ritmo esperado {esperado}) {icono}',
+    '📦 Día: {dia_vendido} de {dia_objetivo} ({pct_dia})',
+    '🎯 Efectividad: {efectividad}',
+    '🏁 Lugar {lugar} de {total_rutas} {medalla}',
+    '',
+    '{frase}',
+    '',
+    'Escribe *menu* para ver qué más te puedo decir.',
+  ].join('\n'),
+  alerta: [
+    '⏰ *{nombre}*, así vas hoy:',
+    '{dia_vendido} de {dia_objetivo} ({pct_dia})',
+    '',
+    'Te faltan *{falta_dia}* para tu meta del día. ¡Todavía da tiempo! 💪',
+  ].join('\n'),
+  equipo: [
+    '📊 *Resumen del equipo* · corte del {fecha}',
+    '',
+    'Equipo: *{pct_equipo}* del mes (ritmo esperado {esperado})',
+    '{rutas_en_ritmo} de {total_rutas} rutas van en ritmo o arriba',
+    '',
+    '🏆 Arriba:',
+    '{top}',
+    '',
+    '⚠️ Atención:',
+    '{abajo}',
+  ].join('\n'),
+};
+
+export const VARIABLES_PLANTILLA = {
+  vendedor: ['nombre', 'nombre_completo', 'ruta', 'fecha', 'pct_mes', 'esperado', 'icono', 'venta_mes', 'objetivo_mes',
+    'dia_vendido', 'dia_objetivo', 'pct_dia', 'falta_dia', 'efectividad', 'visitas', 'lugar', 'total_rutas', 'medalla',
+    'necesita', 'dias_restantes', 'frase', 'marcas'],
+  equipo: ['fecha', 'pct_equipo', 'esperado', 'venta_equipo', 'objetivo_equipo', 'pct_dia_equipo', 'rutas_en_ritmo',
+    'total_rutas', 'top', 'abajo', 'ranking'],
+};
+
+// Reemplaza {variable}. Una línea cuyas variables vengan TODAS vacías se omite.
+export function llenarPlantilla(tpl, vars) {
+  const vacio = (v) => v === null || v === undefined || v === '' || v === '—';
+  const lineas = String(tpl || '').split('\n').filter((linea) => {
+    const claves = [...linea.matchAll(/\{(\w+)\}/g)].map((x) => x[1]);
+    return !claves.length || !claves.every((k) => vacio(vars[k]));
+  });
+  return lineas.join('\n')
+    .replace(/\{(\w+)\}/g, (_, k) => (vacio(vars[k]) ? '' : String(vars[k])))
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // Métricas derivadas de una fila + sus compañeras del mismo día (para el ranking).
@@ -209,3 +302,106 @@ export function frase(m) {
 
 export const icono = (e) => ({ arriba: '✅', ritmo: '🟡', abajo: '🔴' }[e] || '');
 export const medalla = (r) => ({ 1: '🥇', 2: '🥈', 3: '🥉' }[r] || '');
+
+// ---------------------------------------------------------------- Variables para plantillas
+export function varsVendedor(fila, m, contacto = null) {
+  const nombreCompleto = contacto?.nombre || fila.nombre || '';
+  const falta = m.objDia ? Math.max(0, m.objDia - (m.ventaDia || 0)) : null;
+  const marcas = Array.isArray(fila.extra?.marcas)
+    ? fila.extra.marcas
+      .filter((x) => num(x.objetivo) > 0)
+      .map((x) => {
+        const r = num(x.resta) ?? Math.max(0, num(x.objetivo) - (num(x.vendido) || 0));
+        return r > 0
+          ? `• ${x.nombre}: ${cantidad(x.vendido, m.unidad)} de ${cantidad(x.objetivo, m.unidad)} · resta ${cantidad(r, m.unidad)}`
+          : `• ${x.nombre}: ✅ meta cumplida`;
+      })
+      .join('\n')
+    : '';
+  return {
+    nombre: primerNombre(nombreCompleto, claveRuta(fila.ruta)),
+    nombre_completo: nombreCompleto,
+    ruta: claveRuta(fila.ruta),
+    fecha: fechaCorta(fila.fecha),
+    pct_mes: m.pctMes === null ? null : pct(m.pctMes),
+    esperado: m.esperado === null ? null : pct(m.esperado),
+    icono: icono(estadoMes(m)),
+    venta_mes: m.ventaMes === null ? null : cantidad(m.ventaMes, m.unidad),
+    objetivo_mes: m.objMes === null ? null : cantidad(m.objMes, m.unidad),
+    dia_vendido: m.pctDia === null ? null : cantidad(m.ventaDia, m.unidad),
+    dia_objetivo: m.pctDia === null ? null : cantidad(m.objDia, m.unidad),
+    pct_dia: m.pctDia === null ? null : pct(m.pctDia),
+    falta_dia: falta === null ? null : cantidad(falta, m.unidad),
+    efectividad: m.efectividad === null ? null : pct(m.efectividad),
+    visitas: m.vis === null ? null : String(m.vis),
+    lugar: m.ranking ? String(m.ranking) : null,
+    total_rutas: m.totalRutas ? String(m.totalRutas) : null,
+    medalla: medalla(m.ranking),
+    necesita: m.necesitaDiario === null ? null : cantidad(m.necesitaDiario, m.unidad),
+    dias_restantes: m.restantes === null || m.restantes === undefined ? null : String(m.restantes),
+    frase: frase(m),
+    marcas,
+  };
+}
+
+// Resumen de todo el equipo para una fecha.
+export function calcularEquipo(filas, contactosLista = []) {
+  const nombrePorRuta = {};
+  for (const c of contactosLista) if (c.tipo === 'vendedor') nombrePorRuta[claveRuta(c.ruta)] = c.nombre;
+  const rutas = filas
+    .map((f) => {
+      const m = calcular(f, filas);
+      return { ruta: claveRuta(f.ruta), nombre: nombrePorRuta[claveRuta(f.ruta)] || '', fila: f, m };
+    })
+    .sort((a, b) => (b.m.pctMes ?? -1) - (a.m.pctMes ?? -1));
+  const suma = (k) => filas.reduce((s, f) => s + (num(f[k]) || 0), 0);
+  const ventaMes = suma('venta_mes'), objMes = suma('objetivo_mes');
+  const ventaDia = suma('venta_dia');
+  const objDia = filas.reduce((s, f) => s + (num(f.objetivo_dia) || 0), 0);
+  const esperado = rutas[0]?.m.esperado ?? null;
+  const unidad = rutas[0]?.m.unidad || 'paq';
+  const enRitmo = rutas.filter((r) => r.m.diferencia !== null && r.m.diferencia >= -5).length;
+
+  // Marcas OPEN sumadas de todas las rutas (mismo orden en que vienen de la app)
+  const marcasMap = new Map();
+  for (const f of filas) {
+    for (const mk of (Array.isArray(f.extra?.marcas) ? f.extra.marcas : [])) {
+      const k = mk.clave || mk.nombre;
+      const acc = marcasMap.get(k) || { clave: k, nombre: mk.nombre || k, vendido: 0, objetivo: 0, resta: 0, por_dia: 0 };
+      acc.vendido += num(mk.vendido) || 0;
+      acc.objetivo += num(mk.objetivo) || 0;
+      acc.resta += num(mk.resta) ?? Math.max(0, (num(mk.objetivo) || 0) - (num(mk.vendido) || 0));
+      acc.por_dia += num(mk.por_dia) || 0;
+      marcasMap.set(k, acc);
+    }
+  }
+  const marcas = [...marcasMap.values()].filter((x) => x.objetivo > 0);
+
+  return {
+    marcas,
+    fecha: filas[0]?.fecha || null,
+    rutas, unidad, esperado, enRitmo,
+    ventaMes, objMes, pctMes: objMes ? (ventaMes / objMes) * 100 : null,
+    ventaDia, objDia, pctDia: objDia ? (ventaDia / objDia) * 100 : null,
+  };
+}
+
+export function varsEquipo(eq) {
+  const linea = (r, i) => `${medalla(i + 1) || `${i + 1}.`} ${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''} – ${pct(r.m.pctMes)}`;
+  const conPct = eq.rutas.filter((r) => r.m.pctMes !== null);
+  const abajo = conPct.slice(-3).reverse()
+    .map((r) => `🔻 ${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''} – ${pct(r.m.pctMes)}`);
+  return {
+    fecha: eq.fecha ? fechaCorta(eq.fecha) : null,
+    pct_equipo: eq.pctMes === null ? null : pct(eq.pctMes),
+    esperado: eq.esperado === null ? null : pct(eq.esperado),
+    venta_equipo: cantidad(eq.ventaMes, eq.unidad),
+    objetivo_equipo: cantidad(eq.objMes, eq.unidad),
+    pct_dia_equipo: eq.pctDia === null ? null : pct(eq.pctDia),
+    rutas_en_ritmo: String(eq.enRitmo),
+    total_rutas: String(eq.rutas.length),
+    top: conPct.slice(0, 3).map(linea).join('\n'),
+    abajo: abajo.join('\n'),
+    ranking: conPct.map(linea).join('\n'),
+  };
+}
