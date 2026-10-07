@@ -61,6 +61,7 @@ export const OBJETIVO_TABS = [
   { key: "reset_pin", label: "RESTABLECER PIN", unit: "special" },
   { key: "permisos", label: "PERMISOS", unit: "special" },
   { key: "promociones_coach", label: "PROMOS PARA COACH", unit: "special" },
+  { key: "whatsapp_bot", label: "WHATSAPP BOT", unit: "special" },
 ];
 
 // Lista compartida de usuarios de la app (para el buscador de Restablecer
