@@ -1,10 +1,12 @@
-// api/tarjeta.js — genera la tarjeta PNG (1080×1350) con el avance de una ruta.
+// api/tarjeta.js — genera la tarjeta PNG con el avance de una ruta o del equipo.
 //   GET /api/tarjeta?ruta=J201&f=2026-09-28&s=<firma>
+//   GET /api/tarjeta?ruta=EQUIPO&f=2026-09-28&s=<firma>   → tarjeta del equipo (Supervisor / Gerente)
 // La firma (HMAC con BOT_TOKEN) la pone /api/wa-resumen; sin firma válida → 403.
 
 import { ImageResponse } from '@vercel/og';
 import {
   firmar, claveRuta, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
+  configBot, listaContactos, calcularEquipo, primerNombre,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -169,6 +171,140 @@ function tarjeta(fila, m) {
   );
 }
 
+// ------------------------------------------------------------------ tarjeta del equipo
+const colorDif = (m) => colorEstado(estadoMes(m));
+
+function filaEquipo(r, i) {
+  const m = r.m;
+  const p = Math.max(0, Math.min(100, m.pctMes ?? 0));
+  const marca = Math.max(0, Math.min(100, m.esperado ?? 0));
+  const col = colorDif(m);
+  return h('div', {
+    alignItems: 'center', padding: '18px 24px', marginTop: 12, borderRadius: 22,
+    background: i % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.065)',
+  },
+    h('div', { width: 60, fontSize: 34, fontWeight: 800, color: i < 3 ? C.cian : C.gris }, `${i + 1}`),
+    h('div', { width: 270, flexDirection: 'column' },
+      h('div', { fontSize: 30, fontWeight: 800, color: C.texto }, r.ruta),
+      h('div', { fontSize: 24, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
+    ),
+    h('div', { width: 330, flexDirection: 'column', paddingRight: 24 },
+      h('div', { fontSize: 34, fontWeight: 800, color: col }, pct(m.pctMes)),
+      h('div', { position: 'relative', width: '100%', height: 28, marginTop: 6 },
+        h('div', { position: 'absolute', left: 0, top: 8, width: '100%', height: 12, borderRadius: 6, background: 'rgba(255,255,255,0.14)' }),
+        h('div', { position: 'absolute', left: 0, top: 8, width: `${p}%`, height: 12, borderRadius: 6, background: col }),
+        h('div', { position: 'absolute', left: `${marca}%`, top: 0, width: 4, height: 28, marginLeft: -2, borderRadius: 2, background: C.texto }),
+      ),
+    ),
+    h('div', { width: 150, justifyContent: 'center', fontSize: 32, fontWeight: 800, color: colorPct(m.pctDia) }, pct(m.pctDia)),
+    h('div', { width: 150, justifyContent: 'center', fontSize: 32, fontWeight: 800, color: colorPct(m.efectividad) }, pct(m.efectividad)),
+  );
+}
+
+// % de una marca en una ruta (para la matriz)
+function pctMarcaRuta(r, clave) {
+  const mk = (r.fila.extra?.marcas || []).find((x) => (x.clave || x.nombre) === clave);
+  if (!mk || !(Number(mk.objetivo) > 0)) return null;
+  return ((Number(mk.vendido) || 0) / Number(mk.objetivo)) * 100;
+}
+
+function bloqueMarcasEquipo(eq) {
+  if (!eq.marcas.length) return null;
+  return h('div', {
+    flexDirection: 'column', marginTop: 30, padding: '24px 32px 28px', borderRadius: 28,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 26, color: C.gris, letterSpacing: 3 }, 'MARCAS · OPEN · EQUIPO'),
+    ...eq.marcas.map(filaMarca),
+  );
+}
+
+function matrizMarcas(eq) {
+  if (!eq.marcas.length) return null;
+  const anchoCol = Math.floor(660 / eq.marcas.length);
+  return h('div', {
+    flexDirection: 'column', marginTop: 24, padding: '22px 24px 18px', borderRadius: 28,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 26, color: C.gris, letterSpacing: 3, marginBottom: 6 }, 'MARCAS POR RUTA'),
+    h('div', { fontSize: 20, color: C.gris, letterSpacing: 1, padding: '8px 0' },
+      h('div', { width: 240 }, 'RUTA'),
+      ...eq.marcas.map((mk) => h('div', { width: anchoCol, justifyContent: 'center' }, String(mk.nombre).toUpperCase())),
+    ),
+    ...eq.rutas.map((r, i) => h('div', {
+      alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.08)',
+    },
+      h('div', { width: 240, fontSize: 26, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}`),
+      ...eq.marcas.map((mk) => {
+        const p0 = pctMarcaRuta(r, mk.clave);
+        const p = p0 === null ? null : Math.round(p0);
+        return h('div', { width: anchoCol, justifyContent: 'center' },
+          h('div', {
+            fontSize: 26, fontWeight: 800, color: colorPct(p), padding: '4px 14px', borderRadius: 10,
+            background: p === null ? 'transparent' : p >= 100 ? 'rgba(34,197,94,0.14)' : p >= 80 ? 'rgba(245,158,11,0.14)' : 'rgba(239,68,68,0.14)',
+          }, p === null ? '—' : `${Math.round(p)}%`),
+        );
+      }),
+    )),
+  );
+}
+
+export function altoEquipo(eq) {
+  const n = eq.marcas.length;
+  const marcas = n ? 150 + n * 112 + 150 + eq.rutas.length * 63 : 0;
+  return 880 + eq.rutas.length * 112 + marcas;
+}
+
+function tarjetaEquipo(eq) {
+  const col = eq.esperado !== null && eq.pctMes !== null
+    ? colorEstado(eq.pctMes - eq.esperado >= 3 ? 'arriba' : eq.pctMes - eq.esperado >= -5 ? 'ritmo' : 'abajo')
+    : C.cian;
+  const p = Math.max(0, Math.min(100, eq.pctMes ?? 0));
+  const marca = Math.max(0, Math.min(100, eq.esperado ?? 0));
+  return h('div', {
+    width: '100%', height: '100%', flexDirection: 'column', padding: 56, fontFamily: 'Inter',
+    color: C.texto, backgroundImage: `linear-gradient(160deg, ${C.fondo1} 0%, ${C.fondo2} 55%, ${C.fondo1} 100%)`,
+  },
+    h('div', { justifyContent: 'space-between', alignItems: 'center' },
+      h('div', { fontSize: 30, fontWeight: 800, color: C.cian, letterSpacing: 6 }, 'SMART-TRACK'),
+      h('div', { fontSize: 30, fontWeight: 800, padding: '10px 26px', borderRadius: 999, border: `3px solid ${C.cian}`, color: C.cian }, 'EQUIPO'),
+    ),
+    h('div', { fontSize: 60, fontWeight: 800, marginTop: 26 }, 'Resumen del equipo'),
+    h('div', { fontSize: 30, color: C.gris, marginTop: 4 }, `Corte del ${eq.fecha ? fechaCorta(eq.fecha) : '—'}`),
+
+    h('div', { marginTop: 30, padding: '30px 40px', borderRadius: 32, background: C.panel, border: `3px solid ${col}`, alignItems: 'center' },
+      h('div', { flexDirection: 'column', flex: 1 },
+        h('div', { fontSize: 26, color: C.gris, letterSpacing: 4 }, 'AVANCE DEL MES · EQUIPO'),
+        h('div', { fontSize: 120, fontWeight: 800, color: col, lineHeight: 1, marginTop: 6 }, pct(eq.pctMes)),
+        h('div', { fontSize: 28, marginTop: 8 }, `${cantidad(eq.ventaMes, eq.unidad)} de ${cantidad(eq.objMes, eq.unidad)}`),
+        h('div', { position: 'relative', width: '100%', height: 48, marginTop: 14 },
+          h('div', { position: 'absolute', left: 0, top: 14, width: '100%', height: 22, borderRadius: 11, background: 'rgba(255,255,255,0.14)' }),
+          h('div', { position: 'absolute', left: 0, top: 14, width: `${p}%`, height: 22, borderRadius: 11, background: col }),
+          h('div', { position: 'absolute', left: `${marca}%`, top: 2, width: 6, height: 46, marginLeft: -3, borderRadius: 3, background: C.texto }),
+        ),
+        h('div', { fontSize: 24, color: C.gris, marginTop: 4 }, `Línea blanca = ritmo esperado (${pct(eq.esperado)})`),
+      ),
+      h('div', { flexDirection: 'column', width: 250, marginLeft: 30, alignItems: 'flex-end' },
+        h('div', { fontSize: 24, color: C.gris, letterSpacing: 3 }, 'EN RITMO'),
+        h('div', { fontSize: 72, fontWeight: 800, color: C.texto }, `${eq.enRitmo}/${eq.rutas.length}`),
+        h('div', { fontSize: 24, color: C.gris, letterSpacing: 3, marginTop: 10 }, 'DÍA EQUIPO'),
+        h('div', { fontSize: 56, fontWeight: 800, color: colorPct(eq.pctDia) }, pct(eq.pctDia)),
+      ),
+    ),
+
+    h('div', { marginTop: 30, padding: '0 24px', fontSize: 22, color: C.gris, letterSpacing: 3 },
+      h('div', { width: 60 }, '#'),
+      h('div', { width: 270 }, 'RUTA'),
+      h('div', { width: 330 }, 'MES'),
+      h('div', { width: 150, justifyContent: 'center' }, 'DÍA'),
+      h('div', { width: 150, justifyContent: 'center' }, 'EFECT.'),
+    ),
+    ...eq.rutas.map(filaEquipo),
+    bloqueMarcasEquipo(eq),
+    matrizMarcas(eq),
+  );
+}
+
 export default async function handler(req) {
   const q = new URL(req.url).searchParams;
   const ruta = q.get('ruta') || '';
@@ -179,6 +315,20 @@ export default async function handler(req) {
   if (q.get('s') !== (await firmar(ruta, fecha))) return new Response('firma inválida', { status: 403 });
 
   const filas = await filasDeFecha(fecha);
+
+  if (ruta === 'EQUIPO') {
+    if (!filas.length) return new Response('sin datos', { status: 404 });
+    const eq = calcularEquipo(filas, await listaContactos(await configBot()));
+    const fe = await cargarFuentes();
+    return new ImageResponse(tarjetaEquipo(eq), {
+      width: 1080,
+      height: altoEquipo(eq),
+      ...(fe.length ? { fonts: fe } : {}),
+      emoji: 'twemoji',
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  }
+
   const fila = filas.find((f) => f.ruta === ruta);
   if (!fila) return new Response('sin datos', { status: 404 });
 
