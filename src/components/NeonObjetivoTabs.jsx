@@ -65,6 +65,12 @@ function TileIcon({ name, ...props }) {
         <path d="M12 2 12.6 3.4 14.1 3.55 13 4.5 13.3 6 12 5.2 10.7 6 11 4.5 9.9 3.55 11.4 3.4Z" fill="currentColor" stroke="none" />
       </svg>
     );
+    case "whatsapp": return (
+      <svg {...p}>
+        <path d="M12 3.2a8.8 8.8 0 0 0-7.6 13.2L3.2 20.8l4.5-1.2A8.8 8.8 0 1 0 12 3.2Z" />
+        <path d="M9.1 8.2c.3-.6.6-.6.9-.6h.6c.2 0 .4.1.5.4l.8 1.9c.1.2 0 .5-.1.6l-.6.7c-.1.2-.1.4 0 .6.6 1.1 1.5 2 2.6 2.6.2.1.4.1.6 0l.7-.6c.2-.1.4-.2.6-.1l1.9.8c.3.1.4.3.4.5v.6c0 .3 0 .6-.6.9-.6.3-1.5.6-2.6.2-2.6-.9-4.8-3.1-5.7-5.7-.4-1.1-.1-2 .2-2.6Z" fill="currentColor" stroke="none" />
+      </svg>
+    );
     default: return (<svg {...p}><rect x="4" y="4" width="16" height="16" rx="3"/></svg>);
   }
 }
@@ -114,6 +120,7 @@ const META = {
   mi_fondo:          { icon: "piggy",    color: "#fbbf24", fam: "⚙️ Configuración" },
   reset_pin:         { icon: "key",      color: "#f59e0b", fam: "⚙️ Configuración" },
   permisos:          { icon: "sliders",  color: "#38bdf8", fam: "⚙️ Configuración" },
+  whatsapp_bot:      { icon: "whatsapp", color: "#25D366", fam: "⚙️ Configuración" },
 };
 
 const FAMILY_ORDER = ["🏠 Inicio", "🏆 Reconocimiento", "🎯 Avances", "💰 Ventas", "🎟️ Promociones", "📋 Operación", "🔔 Avisos", "⚙️ Configuración"];
