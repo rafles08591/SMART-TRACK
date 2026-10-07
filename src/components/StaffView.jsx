@@ -48,6 +48,7 @@ import OtcVentasView from "./OtcVentasView";
 import ResetPinView from "./ResetPinView";
 import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
 import PromocionesCoachView from "./PromocionesCoachView";
+import WhatsAppBotView from "./WhatsAppBotView";
 import CarrerasVentas from "./CarrerasVentas";
 import CarreraMes from "./CarreraMes";
 import ScorecardSemanalView from "./ScorecardSemanalView";
@@ -454,7 +455,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   : esSupervisor2
                   ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones"].includes(t.key))
                   : esSupervisor1
-                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach")
+                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
               }
               estadoTabs={estadoTabsActividades}
@@ -776,6 +777,12 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <PermisosPersonalizadosView data={data} persistFresco={persistFresco} />
           ) : objTab === "promociones_coach" ? (
             <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
+          ) : objTab === "whatsapp_bot" ? (
+            <WhatsAppBotView
+              data={data}
+              persistFresco={persistFresco}
+              puedeEditar={puesto === "gerente" || (data.permisosPersonalizados?.[rutaPropiaStaff] || []).includes("whatsapp_bot")}
+            />
           ) : objTab === "scorecard" ? (
             <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
           ) : objTab === "mural_campeones" ? (
