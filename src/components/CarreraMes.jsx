@@ -1,11 +1,9 @@
-
 import { useRive } from "@rive-app/react-canvas";
 import { useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
 
-// Camino en el artboard 390 x 844, de INICIO a META.
 const CAMINO = [
   [198, 168],
   [214, 230],
@@ -57,7 +55,7 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
     src: "/carrera_mes.riv",
     artboard: "SmartTrack",
     stateMachines: "Race",
-    autoplay: true,
+    autoplay: false,
     autoBind: true,
   });
 
@@ -76,20 +74,36 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
 
   useEffect(() => {
     if (!rive) return;
-    const vm = rive.viewModelInstance;
-    if (!vm) return;
+    try { rive.pause(); } catch { /* sin animación activa */ }
 
-    ranking.forEach((r, i) => {
-      const puesto = i + 1;
-      const [x, y] = r.pct >= 100 ? lugarEstacionado(puesto) : puntoEnCamino(r.pct);
-      ponerNumero(vm, `PassX ${r.ruta}`, x);
-      ponerNumero(vm, `PassY ${r.ruta}`, y);
-      ponerNumero(vm, `Rank ${r.ruta}`, puesto);
-      ponerTexto(vm, `Rank text ${r.ruta}`, `${puesto}°`);
-      ponerBool(vm, `Glow ${r.ruta}`, puesto === 1);
-      ponerBool(vm, `Candidate ${r.ruta}`, r.pct >= 100);
-    });
-    try { rive.drawFrame(); } catch { /* el state machine sigue solo */ }
+    let frameId = 0;
+    let cancelado = false;
+    const aplicar = () => {
+      if (cancelado) return;
+      const vm = rive.viewModelInstance;
+      if (vm) {
+        ranking.forEach((r, i) => {
+          const puesto = i + 1;
+          const [x, y] = r.pct >= 100 ? lugarEstacionado(puesto) : puntoEnCamino(r.pct);
+          ponerNumero(vm, `PassX ${r.ruta}`, x);
+          ponerNumero(vm, `PassY ${r.ruta}`, y);
+          ponerNumero(vm, `Rank ${r.ruta}`, puesto);
+          ponerNumero(vm, `Progress ${r.ruta}`, r.pct);
+          ponerNumero(vm, `Pct ${r.ruta}`, r.pct);
+          ponerTexto(vm, `Rank text ${r.ruta}`, `${r.ruta} ${Math.round(r.pct)}% · ${puesto}°`);
+          ponerBool(vm, `Glow ${r.ruta}`, puesto === 1);
+          ponerBool(vm, `Candidate ${r.ruta}`, r.pct >= 100);
+        });
+      }
+      try { rive.drawFrame(); } catch { /* sigue el siguiente frame */ }
+      frameId = requestAnimationFrame(aplicar);
+    };
+    frameId = requestAnimationFrame(aplicar);
+
+    return () => {
+      cancelado = true;
+      if (frameId) cancelAnimationFrame(frameId);
+    };
   }, [rive, ranking]);
 
   const contenido = (
