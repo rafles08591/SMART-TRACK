@@ -1,11 +1,13 @@
+
 import { useRive } from "@rive-app/react-canvas";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 
 const RUTAS = ["J201", "J202", "J203", "J204", "J205", "J206", "J207"];
+const DURACION_MS = 12000;
 
 const CAMINO = [
-  [198, 168],
+  [198, 150],
   [214, 230],
   [168, 300],
   [214, 390],
@@ -19,6 +21,10 @@ function porcentajeMes(v) {
   const pct = Number(v?.tabs?.max?.avancePct);
   if (!Number.isFinite(pct)) return 0;
   return Math.min(Math.max(pct, 0), 100);
+}
+
+function easeOutQuart(x) {
+  return 1 - Math.pow(1 - x, 4);
 }
 
 function puntoEnCamino(pct) {
@@ -72,38 +78,48 @@ export default function CarreraMes({ porVendedor, onCerrar }) {
     })).sort((a, b) => b.pct - a.pct || a.ruta.localeCompare(b.ruta));
   }, [porVendedor]);
 
+  const rankingKey = ranking.map((r) => `${r.ruta}:${r.pct.toFixed(1)}`).join("|");
+  const yaAnimoRef = useRef("");
+
   useEffect(() => {
     if (!rive) return;
-    try { rive.play(); } catch { /* ya está corriendo */ }
+    if (yaAnimoRef.current === rankingKey) return;
+    yaAnimoRef.current = rankingKey;
 
     let frameId = 0;
     let cancelado = false;
-    const aplicar = () => {
+    const inicio = performance.now();
+
+    const aplicar = (ahora) => {
       if (cancelado) return;
       const vm = rive.viewModelInstance;
+      const recorrido = Math.min(Math.max((ahora - inicio) / DURACION_MS, 0), 1);
+      const factor = easeOutQuart(recorrido);
+
       if (vm) {
         ranking.forEach((r, i) => {
           const puesto = i + 1;
-          const [x, y] = r.pct >= 100 ? lugarEstacionado(puesto) : puntoEnCamino(r.pct);
+          const visible = r.pct * factor;
+          const [x, y] = visible >= 100 ? lugarEstacionado(puesto) : puntoEnCamino(visible);
+          ponerNumero(vm, `Progress ${r.ruta}`, visible);
           ponerNumero(vm, `PassX ${r.ruta}`, x);
           ponerNumero(vm, `PassY ${r.ruta}`, y);
           ponerNumero(vm, `Rank ${r.ruta}`, puesto);
-          ponerNumero(vm, `Progress ${r.ruta}`, r.pct);
-          ponerNumero(vm, `Pct ${r.ruta}`, r.pct);
-          ponerTexto(vm, `Rank text ${r.ruta}`, `${r.ruta} ${Math.round(r.pct)}% · ${puesto}°`);
+          ponerTexto(vm, `Rank text ${r.ruta}`, `${r.ruta} ${Math.round(visible)}% · ${puesto}°`);
           ponerBool(vm, `Glow ${r.ruta}`, puesto === 1);
-          ponerBool(vm, `Candidate ${r.ruta}`, r.pct >= 100);
+          ponerBool(vm, `Candidate ${r.ruta}`, visible >= 100);
         });
       }
-      frameId = requestAnimationFrame(aplicar);
-    };
-    frameId = requestAnimationFrame(aplicar);
 
+      if (recorrido < 1) frameId = requestAnimationFrame(aplicar);
+    };
+
+    frameId = requestAnimationFrame(aplicar);
     return () => {
       cancelado = true;
       if (frameId) cancelAnimationFrame(frameId);
     };
-  }, [rive, ranking]);
+  }, [rive, ranking, rankingKey]);
 
   const contenido = (
     <div
