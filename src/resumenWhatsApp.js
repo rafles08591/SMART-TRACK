@@ -69,7 +69,9 @@ export async function guardarResumenVendedores(supabase, filas, { quien, fecha }
  * Hook: guarda automáticamente cuando cambian los números (con debounce y
  * sin reescribir si nada cambió).
  */
-export function useSnapshotWhatsApp({ supabase, filas, habilitado, quien, fecha, esperaMs = 4000 }) {
+export function useSnapshotWhatsApp({ supabase, filas, habilitado, quien, fecha, esperaMs = 4000, onGuardado }) {
+  const onGuardadoRef = useRef(onGuardado);
+  onGuardadoRef.current = onGuardado;
   const ultima = useRef(null);
   useEffect(() => {
     if (!habilitado || !supabase) return undefined;
@@ -79,8 +81,34 @@ export function useSnapshotWhatsApp({ supabase, filas, habilitado, quien, fecha,
     if (h === ultima.current) return undefined;
     const t = setTimeout(async () => {
       const r = await guardarResumenVendedores(supabase, filas, { quien, fecha });
-      if (r.ok) ultima.current = h;
+      if (r.ok) {
+        ultima.current = h;
+        try { onGuardadoRef.current?.(); } catch { /* nada */ }
+      }
     }, esperaMs);
     return () => clearTimeout(t);
   }, [supabase, filas, habilitado, quien, fecha, esperaMs]);
+}
+
+/**
+ * Pide al bot que mande la tarjeta del AVANCE DEL DÍA por WhatsApp.
+ * La llama App.tsx después de cargar el Avance del día.
+ */
+export async function dispararAvanceDia(supabase) {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) return { ok: false, error: "sin sesión" };
+    const res = await fetch("/api/wa-disparar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tipo: "dia" }),
+    });
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok || r.ok === false) console.warn("[resumenWhatsApp] avance del día no enviado:", r.error || res.status);
+    return r;
+  } catch (err) {
+    console.warn("[resumenWhatsApp] error al disparar avance del día:", err?.message || err);
+    return { ok: false, error: String(err?.message || err) };
+  }
 }
