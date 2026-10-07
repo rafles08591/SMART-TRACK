@@ -40,7 +40,7 @@ import { paquetesACajetillas, infoProducto } from "./productosFacturables";
 import Login from "./components/Login";
 import VendorView from "./components/VendorView";
 import StaffView from "./components/StaffView";
-import { useSnapshotWhatsApp } from "./resumenWhatsApp";
+import { useSnapshotWhatsApp, dispararAvanceDia } from "./resumenWhatsApp";
 
 /* ---------------------------------------------------------------
    PARCHE DEFENSIVO — "NotFoundError: Failed to execute 'removeChild'
@@ -1445,15 +1445,33 @@ export default function App() {
             por_dia: mo.ventaPorDiaNecesaria ?? null,
           };
         }),
+        // Marcas del día (mismo dato que el "Avance del día" de la app)
+        marcas_dia: MARCAS_DIA.map((m) => ({
+          clave: m.key,
+          nombre: m.label || m.key,
+          vendido: v.hoy?.marcas?.[m.key]?.vendido ?? null,
+          objetivo: v.hoy?.marcas?.[m.key]?.objetivo ?? null,
+        })),
       },
     };
   }), [stats]);
+
+  // Cuando se carga un Avance del día, se marca este pendiente. En cuanto el
+  // snapshot con los números nuevos queda guardado, se avisa al bot para que
+  // mande la tarjeta del AVANCE DEL DÍA por WhatsApp.
+  const avisoDiaPendienteRef = useRef(false);
+  const enviarAvisoDia = () => {
+    if (!avisoDiaPendienteRef.current) return;
+    avisoDiaPendienteRef.current = false;
+    dispararAvanceDia(supabase);
+  };
 
   useSnapshotWhatsApp({
     supabase,
     filas: filasWhatsApp,
     habilitado: role === "staff" && ["gerente", "supervisor", "supervisor2"].includes(puesto),
     quien: staffUsername,
+    onGuardado: enviarAvisoDia,
   });
 
   // Registra quién y cuándo se hizo la última carga de cada sección de
@@ -3026,6 +3044,10 @@ export default function App() {
       visitasSemana: podarVisitasSemanaAntiguas(fusionarVisitasSemanaDesdeAvanceDia(fresca.visitasSemana || {}, registros)),
     }));
     await registrarUltimaCarga("avanceDia");
+    // WhatsApp: mandar tarjeta del avance del día en cuanto se guarde el snapshot.
+    // Respaldo: si los números no cambiaron (no hay snapshot nuevo), se manda a los 25 s.
+    avisoDiaPendienteRef.current = true;
+    setTimeout(enviarAvisoDia, 25000);
     const resultadoFacturas = await sincronizarVentasFacturas(filas);
     if (resultadoFacturas && resultadoFacturas.ok !== false && resultadoFacturas.guardadas > 0) {
       await asignarFoliosTickets();
