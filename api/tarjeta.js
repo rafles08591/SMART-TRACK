@@ -4,7 +4,7 @@
 
 import { ImageResponse } from '@vercel/og';
 import {
-  firmar, filasDeFecha, calcular, estadoMes, frase, dinero, dineroCorto, pct, fechaCorta,
+  firmar, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -90,7 +90,7 @@ function tarjeta(fila, m) {
       h('div', { alignItems: 'flex-end', marginTop: 4 },
         h('div', { fontSize: 150, fontWeight: 800, color: col, lineHeight: 1 }, pct(m.pctMes)),
       ),
-      h('div', { fontSize: 32, color: C.texto, marginTop: 8 }, `${dinero(m.ventaMes)} de ${dinero(m.objMes)}`),
+      h('div', { fontSize: 32, color: C.texto, marginTop: 8 }, `${cantidad(m.ventaMes, m.unidad)} de ${cantidad(m.objMes, m.unidad)}`),
       // Barra con marcador del ritmo esperado
       h('div', { position: 'relative', width: '100%', height: 64, marginTop: 16 },
         h('div', { position: 'absolute', left: 0, top: 18, width: '100%', height: 28, borderRadius: 14, background: 'rgba(255,255,255,0.14)' }),
@@ -102,12 +102,12 @@ function tarjeta(fila, m) {
 
     // Tiles
     h('div', { marginTop: 24, gap: 24 },
-      tile('DÍA', pct(m.pctDia), m.objDia ? `${dineroCorto(m.ventaDia)} / ${dineroCorto(m.objDia)}` : 'sin dato', colorPct(m.pctDia)),
-      tile('EFECTIVIDAD', pct(m.efectividad), m.prog ? `${m.vis ?? 0} de ${m.prog} clientes` : 'clientes visitados', colorPct(m.efectividad)),
+      tile('DÍA', pct(m.pctDia), m.objDia ? `${cantidadCorta(m.ventaDia, m.unidad)} / ${cantidadCorta(m.objDia, m.unidad)}${m.unidad === 'paq' ? ' paq' : ''}` : 'sin dato', colorPct(m.pctDia)),
+      tile('EFECTIVIDAD', pct(m.efectividad), m.prog ? `${m.vis ?? 0} de ${m.prog} clientes` : m.vis !== null ? `${m.vis} visitas efectivas` : 'del día', colorPct(m.efectividad)),
     ),
     h('div', { marginTop: 24, gap: 24 },
       tile('LUGAR', m.ranking ? `#${m.ranking}` : '—', m.totalRutas ? `de ${m.totalRutas} rutas` : 'ranking', m.ranking && m.ranking <= 3 ? C.cian : C.texto),
-      tile('NECESITAS', dineroCorto(m.necesitaDiario), `diarios · ${m.restantes} días`, C.texto),
+      tile('NECESITAS', cantidadCorta(m.necesitaDiario, m.unidad), `${m.unidad === 'paq' ? 'paq ' : ''}diarios · ${m.restantes} días`, C.texto),
     ),
 
     // Frase
@@ -132,6 +132,10 @@ export default async function handler(req) {
   if (!fila) return new Response('sin datos', { status: 404 });
 
   const m = calcular(fila, filas);
+  // Nombre real del vendedor (la app guarda la ruta; el nombre vive en vendedores_whatsapp)
+  if (!fila.nombre || fila.nombre.toUpperCase() === fila.ruta.toUpperCase()) {
+    try { const c = await contactoPorRuta(ruta); if (c) fila.nombre = c.nombre; } catch { /* sin nombre */ }
+  }
   const f = await cargarFuentes();
   return new ImageResponse(tarjeta(fila, m), {
     width: 1080,
