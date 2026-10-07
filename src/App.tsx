@@ -40,6 +40,7 @@ import { paquetesACajetillas, infoProducto } from "./productosFacturables";
 import Login from "./components/Login";
 import VendorView from "./components/VendorView";
 import StaffView from "./components/StaffView";
+import { useSnapshotWhatsApp } from "./resumenWhatsApp";
 
 /* ---------------------------------------------------------------
    PARCHE DEFENSIVO — "NotFoundError: Failed to execute 'removeChild'
@@ -1405,6 +1406,43 @@ export default function App() {
 
     return { porVendedor, total, restantes, diasTranscurridos, diasLaborablesTotal, peorVendedorNombre, bottom3Nombres };
   }, [vendedores, ventas, avanceDia, otcDia, otcSemanal, diasNoLaborables, periodo, data?.escaleraObjetivosManuales, codigosSinVuala]);
+
+  // ---- Snapshot para el bot de WhatsApp (tabla resumen_vendedores) ----
+  // Mismos números que se ven en pantalla: MAX del periodo + avance del día
+  // (paquetes). Solo lo escriben Gerente / Supervisores, que son quienes
+  // cargan datos. El bot (api/wa-resumen.js) lee esta tabla.
+  const filasWhatsApp = useMemo(() => (stats?.porVendedor || []).map((v) => {
+    const tieneObjetivoDia = (v.hoy?.volumen?.objetivo || 0) > 0;
+    return {
+      ruta: v.name,
+      fecha: v.hoy?.fecha,
+      nombre: null, // el nombre real se toma de vendedores_whatsapp
+      venta_dia: v.hoy?.volumen?.vendido,
+      objetivo_dia: tieneObjetivoDia ? v.hoy.volumen.objetivo : null,
+      venta_mes: v.tabs?.max?.avance,
+      objetivo_mes: v.tabs?.max?.objetivo || null,
+      efectividad_pct: tieneObjetivoDia ? v.hoy?.efectividadPct : null,
+      clientes_programados: null,
+      clientes_visitados: v.hoy?.visitasEfectivas,
+      extra: {
+        unidad: "paq",
+        dias_totales: stats.diasLaborablesTotal,
+        dias_transcurridos: stats.diasTranscurridos,
+        dias_restantes: stats.restantes,
+        necesita_diario: v.tabs?.max?.ventaPorDiaNecesaria,
+        proyectado_mes: v.proyeccion?.max?.proyectado,
+        otc_dia: v.hoy?.otc?.vendido,
+        otc_dia_objetivo: v.hoy?.otc?.objetivo,
+      },
+    };
+  }), [stats]);
+
+  useSnapshotWhatsApp({
+    supabase,
+    filas: filasWhatsApp,
+    habilitado: role === "staff" && ["gerente", "supervisor", "supervisor2"].includes(puesto),
+    quien: staffUsername,
+  });
 
   // Registra quién y cuándo se hizo la última carga de cada sección de
   // "Cargar datos" (Avance del día, OTC del día, etc.). Se REEMPLAZA cada
