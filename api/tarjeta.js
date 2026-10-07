@@ -60,6 +60,54 @@ function tile(etiqueta, valor, sub, color) {
   );
 }
 
+const numN = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const miles = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+function marcasDe(fila) {
+  const lista = Array.isArray(fila.extra?.marcas) ? fila.extra.marcas : [];
+  return lista.filter((x) => numN(x.objetivo) > 0);
+}
+
+function filaMarca(mk) {
+  const vend = numN(mk.vendido) ?? 0;
+  const obj = numN(mk.objetivo) ?? 0;
+  const p = obj > 0 ? (vend / obj) * 100 : 0;
+  const resta = numN(mk.resta) ?? Math.max(0, obj - vend);
+  const porDia = numN(mk.por_dia);
+  const col = colorPct(p);
+  return h('div', { flexDirection: 'column', marginTop: 18 },
+    h('div', { justifyContent: 'space-between', alignItems: 'flex-end' },
+      h('div', { fontSize: 30, fontWeight: 800, color: C.texto }, String(mk.nombre || '').toUpperCase()),
+      h('div', { fontSize: 28, color: C.texto }, `${miles(vend)} / ${miles(obj)} paq`),
+    ),
+    h('div', { position: 'relative', width: '100%', height: 16, marginTop: 8 },
+      h('div', { position: 'absolute', left: 0, top: 0, width: '100%', height: 16, borderRadius: 8, background: 'rgba(255,255,255,0.14)' }),
+      h('div', { position: 'absolute', left: 0, top: 0, width: `${Math.min(100, p)}%`, height: 16, borderRadius: 8, background: col }),
+    ),
+    h('div', { justifyContent: 'space-between', marginTop: 6, fontSize: 24 },
+      h('div', { color: resta > 0 ? C.rojo : C.verde }, resta > 0 ? `Resta: ${miles(resta)} paq` : '¡Meta cumplida!'),
+      h('div', { color: resta > 0 ? C.ambar : C.verde }, porDia !== null && resta > 0 ? `Por día: ${miles(porDia)} paq` : `${Math.round(p)}%`),
+    ),
+  );
+}
+
+function bloqueMarcas(fila) {
+  const lista = marcasDe(fila);
+  if (!lista.length) return null;
+  return h('div', {
+    flexDirection: 'column', marginTop: 24, padding: '24px 32px 28px', borderRadius: 28,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 26, color: C.gris, letterSpacing: 3 }, 'MARCAS · OPEN'),
+    ...lista.map(filaMarca),
+  );
+}
+
+export function altoTarjeta(fila) {
+  const n = marcasDe(fila).length;
+  return 1350 + (n ? 150 + n * 112 : 0);
+}
+
 function tarjeta(fila, m) {
   const e = estadoMes(m);
   const col = colorEstado(e);
@@ -110,6 +158,9 @@ function tarjeta(fila, m) {
       tile('NECESITAS', cantidadCorta(m.necesitaDiario, m.unidad), `${m.unidad === 'paq' ? 'paq ' : ''}diarios · ${m.restantes} días`, C.texto),
     ),
 
+    // Marcas OPEN
+    bloqueMarcas(fila),
+
     // Frase
     h('div', {
       marginTop: 'auto', padding: '22px 30px', borderRadius: 24, fontSize: 30, lineHeight: 1.3,
@@ -139,7 +190,7 @@ export default async function handler(req) {
   const f = await cargarFuentes();
   return new ImageResponse(tarjeta(fila, m), {
     width: 1080,
-    height: 1350,
+    height: altoTarjeta(fila),
     ...(f.length ? { fonts: f } : {}),
     emoji: 'twemoji',
     headers: { 'Cache-Control': 'no-store' },
