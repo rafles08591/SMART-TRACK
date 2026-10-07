@@ -9,7 +9,7 @@
 import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, estadoMes,
-  frase, icono, medalla, claveRuta,
+  frase, icono, medalla, claveRuta, sb,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -202,12 +202,39 @@ async function modoBot(req) {
   return responder({ tipo: 'texto', texto: MENU });
 }
 
+// Diagnóstico: qué ve el bot en Supabase (sin teléfonos completos)
+async function modoDiag() {
+  const hoy = fechaMX();
+  const [todos, activos, matutino, resumen, previos] = await Promise.all([
+    sb('vendedores_whatsapp?select=ruta,activo,recibir_matutino,telefono'),
+    contactos(),
+    contactos({ campo: 'recibir_matutino' }),
+    sb(`resumen_vendedores?select=ruta,fecha&order=fecha.desc&limit=30`),
+    ultimosPorRuta({ antesDe: hoy }),
+  ]);
+  const llave = (process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+  return json({
+    version: 'diag-2',
+    hoy,
+    supabase_url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/^https:\/\/([a-z0-9]{6}).*/, '$1…'),
+    tipo_llave: llave.startsWith('sb_secret') ? 'sb_secret' : llave.startsWith('sb_publishable') ? 'PUBLISHABLE (incorrecta)' : llave.startsWith('eyJ') ? 'jwt' : llave ? 'otra' : 'VACÍA',
+    contactos_total: todos.length,
+    contactos: todos.map((c) => ({ ruta: c.ruta, clave: claveRuta(c.ruta), activo: c.activo, matutino: c.recibir_matutino, tel: '…' + String(c.telefono).slice(-4) })),
+    contactos_activos: activos.length,
+    contactos_matutino: matutino.length,
+    resumen_filas: resumen.length,
+    resumen_ultimas: resumen.slice(0, 10),
+    claves_antes_de_hoy: Object.keys(previos),
+  });
+}
+
 // ------------------------------------------------------------------ handler
 export default async function handler(req) {
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
   const modo = new URL(req.url).searchParams.get('modo');
   try {
     if (modo === 'matutino') return await modoMatutino(req);
+    if (modo === 'diag') return await modoDiag();
     if (modo === 'alerta') return await modoAlerta(req);
     if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
     return json({ error: 'modo inválido (matutino | alerta | bot)' }, 400);
