@@ -6,7 +6,7 @@
 // Props: data, persistFresco (= persistParcialFresco de App.tsx), puedeEditar (bool)
 
 import React, { useEffect, useMemo, useState } from "react";
-import { NOMBRES } from "../constants";
+import { NOMBRES, MARCAS_DIA } from "../constants";
 import { supabase } from "../supabaseClient";
 
 // Deben coincidir con PLANTILLAS_DEFAULT de api/_wa-lib.js
@@ -86,6 +86,25 @@ const PLANTILLAS_DEFAULT = {
     "🔻 *Retro, lo que les falta hoy:*",
     "{retro_dia}",
   ].join("\n"),
+  riesgo: [
+    "🚨 *RUTAS EN RIESGO* · corte {fecha}",
+    "{nombre}, así proyecta el mes cada ruta:",
+    "",
+    "📉 Equipo cierra en *{proyeccion_equipo}* · faltarían {falta_equipo}",
+    "{total_riesgo} de {total_rutas} rutas abajo del {umbral}",
+    "",
+    "{rutas_riesgo}",
+    "",
+    "✅ En ritmo: {rutas_ok}",
+  ].join("\n"),
+  riesgo_tarde: [
+    "🚨 *3 PM · RUTAS QUE NECESITAN APOYO*",
+    "{nombre}, estas rutas van mal hoy:",
+    "",
+    "{rutas_riesgo}",
+    "",
+    "✅ Bien hoy: {rutas_ok}",
+  ].join("\n"),
   equipo_dia: [
     "📦 *Avance del día · Equipo* · corte {hora}",
     "",
@@ -146,6 +165,29 @@ VARIABLES.equipo_dia = [
   ["top_dia", "Top 3 del día"], ["abajo_dia", "3 más abajo"], ["ranking_dia", "Ranking del día"], ["nombre", "Nombre de quien recibe"],
   ["sin_vuala_pendientes", "Rutas sin cubrir Sin Vuala"],
 ];
+
+VARIABLES.riesgo = [
+  ["nombre", "Nombre de quien recibe"], ["fecha", "Fecha del corte"], ["proyeccion_equipo", "% al que cierra el equipo"],
+  ["falta_equipo", "Paquetes que faltarían"], ["total_riesgo", "Rutas en riesgo"], ["total_rutas", "Total rutas"],
+  ["umbral", "Umbral de riesgo"], ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Rutas en ritmo"],
+  ["criticas", "Solo las críticas (nombres)"],
+];
+VARIABLES.riesgo_tarde = [
+  ["nombre", "Nombre de quien recibe"], ["fecha", "Fecha"], ["total_riesgo", "Rutas mal hoy"], ["total_rutas", "Total rutas"],
+  ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Rutas bien hoy"],
+];
+
+const EJEMPLO_RIESGO = {
+  nombre: "Christian", fecha: "mar 06/10", proyeccion_equipo: "86%", falta_equipo: "1,960 paq", total_riesgo: "3",
+  total_rutas: "7", umbral: "95%", criticas: "J205 Alejandro",
+  rutas_riesgo: "🔴 *J205 Alejandro* · cierra en *72%* (faltarían 560 paq)\n   Lleva 54 paq/día, necesita 79 (+25)\n   ⚠️ FARONET 180 paq abajo · Sin Vuala 1/2 · efectividad 64%\n   👉 Revisar con él los clientes que no compraron y acompañarlo a los de más volumen.\n\n🟠 *J201 Francisco* · cierra en *89%* (faltarían 220 paq)\n   Lleva 67 paq/día, necesita 77 (+10)\n   ⚠️ ICE MIX 90 paq abajo\n   👉 Empujar ICE MIX con sus clientes top (va 90 paq abajo).",
+  rutas_ok: "J202 (98%), J206 (130%), J203 (101%), J204 (97%)",
+};
+const EJEMPLO_RIESGO_TARDE = {
+  ...EJEMPLO_RIESGO,
+  rutas_riesgo: "🔴 *J203 Ana* · 35 de 100 paq (35%) · mes cierra en 81%\n   Le falta: 2 pz Sin Vuala, 65 paq de volumen, 30 paq FARONET\n   👉 Llámale y que empuje FARONET (le faltan 30 paq) en lo que le queda de ruta.\n\n🟠 *J204 Noema* · 61 de 100 paq (61%)\n   Le falta: 39 paq de volumen\n   👉 Llámale ya, todavía da tiempo de recuperar.",
+  rutas_ok: "J207 (72%), J201 (80%), J206 (109%), J202 (110%)",
+};
 
 const EJEMPLO = {
   nombre: "Francisco", nombre_completo: "Francisco Javier", ruta: "J201", fecha: "mar 06/10", pct_mes: "62%",
@@ -232,6 +274,12 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const [umbral, setUmbral] = useState(guardado.umbralAlerta || 70);
   const [avanceDiaActivo, setAvanceDiaActivo] = useState(guardado.avanceDiaActivo !== false);
   const [tonoBot, setTonoBot] = useState(guardado.tonoBot || "picante");
+  const [riesgoActivo, setRiesgoActivo] = useState(guardado.riesgoActivo !== false);
+  const [umbralRiesgo, setUmbralRiesgo] = useState(guardado.umbralRiesgo || 95);
+  const [retoActivo, setRetoActivo] = useState(guardado.retoActivo !== false);
+  const [retoMarca, setRetoMarca] = useState(guardado.retoMarca || "");
+  const [retoMeta, setRetoMeta] = useState(guardado.retoMeta || 0);
+  const [rebaseActivo, setRebaseActivo] = useState(guardado.rebaseActivo !== false);
   const [tipoPlantilla, setTipoPlantilla] = useState("matutino");
   const [estado, setEstado] = useState("");
   const [gruposWa, setGruposWa] = useState(null);
@@ -263,6 +311,12 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
     setUmbral(guardado.umbralAlerta || 70);
     setAvanceDiaActivo(guardado.avanceDiaActivo !== false);
     setTonoBot(guardado.tonoBot || "picante");
+    setRiesgoActivo(guardado.riesgoActivo !== false);
+    setUmbralRiesgo(guardado.umbralRiesgo || 95);
+    setRetoActivo(guardado.retoActivo !== false);
+    setRetoMarca(guardado.retoMarca || "");
+    setRetoMeta(guardado.retoMeta || 0);
+    setRebaseActivo(guardado.rebaseActivo !== false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.whatsappBot]);
 
@@ -311,6 +365,8 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       nombre: String(c.nombre).trim(), telefono: c.tipo === "grupo" ? "" : solo10(c.telefono),
       grupo: c.tipo === "grupo" ? String(c.grupo || "").trim() : "",
       activo: c.activo !== false, matutino: c.matutino !== false, dia: c.dia !== false, alerta: c.tipo === "vendedor" && c.alerta !== false,
+      riesgo: c.tipo === "equipo" && c.riesgo !== false,
+      rebase: c.tipo === "vendedor" && c.rebase !== false,
     }));
     // Solo se guardan las plantillas que cambiaron (las demás siguen el texto original).
     const plantillasEditadas = {};
@@ -328,6 +384,12 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           umbralAlerta: Math.min(100, Math.max(1, Number(umbral) || 70)),
           avanceDiaActivo,
           tonoBot,
+          riesgoActivo,
+          umbralRiesgo: Math.min(100, Math.max(50, Number(umbralRiesgo) || 95)),
+          retoActivo,
+          retoMarca: retoMarca || "",
+          retoMeta: Math.max(0, Math.round(Number(retoMeta) || 0)),
+          rebaseActivo,
           actualizado: new Date().toISOString(),
         },
       }));
@@ -448,6 +510,12 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
                 <Toggle on={c.activo !== false} disabled={deshabilitado} label="Activo" onChange={(v) => editarContacto(c.id, "activo", v)} />
                 <Toggle on={c.matutino !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Reporte completo 8 am" : c.tipo === "equipo" ? "Tarjeta del equipo 8 am" : "Resumen 8 am"} onChange={(v) => editarContacto(c.id, "matutino", v)} />
                 <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Avance del día (paquetes) al cargar" : c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
+                {c.tipo === "equipo" && (
+                  <Toggle on={c.riesgo !== false} disabled={deshabilitado} label="🚨 Rutas en riesgo (8 am y 3 pm)" onChange={(v) => editarContacto(c.id, "riesgo", v)} />
+                )}
+                {c.tipo === "vendedor" && (
+                  <Toggle on={c.rebase !== false} disabled={deshabilitado} label="🏁 Aviso “te rebasaron”" onChange={(v) => editarContacto(c.id, "rebase", v)} />
+                )}
                 {c.tipo === "vendedor" && (
                   <Toggle on={c.alerta !== false} disabled={deshabilitado} label="Alerta de la tarde" onChange={(v) => editarContacto(c.id, "alerta", v)} />
                 )}
@@ -465,7 +533,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           )}
           <div style={S.nota}>
             Los contactos de tipo <b>Equipo</b> reciben cada mañana la tarjeta con las 7 rutas y pueden pedirle
-            al bot <i>avance</i>, <i>ranking</i> y <i>hoy</i> del equipo completo.
+            al bot <i>avance</i>, <i>ranking</i>, <i>hoy</i> y <i>riesgo</i> del equipo completo. Con 🚨 activo también reciben las Rutas en riesgo a las 8 am y a las 3 pm.
           </div>
         </div>
       )}
@@ -473,7 +541,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       {seccion === "mensajes" && (
         <div>
           <div style={S.tabs}>
-            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["grupo", "👥 Grupo 8 am"], ["grupo_dia", "👥 Grupo día"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
+            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["grupo", "👥 Grupo 8 am"], ["grupo_dia", "👥 Grupo día"], ["alerta", "⏰ Alerta tarde"], ["riesgo", "🚨 Riesgo 8 am"], ["riesgo_tarde", "🚨 Riesgo 3 pm"]].map(([k, l]) => (
               <button key={k} onClick={() => setTipoPlantilla(k)} style={tipoPlantilla === k ? S.tabOn : S.tab}>{l}</button>
             ))}
           </div>
@@ -509,11 +577,11 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
               <div style={S.lbl}>Vista previa (datos de ejemplo)</div>
               <VistaWhatsApp
                 texto={
-                  llenar(plantillas[tipoPlantilla], EJEMPLO) +
+                  llenar(plantillas[tipoPlantilla], tipoPlantilla === "riesgo" ? EJEMPLO_RIESGO : tipoPlantilla === "riesgo_tarde" ? EJEMPLO_RIESGO_TARDE : EJEMPLO) +
                   ((tipoPlantilla === "matutino" || tipoPlantilla === "equipo" || tipoPlantilla === "grupo") && aviso.trim() ? `\n\n📣 ${aviso.trim()}` : "")
                 }
               />
-              {tipoPlantilla !== "alerta" && <div style={S.nota}>+ se envía junto con la tarjeta en imagen.</div>}
+              {!["alerta", "riesgo", "riesgo_tarde"].includes(tipoPlantilla) && <div style={S.nota}>+ se envía junto con la tarjeta en imagen.</div>}
             </div>
           </div>
 
@@ -529,6 +597,43 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
             <Toggle on={avanceDiaActivo} disabled={deshabilitado}
               label="📦 Mandar la tarjeta del Avance del día cada vez que se cargue un avance"
               onChange={marcar((v) => setAvanceDiaActivo(v))} />
+            <div style={{ ...S.card, background: "#f59e0b0d", borderColor: "#f59e0b44", marginBottom: 0 }}>
+              <Toggle on={retoActivo} disabled={deshabilitado}
+                label="🎯 Reto del día: se anuncia a las 8 am, se actualiza con cada avance y al día siguiente se anuncia al ganador"
+                onChange={marcar((v) => setRetoActivo(v))} />
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <label style={{ ...S.campo, minWidth: 220 }}>
+                  <span style={S.lbl}>Marca del reto</span>
+                  <select style={S.input} value={retoMarca} disabled={deshabilitado || !retoActivo} onChange={marcar((e) => setRetoMarca(e.target.value))}>
+                    <option value="">🤖 Automática (la más atrasada del mes)</option>
+                    {MARCAS_DIA.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+                  </select>
+                </label>
+                <label style={{ ...S.campo, maxWidth: 300 }}>
+                  <span style={S.lbl}>Meta por ruta (paq)</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input style={{ ...S.input, width: 90 }} type="number" min={0} value={retoMeta} disabled={deshabilitado || !retoActivo}
+                      onChange={marcar((e) => setRetoMeta(e.target.value))} />
+                    <span style={S.sub}>0 = automática (lo que cada ruta necesita por día de esa marca)</span>
+                  </div>
+                </label>
+              </div>
+              <div style={S.nota}>Los vendedores ven su meta y su lugar en la tarjeta; el grupo y el supervisor ven la tabla completa. También pueden escribirle <i>reto</i> al bot.</div>
+            </div>
+            <Toggle on={rebaseActivo} disabled={deshabilitado}
+              label="🏁 “Te rebasaron”: avisar por privado al vendedor que baja de lugar en el ranking del día (paquetes) cuando se carga un avance"
+              onChange={marcar((v) => setRebaseActivo(v))} />
+            <Toggle on={riesgoActivo} disabled={deshabilitado}
+              label="🚨 Mandar Rutas en riesgo a Supervisor / Gerente (8 am: proyección del mes · 3 pm: rutas que van mal hoy)"
+              onChange={marcar((v) => setRiesgoActivo(v))} />
+            <label style={{ ...S.campo, maxWidth: 320 }}>
+              <span style={S.lbl}>🚨 Una ruta está en riesgo si proyecta cerrar el mes abajo del…</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input style={{ ...S.input, width: 90 }} type="number" min={50} max={100} value={umbralRiesgo} disabled={deshabilitado}
+                  onChange={marcar((e) => setUmbralRiesgo(e.target.value))} />
+                <span style={S.sub}>% de su objetivo MAX (crítica = 10 puntos menos)</span>
+              </div>
+            </label>
             <label style={S.campo}>
               <span style={S.lbl}>📣 Aviso del día (opcional) — se agrega al final del resumen de la mañana</span>
               <input style={S.input} value={aviso} disabled={deshabilitado} placeholder="Ej. Hoy hay promo ICE MIX 2x1 en mayoristas"
