@@ -239,6 +239,21 @@ export const PLANTILLAS_DEFAULT = {
     '🔻 *Retro para los de abajo:*',
     '{retro_bajos}',
   ].join('\n'),
+  grupo_dia: [
+    '📦 *AVANCE DEL DÍA · EQUIPO* · corte {hora}',
+    '',
+    '📦 Volumen: *{vol_vendido}* de {vol_objetivo}',
+    '{marcas_equipo}',
+    '💵 OTC: {otc_vendido} de {otc_objetivo}',
+    '🧃 Sin Vuala: {sv_piezas} piezas · {sv_cubiertas} de {total_rutas} rutas cubiertas',
+    '🛒 Visitas efectivas: {visitas_hoy}',
+    '',
+    '🏆 *Más volumen hoy:*',
+    '{top_volumen}',
+    '',
+    '🔻 *Retro, lo que les falta hoy:*',
+    '{retro_dia}',
+  ].join('\n'),
   dia: [
     '📦 *Avance del día* · corte {hora}',
     '{nombre}, llevas *{dia_vendido}* de {dia_objetivo} (*{pct_dia}*)',
@@ -677,5 +692,69 @@ export function varsGrupo(g) {
       `• *${nom(r)}* (índice ${Math.round(r.indice)}): ${r.faltas.length ? 'le falta ' + r.faltas.slice(0, 3).join(', ') : 'va parejo, falta empujar'}.`
     ).join('\n'),
     ranking_general: conIndice.map((r, i) => `${i + 1}. ${nom(r)} – ${Math.round(r.indice)}`).join('\n'),
+  };
+}
+
+
+// ---------------------------------------------------------------- Grupo: AVANCE DEL DÍA en unidades (sin %)
+export function calcularGrupoDia(filas, contactosLista = []) {
+  const eq = calcularEquipoDia(filas, contactosLista);
+  const claves = [];
+  const nombres = {};
+  for (const f of filas) for (const mk of (f.extra?.marcas_dia || [])) {
+    const k = mk.clave || mk.nombre;
+    if (!claves.includes(k)) { claves.push(k); nombres[k] = mk.nombre || k; }
+  }
+  const rutas = eq.rutas.map((r) => {
+    const e = r.fila.extra || {};
+    const marcas = {};
+    for (const mk of (e.marcas_dia || [])) marcas[mk.clave || mk.nombre] = { v: num(mk.vendido) || 0, o: num(mk.objetivo) || 0 };
+    const vol = { v: num(r.fila.venta_dia) || 0, o: num(r.fila.objetivo_dia) || 0 };
+    const otc = { v: num(e.otc_dia) || 0, o: num(e.otc_dia_objetivo) || 0 };
+    const sv = sinVualaDe(r.fila);
+    const vis = num(r.fila.clientes_visitados);
+    // Lo que le falta HOY, en unidades
+    const faltas = [];
+    if (vol.o > vol.v) faltas.push({ g: (vol.o - vol.v) / (vol.o || 1), t: `${miles(vol.o - vol.v)} paq de volumen` });
+    for (const k of claves) {
+      const x = marcas[k];
+      if (x && x.o > x.v) faltas.push({ g: (x.o - x.v) / (x.o || 1) * 0.8, t: `${miles(x.o - x.v)} paq ${nombres[k]}` });
+    }
+    if (sv && !sv.cumple) faltas.push({ g: 0.9, t: `${sv.falta} pz Sin Vuala` });
+    if (otc.o > otc.v) faltas.push({ g: (otc.o - otc.v) / (otc.o || 1) * 0.8, t: `${dinero(otc.o - otc.v)} de OTC` });
+    faltas.sort((a, b) => b.g - a.g);
+    const cumpl = vol.o ? vol.v / vol.o : null;
+    return { ruta: r.ruta, nombre: r.nombre, fila: r.fila, vol, marcas, otc, sv, vis, faltas: faltas.map((f) => f.t), cumpl };
+  }).sort((a, b) => b.vol.v - a.vol.v);
+  const tot = (fn) => rutas.reduce((s, r) => s + (fn(r) || 0), 0);
+  return {
+    fecha: eq.fecha, actualizado: eq.actualizado, unidad: eq.unidad,
+    claves, nombres, rutas,
+    vol: { v: tot((r) => r.vol.v), o: tot((r) => r.vol.o) },
+    marcasTot: claves.map((k) => ({ clave: k, nombre: nombres[k], v: tot((r) => r.marcas[k]?.v), o: tot((r) => r.marcas[k]?.o) })),
+    otc: { v: tot((r) => r.otc.v), o: tot((r) => r.otc.o) },
+    svPiezas: tot((r) => r.sv?.piezas), svCubiertas: rutas.filter((r) => r.sv?.cumple).length,
+    visitas: tot((r) => r.vis),
+  };
+}
+
+
+export function varsGrupoDia(g) {
+  const nom = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+  const bajos = [...g.rutas].filter((r) => r.cumpl !== null).sort((a, b) => a.cumpl - b.cumpl).slice(0, 3);
+  return {
+    fecha: g.fecha ? fechaCorta(g.fecha) : null,
+    hora: horaMX(g.actualizado),
+    vol_vendido: `${miles(g.vol.v)} paq`,
+    vol_objetivo: `${miles(g.vol.o)} paq`,
+    marcas_equipo: g.marcasTot.map((m) => `• ${m.nombre}: ${miles(m.v)} de ${miles(m.o)} paq`).join('\n'),
+    otc_vendido: dinero(g.otc.v),
+    otc_objetivo: dinero(g.otc.o),
+    sv_piezas: String(g.svPiezas || 0),
+    sv_cubiertas: String(g.svCubiertas),
+    total_rutas: String(g.rutas.length),
+    visitas_hoy: String(g.visitas || 0),
+    top_volumen: g.rutas.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – ${miles(r.vol.v)} paq`).join('\n'),
+    retro_dia: bajos.map((r) => `• *${nom(r)}*: ${r.faltas.length ? 'le faltan ' + r.faltas.slice(0, 4).join(', ') : 'ya cumplió todo hoy 💪'}.`).join('\n'),
   };
 }
