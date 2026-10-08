@@ -7,7 +7,7 @@ import { ImageResponse } from '@vercel/og';
 import {
   firmar, claveRuta, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
   configBot, listaContactos, calcularEquipo, primerNombre,
-  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero, sinVualaDe,
+  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero, sinVualaDe, calcularGrupo, dineroCorto,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -220,7 +220,16 @@ function bloqueMarcasEquipo(eq) {
   );
 }
 
-function matrizMarcas(eq, campo = 'marcas', titulo = 'MARCAS POR RUTA') {
+// Color contra el ritmo esperado (indicadores del periodo): en ritmo = verde, hasta 10 pts abajo = ámbar.
+function colorRitmo(p, esperado) {
+  if (p === null || p === undefined) return C.gris;
+  if (esperado === null || esperado === undefined) return colorPct(p);
+  if (p >= 100 || p >= esperado) return C.verde;
+  return p >= esperado - 10 ? C.ambar : C.rojo;
+}
+const fondoDe = (col) => (col === C.verde ? 'rgba(34,197,94,0.14)' : col === C.ambar ? 'rgba(245,158,11,0.14)' : col === C.rojo ? 'rgba(239,68,68,0.14)' : 'transparent');
+
+function matrizMarcas(eq, campo = 'marcas', titulo = 'MARCAS POR RUTA', esperado = null) {
   if (!eq.marcas.length) return null;
   const anchoCol = Math.floor(660 / eq.marcas.length);
   return h('div', {
@@ -240,10 +249,13 @@ function matrizMarcas(eq, campo = 'marcas', titulo = 'MARCAS POR RUTA') {
         const p0 = pctMarcaRuta(r, mk.clave, campo);
         const p = p0 === null ? null : Math.round(p0);
         return h('div', { width: anchoCol, justifyContent: 'center' },
-          h('div', {
-            fontSize: 26, fontWeight: 800, color: colorPct(p), padding: '4px 14px', borderRadius: 10,
-            background: p === null ? 'transparent' : p >= 100 ? 'rgba(34,197,94,0.14)' : p >= 80 ? 'rgba(245,158,11,0.14)' : 'rgba(239,68,68,0.14)',
-          }, p === null ? '—' : `${Math.round(p)}%`),
+          (() => {
+            const col = esperado !== null ? colorRitmo(p, esperado) : colorPct(p);
+            return h('div', {
+              fontSize: 26, fontWeight: 800, color: col, padding: '4px 14px', borderRadius: 10,
+              background: p === null ? 'transparent' : fondoDe(col),
+            }, p === null ? '—' : `${Math.round(p)}%`);
+          })(),
         );
       }),
     )),
@@ -497,6 +509,116 @@ function tarjetaEquipoDia(eq) {
   );
 }
 
+// ------------------------------------------------------------------ REPORTE DEL GRUPO (todos los indicadores)
+function kpi(etq, valor, sub, color) {
+  return h('div', {
+    flex: 1, flexDirection: 'column', padding: '18px 22px', borderRadius: 22,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 20, color: C.gris, letterSpacing: 2 }, etq),
+    h('div', { fontSize: 50, fontWeight: 800, color, marginTop: 2 }, valor),
+    h('div', { fontSize: 20, color: C.gris }, sub),
+  );
+}
+
+const celda = (txt, color, w = 104) => h('div', { width: w, justifyContent: 'center', fontSize: 26, fontWeight: 800, color }, txt);
+const cp = (p) => colorPct(p === null || p === undefined ? null : Math.round(p));
+
+function tablaGrupo(g) {
+  const cols = ['MAX', 'OPEN', 'CHAMP', 'DÍA', 'OTC SEM', 'SIN V.', 'VISIT.'];
+  return h('div', {
+    flexDirection: 'column', marginTop: 26, padding: '22px 20px 14px', borderRadius: 28,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 24, color: C.gris, letterSpacing: 3, marginBottom: 8, paddingLeft: 6 }, 'INDICADORES POR RUTA · RANKING GENERAL'),
+    h('div', { fontSize: 18, color: C.gris, letterSpacing: 1, padding: '8px 0' },
+      h('div', { width: 44, justifyContent: 'center' }, '#'),
+      h('div', { width: 190 }, 'RUTA'),
+      ...cols.map((c) => h('div', { width: 104, justifyContent: 'center' }, c)),
+    ),
+    ...g.rutasGrupo.map((r, i) => {
+      const m = r.m;
+      const colMax = colorEstado(estadoMes({ diferencia: r.pMax !== null && m.esperado !== null ? r.pMax - m.esperado : null }));
+      return h('div', { alignItems: 'center', padding: '14px 0', borderTop: '1px solid rgba(255,255,255,0.08)' },
+        h('div', { width: 44, justifyContent: 'center', fontSize: 26, fontWeight: 800, color: i < 3 ? C.cian : C.gris }, `${i + 1}`),
+        h('div', { width: 190, flexDirection: 'column' },
+          h('div', { fontSize: 26, fontWeight: 800 }, r.ruta),
+          h('div', { fontSize: 19, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
+        ),
+        celda(pct(r.pMax), colMax),
+        celda(pct(r.pOpen), colorRitmo(r.pOpen, m.esperado)),
+        celda(pct(r.pChamp), colorRitmo(r.pChamp, m.esperado)),
+        celda(pct(m.pctDia), cp(m.pctDia)),
+        celda(pct(r.pOtcSem), cp(r.pOtcSem)),
+        celda(r.sv ? `${r.sv.piezas}/${r.sv.minimo}` : '—', !r.sv ? C.gris : r.sv.cumple ? C.verde : C.rojo),
+        celda(m.vis === null ? '—' : String(m.vis), C.texto),
+      );
+    }),
+    h('div', { fontSize: 19, color: C.gris, padding: '10px 6px 0' },
+      `MAX / OPEN / CHAMP en verde = en ritmo (${pct(g.esperado)} esperado a la fecha) · OTC SEM = OTC de la semana`),
+  );
+}
+
+function retroGrupo(g) {
+  const bajos = g.rutasGrupo.filter((r) => r.indice !== null).slice(-3).reverse();
+  if (!bajos.length) return null;
+  return h('div', {
+    flexDirection: 'column', marginTop: 26, padding: '24px 30px', borderRadius: 28,
+    background: 'rgba(239,68,68,0.10)', border: `3px solid ${C.rojo}`,
+  },
+    h('div', { fontSize: 26, color: C.rojo, letterSpacing: 3, fontWeight: 800 }, 'RETRO · LOS QUE VAN MÁS BAJO'),
+    ...bajos.map((r) => h('div', { flexDirection: 'column', marginTop: 18 },
+      h('div', { fontSize: 30, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}  ·  índice ${Math.round(r.indice)}`),
+      h('div', { flexWrap: 'wrap', gap: 10, marginTop: 8 },
+        ...(r.faltas.length ? r.faltas.slice(0, 4) : ['va parejo, falta empujar']).map((f) =>
+          h('div', { fontSize: 22, color: '#fecaca', background: 'rgba(239,68,68,0.18)', padding: '6px 14px', borderRadius: 999 }, f)),
+      ),
+    )),
+  );
+}
+
+export function altoGrupo(g) {
+  const n = g.rutasGrupo.length;
+  const mOpen = g.marcas.length ? 140 + n * 63 : 0;
+  const mChamp = g.marcasChamp.length ? 140 + n * 63 : 0;
+  const mDia = g.marcasDia.length ? 140 + n * 63 : 0;
+  return 360 + 400 + (150 + n * 80) + mOpen + mChamp + mDia + 170 + 3 * 125 + 60;
+}
+
+function tarjetaGrupo(g) {
+  const hora = horaMX(g.actualizado);
+  const colMax = g.esperado !== null && g.pctMax !== null
+    ? colorEstado(g.pctMax - g.esperado >= 3 ? 'arriba' : g.pctMax - g.esperado >= -5 ? 'ritmo' : 'abajo') : C.cian;
+  return h('div', {
+    width: '100%', height: '100%', flexDirection: 'column', padding: 56, fontFamily: 'Inter',
+    color: C.texto, backgroundImage: `linear-gradient(160deg, ${C.fondo1} 0%, ${C.fondo2} 55%, ${C.fondo1} 100%)`,
+  },
+    h('div', { justifyContent: 'space-between', alignItems: 'center' },
+      h('div', { fontSize: 30, fontWeight: 800, color: C.cian, letterSpacing: 6 }, 'SMART-TRACK'),
+      h('div', { fontSize: 30, fontWeight: 800, padding: '10px 26px', borderRadius: 999, border: `3px solid ${C.cian}`, color: C.cian }, 'GRUPO'),
+    ),
+    h('div', { fontSize: 58, fontWeight: 800, marginTop: 24 }, 'Reporte del equipo'),
+    h('div', { fontSize: 28, color: C.gris, marginTop: 4 }, `Corte del ${g.fecha ? fechaCorta(g.fecha) : '—'}${hora ? ` · ${hora}` : ''} · ritmo esperado ${pct(g.esperado)}`),
+
+    h('div', { marginTop: 28, gap: 16 },
+      kpi('MAX', pct(g.pctMax), `esperado ${pct(g.esperado)}`, colMax),
+      kpi('OPEN', pct(g.pctOpen), `esperado ${pct(g.esperado)}`, colorRitmo(g.pctOpen, g.esperado)),
+      kpi('CHAMPIONS', pct(g.pctChamp), `esperado ${pct(g.esperado)}`, colorRitmo(g.pctChamp, g.esperado)),
+    ),
+    h('div', { marginTop: 16, gap: 16 },
+      kpi('DÍA', pct(g.pctDia), `${g.metaCumplida}/${g.rutas.length} con meta`, cp(g.pctDia)),
+      kpi('OTC SEMANA', pct(g.pctOtcSem), g.otcSemO ? `${dineroCorto(g.otcSemV)} / ${dineroCorto(g.otcSemO)}` : '—', cp(g.pctOtcSem)),
+      kpi('SIN VUALA', g.svTotal ? `${g.svCubiertas}/${g.svTotal}` : '—', `rutas cubiertas · ${g.visitasHoy || 0} visitas c/compra`, g.svTotal && g.svCubiertas === g.svTotal ? C.verde : C.rojo),
+    ),
+
+    tablaGrupo(g),
+    matrizMarcas({ marcas: g.marcas, rutas: g.rutasGrupo }, 'marcas', `MARCAS OPEN · % DEL PERIODO (ritmo ${pct(g.esperado)})`, g.esperado),
+    matrizMarcas({ marcas: g.marcasChamp, rutas: g.rutasGrupo }, 'marcas_champions', `CHAMPIONS · % DEL PERIODO (ritmo ${pct(g.esperado)})`, g.esperado),
+    matrizMarcas({ marcas: g.marcasDia, rutas: g.rutasGrupo }, 'marcas_dia', 'MARCAS · % DE HOY'),
+    retroGrupo(g),
+  );
+}
+
 export default async function handler(req) {
   const q = new URL(req.url).searchParams;
   const ruta = q.get('ruta') || '';
@@ -508,6 +630,16 @@ export default async function handler(req) {
   if (q.get('s') !== (await firmar(tipo ? `DIA:${ruta}` : ruta, fecha))) return new Response('firma inválida', { status: 403 });
 
   const filas = await filasDeFecha(fecha);
+
+  if (ruta === 'GRUPO') {
+    if (!filas.length) return new Response('sin datos', { status: 404 });
+    const g = calcularGrupo(filas, await listaContactos(await configBot()));
+    const fg = await cargarFuentes();
+    return new ImageResponse(tarjetaGrupo(g), {
+      width: 1080, height: altoGrupo(g), ...(fg.length ? { fonts: fg } : {}), emoji: 'twemoji',
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  }
 
   if (ruta === 'EQUIPO' && tipo === 'dia') {
     if (!filas.length) return new Response('sin datos', { status: 404 });
