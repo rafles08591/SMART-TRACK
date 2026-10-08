@@ -226,18 +226,19 @@ export const PLANTILLAS_DEFAULT = {
     '{abajo}',
   ].join('\n'),
   grupo: [
-    '📊 *REPORTE DEL EQUIPO* · corte {fecha} {hora}',
+    '📊 *REPORTE DEL EQUIPO* · corte {fecha}',
     '',
-    '🚀 MAX: *{pct_max}* (ritmo esperado {esperado}) · OPEN {pct_open} · CHAMPIONS {pct_champions}',
-    '📦 Día: *{pct_dia_equipo}* · {rutas_meta_dia} de {total_rutas} rutas con meta',
-    '💵 OTC semana: {pct_otc_semana} · 🧃 Sin Vuala cubierto: {sin_vuala_cubiertas} de {total_rutas}',
-    '🛒 Visitas con compra hoy: {visitas_hoy}',
+    '🚀 MAX: *{max_vendido}* de {max_objetivo} (al ritmo deberían ir {max_ritmo})',
+    'Faltan {max_falta} · necesitan {max_por_dia} por día',
+    '🎯 Meta OPEN {open_objetivo} · Meta CHAMPIONS {champ_objetivo}',
+    '💵 OTC semana: {otc_sem_vendido} de {otc_sem_objetivo}',
+    '📦 Ayer: {ayer_vendido} de {ayer_objetivo} · 🧃 Sin Vuala {sin_vuala_cubiertas} de {total_rutas} rutas · 🛒 {visitas_hoy} visitas',
     '',
     '🏆 *Los que van jalando:*',
-    '{top_general}',
+    '{top_paquetes}',
     '',
     '🔻 *Retro para los de abajo:*',
-    '{retro_bajos}',
+    '{retro_unidades}',
   ].join('\n'),
   grupo_dia: [
     '📦 *AVANCE DEL DÍA · EQUIPO* · corte {hora}',
@@ -624,20 +625,32 @@ export function calcularGrupo(filas, contactosLista = []) {
     ].filter((x) => x !== null && Number.isFinite(x));
     const indice = comp.length ? comp.reduce((a, b) => a + b, 0) / comp.length : null;
 
-    // Qué le falta (para la retro), del más grave al menos grave
+    // Unidades (paquetes / pesos / piezas)
+    const maxV = num(t.max?.avance ?? r.fila.venta_mes) || 0;
+    const maxO = num(t.max?.objetivo ?? r.fila.objetivo_mes) || 0;
+    const openO = num(t.open?.objetivo) || 0;
+    const champO = num(t.champions?.objetivo) || 0;
+    const porDia = num(t.max?.por_dia ?? e.necesita_diario) ?? r.m.necesitaDiario;
+    const ritmoPaq = (o) => (esperado ? (o * esperado) / 100 : null);
+    const otcSemV = num(e.otc_semana?.vendido) || 0, otcSemO = num(e.otc_semana?.objetivo) || 0;
+    const volAyer = { v: num(r.fila.venta_dia) || 0, o: num(r.fila.objetivo_dia) || 0 };
+
+    // Qué le falta (para la retro), en unidades y del más grave al menos grave
     const faltas = [];
-    if (r.m.pctDia !== null && r.m.pctDia < 80) faltas.push({ g: 100 - r.m.pctDia, t: `día ${pct(r.m.pctDia)}` });
-    if (sv && !sv.cumple) faltas.push({ g: 90, t: `Sin Vuala ${sv.piezas}/${sv.minimo}` });
-    if (pMax !== null && esperado && pMax < esperado - 5) faltas.push({ g: esperado - pMax, t: `MAX ${pct(pMax)} vs ${pct(esperado)} esperado` });
-    if (pOtcSem !== null && pOtcSem < 80) faltas.push({ g: 100 - pOtcSem, t: `OTC semana ${pct(pOtcSem)}` });
-    if (r.m.efectividad !== null && r.m.efectividad < 70) faltas.push({ g: 100 - r.m.efectividad, t: `efectividad ${pct(r.m.efectividad)}` });
+    const defMax = ritmoPaq(maxO) !== null ? ritmoPaq(maxO) - maxV : 0;
+    if (defMax > 0) faltas.push({ g: defMax / (maxO || 1) * 300, t: `va ${miles(defMax)} paq abajo del ritmo MAX${porDia ? ` · necesita ${miles(porDia)} paq x día` : ''}` });
+    if (volAyer.o > volAyer.v) faltas.push({ g: (volAyer.o - volAyer.v) / (volAyer.o || 1) * 100, t: `ayer le faltaron ${miles(volAyer.o - volAyer.v)} paq` });
+    if (sv && !sv.cumple) faltas.push({ g: 90, t: `Sin Vuala ${sv.piezas} de ${sv.minimo} pz` });
+    if (otcSemO > otcSemV && pOtcSem !== null && pOtcSem < 80) faltas.push({ g: 100 - pOtcSem, t: `${dinero(otcSemO - otcSemV)} de OTC semana` });
     for (const mk of (Array.isArray(e.marcas) ? e.marcas : [])) {
-      const p = pctDe(mk.vendido, mk.objetivo);
-      if (p !== null && esperado && p < esperado - 10) faltas.push({ g: esperado - p, t: `${mk.nombre} ${pct(p)}` });
+      const o = num(mk.objetivo) || 0, v = num(mk.vendido) || 0;
+      const d = ritmoPaq(o) !== null ? ritmoPaq(o) - v : 0;
+      if (o > 0 && d > 0 && d / o > 0.05) faltas.push({ g: d / o * 200, t: `${miles(d)} paq ${mk.nombre} abajo del ritmo` });
     }
     faltas.sort((a, b) => b.g - a.g);
 
-    return { ...r, pMax, pOpen, pChamp, pOtcSem, pOtcDia, sv, indice, faltas: faltas.map((f) => f.t) };
+    return { ...r, pMax, pOpen, pChamp, pOtcSem, pOtcDia, sv, indice, faltas: faltas.map((f) => f.t),
+      maxV, maxO, openO, champO, porDia, otcSemV, otcSemO, volAyer, faltaMax: Math.max(0, maxO - maxV) };
   });
   const general = [...rutas].sort((a, b) => (b.indice ?? -1) - (a.indice ?? -1));
   const suma = (fn) => rutas.reduce((s, r) => s + (fn(r) || 0), 0);
@@ -667,6 +680,8 @@ export function calcularGrupo(filas, contactosLista = []) {
     svTotal: rutas.filter((r) => r.sv).length,
     visitasHoy: suma((r) => r.m.vis),
     marcasChamp: [...champMap.values()].filter((x) => x.objetivo > 0),
+    maxV: tMax.v, maxO: tMax.o, openO: tOpen.o, champO: tChamp.o,
+    porDiaTot: suma((r) => r.porDia),
   };
 }
 
@@ -692,6 +707,20 @@ export function varsGrupo(g) {
       `• *${nom(r)}* (índice ${Math.round(r.indice)}): ${r.faltas.length ? 'le falta ' + r.faltas.slice(0, 3).join(', ') : 'va parejo, falta empujar'}.`
     ).join('\n'),
     ranking_general: conIndice.map((r, i) => `${i + 1}. ${nom(r)} – ${Math.round(r.indice)}`).join('\n'),
+    // En unidades
+    max_vendido: `${miles(g.maxV)} paq`,
+    max_objetivo: `${miles(g.maxO)} paq`,
+    max_falta: `${miles(Math.max(0, g.maxO - g.maxV))} paq`,
+    max_por_dia: g.porDiaTot ? `${miles(g.porDiaTot)} paq` : null,
+    max_ritmo: g.esperado !== null ? `${miles((g.maxO * g.esperado) / 100)} paq` : null,
+    open_objetivo: g.openO ? `${miles(g.openO)} paq` : null,
+    champ_objetivo: g.champO ? `${miles(g.champO)} paq` : null,
+    otc_sem_vendido: dinero(g.otcSemV),
+    otc_sem_objetivo: dinero(g.otcSemO),
+    ayer_vendido: `${miles(g.ventaDia)} paq`,
+    ayer_objetivo: `${miles(g.objDia)} paq`,
+    top_paquetes: conIndice.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – ${miles(r.maxV)} de ${miles(r.maxO)} paq`).join('\n'),
+    retro_unidades: bajos.map((r) => `• *${nom(r)}*: ${r.faltas.length ? r.faltas.slice(0, 3).join(' · ') : 'va parejo, falta empujar'}.`).join('\n'),
   };
 }
 
