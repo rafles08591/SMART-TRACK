@@ -7,7 +7,7 @@ import { ImageResponse } from '@vercel/og';
 import {
   firmar, claveRuta, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
   configBot, listaContactos, calcularEquipo, primerNombre,
-  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero, sinVualaDe, calcularGrupo, dineroCorto,
+  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero, sinVualaDe, calcularGrupo, dineroCorto, calcularGrupoDia,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -619,6 +619,101 @@ function tarjetaGrupo(g) {
   );
 }
 
+// ------------------------------------------------------------------ GRUPO · AVANCE DEL DÍA en unidades (sin %)
+const colCumpl = (v, o) => (!(o > 0) ? C.texto : v >= o ? C.verde : v >= o * 0.8 ? C.ambar : C.rojo);
+
+function celdaUnid(v, o, w, fmt = miles) {
+  const col = colCumpl(v, o);
+  return h('div', { width: w, flexDirection: 'column', alignItems: 'center' },
+    h('div', { fontSize: 27, fontWeight: 800, color: col }, fmt(v)),
+    h('div', { fontSize: 18, color: C.gris }, o > 0 ? `de ${fmt(o)}` : ' '),
+  );
+}
+
+function totalBox(etq, v, o, fmt = miles, sufijo = '') {
+  return h('div', {
+    flex: 1, flexDirection: 'column', padding: '16px 18px', borderRadius: 20,
+    background: C.panel, border: `2px solid ${o > 0 ? colCumpl(v, o) + '88' : C.borde}`,
+  },
+    h('div', { fontSize: 19, color: C.gris, letterSpacing: 2 }, etq),
+    h('div', { fontSize: 40, fontWeight: 800, color: colCumpl(v, o), marginTop: 2 }, `${fmt(v)}${sufijo}`),
+    h('div', { fontSize: 19, color: C.gris }, o > 0 ? `de ${fmt(o)}${sufijo}` : ' '),
+  );
+}
+
+export function altoGrupoDia(g) {
+  return 330 + 2 * 150 + 40 + 120 + g.rutas.length * 92 + 60 + 150 + 3 * 100 + 60;
+}
+
+function tarjetaGrupoDia(g) {
+  const hora = horaMX(g.actualizado);
+  const abrevia = (n) => String(n).replace('BLOSSOM', 'BLOSS').replace('SUMMER', 'SUMM').replace(' MIX', '');
+  const cols = [['VOLUMEN', 112], ...g.claves.map((k) => [abrevia(g.nombres[k]), 98]), ['OTC $', 112], ['S/VUALA', 92], ['VISIT.', 80]];
+  const bajos = [...g.rutas].filter((r) => r.cumpl !== null).sort((a, b) => a.cumpl - b.cumpl).slice(0, 3);
+  const dineroK = (n) => dineroCorto(n);
+  return h('div', {
+    width: '100%', height: '100%', flexDirection: 'column', padding: 52, fontFamily: 'Inter',
+    color: C.texto, backgroundImage: `linear-gradient(160deg, ${C.fondo1} 0%, #10233a 55%, ${C.fondo1} 100%)`,
+  },
+    h('div', { justifyContent: 'space-between', alignItems: 'center' },
+      h('div', { fontSize: 30, fontWeight: 800, color: C.cian, letterSpacing: 6 }, 'SMART-TRACK'),
+      h('div', { fontSize: 30, fontWeight: 800, padding: '10px 26px', borderRadius: 999, border: `3px solid ${C.cian}`, color: C.cian }, 'GRUPO'),
+    ),
+    h('div', { fontSize: 56, fontWeight: 800, marginTop: 22 }, 'Avance del día'),
+    h('div', { fontSize: 28, color: C.gris, marginTop: 4 }, `${g.fecha ? fechaCorta(g.fecha) : ''}${hora ? ` · corte ${hora}` : ''} · paquetes vendidos hoy`),
+
+    h('div', { marginTop: 26, gap: 14 },
+      totalBox('VOLUMEN', g.vol.v, g.vol.o, miles, ' paq'),
+      totalBox('OTC', g.otc.v, g.otc.o, dineroK),
+      totalBox('SIN VUALA', g.svCubiertas, g.rutas.length, String, ' rutas'),
+      totalBox('VISITAS', g.visitas, 0, miles),
+    ),
+    h('div', { marginTop: 14, gap: 14 },
+      ...g.marcasTot.map((m) => totalBox(m.nombre, m.v, m.o, miles)),
+    ),
+
+    h('div', {
+      flexDirection: 'column', marginTop: 24, padding: '18px 14px 10px', borderRadius: 26,
+      background: C.panel, border: `2px solid ${C.borde}`,
+    },
+      h('div', { fontSize: 22, color: C.gris, letterSpacing: 3, marginBottom: 6, paddingLeft: 8 }, 'POR RUTA · VENDIDO HOY / META DEL DÍA'),
+      h('div', { fontSize: 17, color: C.gris, padding: '8px 0' },
+        h('div', { width: 150, paddingLeft: 8 }, 'RUTA'),
+        ...cols.map(([c, w]) => h('div', { width: w, justifyContent: 'center' }, c)),
+      ),
+      ...g.rutas.map((r, i) => h('div', {
+        alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.08)',
+        background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.025)',
+      },
+        h('div', { width: 150, flexDirection: 'column', paddingLeft: 8 },
+          h('div', { fontSize: 26, fontWeight: 800 }, r.ruta),
+          h('div', { fontSize: 18, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
+        ),
+        celdaUnid(r.vol.v, r.vol.o, 112),
+        ...g.claves.map((k) => celdaUnid(r.marcas[k]?.v || 0, r.marcas[k]?.o || 0, 98)),
+        celdaUnid(r.otc.v, r.otc.o, 112, dineroK),
+        r.sv ? celdaUnid(r.sv.piezas, r.sv.minimo, 92, String) : h('div', { width: 92, justifyContent: 'center', color: C.gris }, '—'),
+        h('div', { width: 80, justifyContent: 'center', fontSize: 27, fontWeight: 800 }, r.vis === null ? '—' : String(r.vis)),
+      )),
+      h('div', { fontSize: 18, color: C.gris, padding: '10px 8px 0' }, 'Verde = ya cubrió la meta del día · ámbar = 80% o más · rojo = abajo'),
+    ),
+
+    bajos.length ? h('div', {
+      flexDirection: 'column', marginTop: 24, padding: '22px 28px', borderRadius: 26,
+      background: 'rgba(239,68,68,0.10)', border: `3px solid ${C.rojo}`,
+    },
+      h('div', { fontSize: 24, color: C.rojo, letterSpacing: 3, fontWeight: 800 }, 'RETRO · LO QUE LES FALTA HOY'),
+      ...bajos.map((r) => h('div', { flexDirection: 'column', marginTop: 14 },
+        h('div', { fontSize: 28, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}`),
+        h('div', { flexWrap: 'wrap', gap: 10, marginTop: 6 },
+          ...(r.faltas.length ? r.faltas.slice(0, 5) : ['ya cumplió todo hoy 💪']).map((f) =>
+            h('div', { fontSize: 22, color: '#fecaca', background: 'rgba(239,68,68,0.18)', padding: '6px 14px', borderRadius: 999 }, f)),
+        ),
+      )),
+    ) : null,
+  );
+}
+
 export default async function handler(req) {
   const q = new URL(req.url).searchParams;
   const ruta = q.get('ruta') || '';
@@ -630,6 +725,16 @@ export default async function handler(req) {
   if (q.get('s') !== (await firmar(tipo ? `DIA:${ruta}` : ruta, fecha))) return new Response('firma inválida', { status: 403 });
 
   const filas = await filasDeFecha(fecha);
+
+  if (ruta === 'GRUPO' && tipo === 'dia') {
+    if (!filas.length) return new Response('sin datos', { status: 404 });
+    const g = calcularGrupoDia(filas, await listaContactos(await configBot()));
+    const fg = await cargarFuentes();
+    return new ImageResponse(tarjetaGrupoDia(g), {
+      width: 1080, height: altoGrupoDia(g), ...(fg.length ? { fonts: fg } : {}), emoji: 'twemoji',
+      headers: { 'Cache-Control': 'no-store' },
+    });
+  }
 
   if (ruta === 'GRUPO') {
     if (!filas.length) return new Response('sin datos', { status: 404 });
