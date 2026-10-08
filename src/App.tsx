@@ -1433,6 +1433,12 @@ export default function App() {
         proyectado_mes: v.proyeccion?.max?.proyectado,
         otc_dia: v.hoy?.otc?.vendido,
         otc_dia_objetivo: v.hoy?.otc?.objetivo,
+        // OTC "Sin Vuala" del día (mínimo de piezas por ruta)
+        otc_sin_vuala: {
+          piezas: v.hoy?.otcSinVuala?.piezas ?? 0,
+          minimo: OTC_SIN_VUALA_MINIMO,
+          cumple: !!v.hoy?.otcSinVuala?.cumple,
+        },
         // Marcas OPEN (mismos datos que el bloque "MARCAS · OPEN (PAQUETES)")
         marcas: MARCAS_OPEN.map((m) => {
           const mo = v.marcasOpen?.[m.key] || {};
