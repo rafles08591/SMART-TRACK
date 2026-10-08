@@ -206,6 +206,8 @@ export const PLANTILLAS_DEFAULT = {
     '{dia_vendido} de {dia_objetivo} ({pct_dia})',
     '',
     'Te faltan *{falta_dia}* para tu meta del día. ¡Todavía da tiempo! 💪',
+    '',
+    '{retro_sin_vuala}',
   ].join('\n'),
   equipo: [
     '📊 *Resumen del equipo* · corte del {fecha}',
@@ -225,6 +227,9 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '🎯 Efectividad: {efectividad} · {visitas} visitas efectivas',
     '🏁 Lugar {lugar_dia} de {total_rutas} en el día {medalla_dia}',
+    '{sin_vuala}',
+    '',
+    '{retro_sin_vuala}',
     '',
     '{frase_dia}',
   ].join('\n'),
@@ -239,6 +244,8 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '⚠️ Atención:',
     '{abajo_dia}',
+    '',
+    '🧃 OTC Sin Vuala pendiente: {sin_vuala_pendientes}',
   ].join('\n'),
 };
 
@@ -482,6 +489,11 @@ export function varsDia(fila, m, companeras, contacto = null) {
     marcas_dia: marcas,
     otc_dia: otcV === null ? null : dinero(otcV),
     otc_objetivo: otcO ? dinero(otcO) : null,
+    sin_vuala: (() => {
+      const sv = sinVualaDe(fila);
+      return sv ? `🧃 OTC Sin Vuala: ${sv.piezas} de ${sv.minimo} piezas ${sv.cumple ? '✅' : '❌'}` : null;
+    })(),
+    retro_sin_vuala: retroSinVuala(sinVualaDe(fila)),
   };
 }
 
@@ -524,5 +536,30 @@ export function varsEquipoDia(eq) {
     top_dia: conPct.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
     abajo_dia: conPct.slice(-3).reverse().map((r) => `🔻 ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
     ranking_dia: conPct.map((r, i) => `${i + 1}. ${nom(r)} – ${pct(r.m.pctDia)}`).join('\n'),
+    sin_vuala_pendientes: (() => {
+      const conSv = eq.rutasDia.map((r) => ({ r, sv: sinVualaDe(r.fila) })).filter((x) => x.sv);
+      if (!conSv.length) return null;
+      const pend = conSv.filter((x) => !x.sv.cumple).map((x) => `${x.r.ruta} (${x.sv.piezas}/${x.sv.minimo})`);
+      return pend.length ? pend.join(', ') : 'ninguna, todas cubiertas ✅';
+    })(),
   };
+}
+
+
+// ---------------------------------------------------------------- OTC Sin Vuala
+export function sinVualaDe(fila) {
+  const x = fila?.extra?.otc_sin_vuala;
+  if (!x) return null;
+  const piezas = num(x.piezas) || 0;
+  const minimo = num(x.minimo) || 0;
+  if (!minimo) return null;
+  return { piezas, minimo, falta: Math.max(0, minimo - piezas), cumple: x.cumple === true || piezas >= minimo };
+}
+
+export function retroSinVuala(sv) {
+  if (!sv || sv.cumple) return '';
+  const pz = (n) => `${n} pieza${n === 1 ? '' : 's'}`;
+  return sv.piezas === 0
+    ? `⚠️ *OTC Sin Vuala NO cubierto:* llevas 0 de ${sv.minimo}. Coloca ${pz(sv.falta)} de OTC Sin Vuala hoy para cubrir el indicador.`
+    : `⚠️ *OTC Sin Vuala NO cubierto:* llevas ${pz(sv.piezas)} de ${sv.minimo}. Te ${sv.falta === 1 ? 'falta' : 'faltan'} ${pz(sv.falta)} para cubrirlo hoy.`;
 }
