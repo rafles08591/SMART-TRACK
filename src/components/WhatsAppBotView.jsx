@@ -7,6 +7,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { NOMBRES } from "../constants";
+import { supabase } from "../supabaseClient";
 
 // Deben coincidir con PLANTILLAS_DEFAULT de api/_wa-lib.js
 const PLANTILLAS_DEFAULT = {
@@ -55,6 +56,20 @@ const PLANTILLAS_DEFAULT = {
     "",
     "{frase_dia}",
   ].join("\n"),
+  grupo: [
+    "📊 *REPORTE DEL EQUIPO* · corte {fecha} {hora}",
+    "",
+    "🚀 MAX: *{pct_max}* (ritmo esperado {esperado}) · OPEN {pct_open} · CHAMPIONS {pct_champions}",
+    "📦 Día: *{pct_dia_equipo}* · {rutas_meta_dia} de {total_rutas} rutas con meta",
+    "💵 OTC semana: {pct_otc_semana} · 🧃 Sin Vuala cubierto: {sin_vuala_cubiertas} de {total_rutas}",
+    "🛒 Visitas con compra hoy: {visitas_hoy}",
+    "",
+    "🏆 *Los que van jalando:*",
+    "{top_general}",
+    "",
+    "🔻 *Retro para los de abajo:*",
+    "{retro_bajos}",
+  ].join("\n"),
   equipo_dia: [
     "📦 *Avance del día · Equipo* · corte {hora}",
     "",
@@ -96,6 +111,13 @@ VARIABLES.dia = [
   ["marcas_dia", "Marcas de hoy"], ["frase_dia", "Frase automática"],
   ["sin_vuala", "OTC Sin Vuala (piezas)"], ["retro_sin_vuala", "Retro si NO cubre Sin Vuala"],
 ];
+VARIABLES.grupo = [
+  ["fecha", "Fecha"], ["hora", "Hora del corte"], ["esperado", "Ritmo esperado"], ["pct_max", "% MAX"],
+  ["pct_open", "% OPEN"], ["pct_champions", "% CHAMPIONS"], ["pct_dia_equipo", "% día equipo"],
+  ["rutas_meta_dia", "Rutas con meta del día"], ["total_rutas", "Total rutas"], ["pct_otc_semana", "% OTC semana"],
+  ["sin_vuala_cubiertas", "Rutas con Sin Vuala"], ["visitas_hoy", "Visitas con compra hoy"],
+  ["top_general", "Top 3 general"], ["retro_bajos", "Retro de los 3 más bajos"], ["ranking_general", "Ranking general"],
+];
 VARIABLES.equipo_dia = [
   ["fecha", "Fecha"], ["hora", "Hora del corte"], ["pct_dia_equipo", "% día equipo"], ["dia_vendido_equipo", "Vendido equipo"],
   ["dia_objetivo_equipo", "Meta equipo"], ["rutas_meta_dia", "Rutas con meta"], ["total_rutas", "Total rutas"],
@@ -124,6 +146,10 @@ const EJEMPLO = {
   sin_vuala: "🧃 OTC Sin Vuala: 1 de 2 piezas ❌",
   retro_sin_vuala: "⚠️ *OTC Sin Vuala NO cubierto:* llevas 1 pieza de 2. Te falta 1 pieza para cubrirlo hoy.",
   sin_vuala_pendientes: "J201 (1/2), J205 (0/2)",
+  pct_max: "57%", pct_open: "63%", pct_champions: "62%", pct_otc_semana: "86%", sin_vuala_cubiertas: "2", visitas_hoy: "147",
+  top_general: "🥇 J206 Selene – índice 95\n🥈 J202 Riqui – índice 89\n🥉 J203 Ana – índice 74",
+  retro_bajos: "• *J205 Alejandro* (índice 65): le falta Sin Vuala 1/2, efectividad 20%, día 40%.\n• *J201 Francisco* (índice 65): le falta Sin Vuala 0/2, OTC semana 56%, día 65%.",
+  ranking_general: "1. J206 Selene – 95\n2. J202 Riqui – 89\n…",
 };
 
 function llenar(tpl, vars) {
@@ -177,6 +203,24 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const [tonoBot, setTonoBot] = useState(guardado.tonoBot || "picante");
   const [tipoPlantilla, setTipoPlantilla] = useState("matutino");
   const [estado, setEstado] = useState("");
+  const [gruposWa, setGruposWa] = useState(null);
+  const [cargandoGrupos, setCargandoGrupos] = useState(false);
+
+  async function cargarGrupos() {
+    setCargandoGrupos(true);
+    try {
+      const { data: ses } = await supabase.auth.getSession();
+      const r = await fetch("/api/wa-grupos", { headers: { Authorization: `Bearer ${ses?.session?.access_token || ""}` } });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      setGruposWa(j.grupos || []);
+      if (!(j.grupos || []).length) setEstado("⚠️ El número del bot no está en ningún grupo todavía.");
+    } catch (err) {
+      setEstado("❌ No se pudieron cargar los grupos: " + (err?.message || err));
+    } finally {
+      setCargandoGrupos(false);
+    }
+  }
   const [sucio, setSucio] = useState(false);
 
   // Si alguien más guardó mientras esta pantalla estaba abierta y aquí no hay cambios pendientes, refrescar.
@@ -199,7 +243,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const agregar = marcar((tipo) =>
     setContactos((cs) => [
       ...cs,
-      { id: nuevoId(), tipo, ruta: tipo === "vendedor" ? "" : "", nombre: "", telefono: "", activo: true, matutino: true, dia: true, alerta: tipo === "vendedor" },
+      { id: nuevoId(), tipo, ruta: "", nombre: "", telefono: "", grupo: "", activo: true, matutino: true, dia: true, alerta: tipo === "vendedor" },
     ])
   );
   const quitar = marcar((id) => {
@@ -210,6 +254,11 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
     const e = {};
     const vistos = {};
     contactos.forEach((c) => {
+      if (c.tipo === "grupo") {
+        if (!/@g\.us$/.test(String(c.grupo || "").trim())) e[c.id] = "Elige el grupo (o pega su ID que termina en @g.us)";
+        else if (!String(c.nombre || "").trim()) e[c.id] = "Ponle un nombre al grupo";
+        return;
+      }
       const t = solo10(c.telefono);
       if (t.length !== 10) e[c.id] = "El teléfono debe tener 10 dígitos";
       else if (vistos[t]) e[c.id] = "Teléfono repetido";
@@ -227,8 +276,9 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       return;
     }
     const limpios = contactos.map((c) => ({
-      id: c.id, tipo: c.tipo === "equipo" ? "equipo" : "vendedor", ruta: c.tipo === "equipo" ? "" : c.ruta,
-      nombre: String(c.nombre).trim(), telefono: solo10(c.telefono),
+      id: c.id, tipo: ["equipo", "grupo"].includes(c.tipo) ? c.tipo : "vendedor", ruta: c.tipo === "vendedor" ? c.ruta : "",
+      nombre: String(c.nombre).trim(), telefono: c.tipo === "grupo" ? "" : solo10(c.telefono),
+      grupo: c.tipo === "grupo" ? String(c.grupo || "").trim() : "",
       activo: c.activo !== false, matutino: c.matutino !== false, dia: c.dia !== false, alerta: c.tipo === "vendedor" && c.alerta !== false,
     }));
     // Solo se guardan las plantillas que cambiaron (las demás siguen el texto original).
@@ -259,7 +309,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   }
 
   const ordenados = [...contactos].sort((a, b) =>
-    a.tipo === b.tipo ? claveRuta(a.ruta).localeCompare(claveRuta(b.ruta)) : a.tipo === "equipo" ? -1 : 1
+    a.tipo === b.tipo ? claveRuta(a.ruta).localeCompare(claveRuta(b.ruta)) : ({ grupo: 0, equipo: 1, vendedor: 2 }[a.tipo] - { grupo: 0, equipo: 1, vendedor: 2 }[b.tipo])
   );
   const rutasUsadas = new Set(contactos.filter((c) => c.tipo === "vendedor").map((c) => claveRuta(c.ruta)));
   const sinTelefono = rutas.filter((r) => !rutasUsadas.has(claveRuta(r)));
@@ -303,10 +353,10 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
           {ordenados.length === 0 && <div style={S.vacio}>No hay contactos. Agrega el primero 👇</div>}
 
           {ordenados.map((c) => (
-            <div key={c.id} style={{ ...S.card, borderColor: errores[c.id] ? "#ef4444" : c.tipo === "equipo" ? "#a78bfa55" : "#ffffff1a", opacity: c.activo === false ? 0.55 : 1 }}>
+            <div key={c.id} style={{ ...S.card, borderColor: errores[c.id] ? "#ef4444" : c.tipo === "grupo" ? "#25D36666" : c.tipo === "equipo" ? "#a78bfa55" : "#ffffff1a", opacity: c.activo === false ? 0.55 : 1 }}>
               <div style={S.cardTop}>
-                <span style={c.tipo === "equipo" ? S.badgeEq : S.badge}>
-                  {c.tipo === "equipo" ? "📊 EQUIPO" : claveRuta(c.ruta) || "VENDEDOR"}
+                <span style={c.tipo === "grupo" ? S.badgeGr : c.tipo === "equipo" ? S.badgeEq : S.badge}>
+                  {c.tipo === "grupo" ? "👥 GRUPO" : c.tipo === "equipo" ? "📊 EQUIPO" : claveRuta(c.ruta) || "VENDEDOR"}
                 </span>
                 {puedeEditar && <button style={S.btnQuitar} onClick={() => quitar(c.id)}>Quitar</button>}
               </div>
@@ -325,22 +375,48 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
                     </select>
                   </label>
                 )}
+                {c.tipo === "grupo" && (
+                  <label style={S.campo}>
+                    <span style={S.lbl}>Grupo de WhatsApp</span>
+                    {gruposWa ? (
+                      <select style={S.input} value={c.grupo || ""} disabled={deshabilitado} onChange={(e) => {
+                        const g = gruposWa.find((x) => x.id === e.target.value);
+                        editarContacto(c.id, "grupo", e.target.value);
+                        if (g && !String(c.nombre || "").trim()) editarContacto(c.id, "nombre", g.nombre);
+                      }}>
+                        <option value="">Elegir grupo…</option>
+                        {gruposWa.map((g) => <option key={g.id} value={g.id}>{g.nombre}{g.miembros ? ` (${g.miembros})` : ""}</option>)}
+                        {c.grupo && !gruposWa.some((g) => g.id === c.grupo) && <option value={c.grupo}>{c.grupo}</option>}
+                      </select>
+                    ) : (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input style={{ ...S.input, flex: 1 }} value={c.grupo || ""} disabled={deshabilitado} placeholder="120363…@g.us"
+                          onChange={(e) => editarContacto(c.id, "grupo", e.target.value.trim())} />
+                        {puedeEditar && <button type="button" style={S.btnSec} onClick={cargarGrupos} disabled={cargandoGrupos}>
+                          {cargandoGrupos ? "Cargando…" : "Buscar grupos"}
+                        </button>}
+                      </div>
+                    )}
+                  </label>
+                )}
                 <label style={S.campo}>
-                  <span style={S.lbl}>{c.tipo === "equipo" ? "Nombre (Supervisor / Gerente)" : "Nombre del vendedor"}</span>
-                  <input style={S.input} value={c.nombre} disabled={deshabilitado} placeholder="Nombre Apellido"
+                  <span style={S.lbl}>{c.tipo === "grupo" ? "Nombre del grupo" : c.tipo === "equipo" ? "Nombre (Supervisor / Gerente)" : "Nombre del vendedor"}</span>
+                  <input style={S.input} value={c.nombre} disabled={deshabilitado} placeholder={c.tipo === "grupo" ? "Ventas JMD" : "Nombre Apellido"}
                     onChange={(e) => editarContacto(c.id, "nombre", e.target.value)} />
                 </label>
-                <label style={S.campo}>
-                  <span style={S.lbl}>WhatsApp (10 dígitos)</span>
-                  <input style={S.input} value={c.telefono} disabled={deshabilitado} inputMode="numeric" placeholder="3221234567"
-                    onChange={(e) => editarContacto(c.id, "telefono", e.target.value.replace(/[^\d\s-]/g, ""))} />
-                </label>
+                {c.tipo !== "grupo" && (
+                  <label style={S.campo}>
+                    <span style={S.lbl}>WhatsApp (10 dígitos)</span>
+                    <input style={S.input} value={c.telefono} disabled={deshabilitado} inputMode="numeric" placeholder="3221234567"
+                      onChange={(e) => editarContacto(c.id, "telefono", e.target.value.replace(/[^\d\s-]/g, ""))} />
+                  </label>
+                )}
               </div>
 
               <div style={S.toggles}>
                 <Toggle on={c.activo !== false} disabled={deshabilitado} label="Activo" onChange={(v) => editarContacto(c.id, "activo", v)} />
-                <Toggle on={c.matutino !== false} disabled={deshabilitado} label={c.tipo === "equipo" ? "Tarjeta del equipo 8 am" : "Resumen 8 am"} onChange={(v) => editarContacto(c.id, "matutino", v)} />
-                <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
+                <Toggle on={c.matutino !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Reporte completo 8 am" : c.tipo === "equipo" ? "Tarjeta del equipo 8 am" : "Resumen 8 am"} onChange={(v) => editarContacto(c.id, "matutino", v)} />
+                <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Reporte al cargar avance" : c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
                 {c.tipo === "vendedor" && (
                   <Toggle on={c.alerta !== false} disabled={deshabilitado} label="Alerta de la tarde" onChange={(v) => editarContacto(c.id, "alerta", v)} />
                 )}
@@ -353,6 +429,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
             <div style={S.botones}>
               <button style={S.btnSec} onClick={() => agregar("vendedor")}>+ Vendedor</button>
               <button style={S.btnSec} onClick={() => agregar("equipo")}>+ Supervisor / Gerente (tarjeta del equipo)</button>
+              <button style={{ ...S.btnSec, borderColor: "#25D366", color: "#25D366" }} onClick={() => agregar("grupo")}>+ Grupo de WhatsApp (reporte completo)</button>
             </div>
           )}
           <div style={S.nota}>
@@ -365,7 +442,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       {seccion === "mensajes" && (
         <div>
           <div style={S.tabs}>
-            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
+            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["grupo", "👥 Grupo"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
               <button key={k} onClick={() => setTipoPlantilla(k)} style={tipoPlantilla === k ? S.tabOn : S.tab}>{l}</button>
             ))}
           </div>
@@ -402,7 +479,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
               <VistaWhatsApp
                 texto={
                   llenar(plantillas[tipoPlantilla], EJEMPLO) +
-                  ((tipoPlantilla === "matutino" || tipoPlantilla === "equipo") && aviso.trim() ? `\n\n📣 ${aviso.trim()}` : "")
+                  ((tipoPlantilla === "matutino" || tipoPlantilla === "equipo" || tipoPlantilla === "grupo") && aviso.trim() ? `\n\n📣 ${aviso.trim()}` : "")
                 }
               />
               {tipoPlantilla !== "alerta" && <div style={S.nota}>+ se envía junto con la tarjeta en imagen.</div>}
@@ -467,6 +544,7 @@ const S = {
   card: { padding: 14, borderRadius: 14, border: "1px solid #ffffff1a", background: "#ffffff08", marginBottom: 12, display: "flex", flexDirection: "column", gap: 10 },
   cardTop: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   badge: { padding: "3px 10px", borderRadius: 999, border: "1px solid #22d3ee", color: "#22d3ee", fontSize: 12, fontWeight: 800 },
+  badgeGr: { padding: "3px 10px", borderRadius: 999, border: "1px solid #25D366", color: "#25D366", fontSize: 12, fontWeight: 800 },
   badgeEq: { padding: "3px 10px", borderRadius: 999, border: "1px solid #a78bfa", color: "#a78bfa", fontSize: 12, fontWeight: 800 },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 },
   campo: { display: "flex", flexDirection: "column", gap: 4 },
