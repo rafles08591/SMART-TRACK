@@ -28,6 +28,8 @@ const PLANTILLAS_DEFAULT = {
     "{dia_vendido} de {dia_objetivo} ({pct_dia})",
     "",
     "Te faltan *{falta_dia}* para tu meta del día. ¡Todavía da tiempo! 💪",
+    "",
+    "{retro_sin_vuala}",
   ].join("\n"),
   equipo: [
     "📊 *Resumen del equipo* · corte del {fecha}",
@@ -47,6 +49,9 @@ const PLANTILLAS_DEFAULT = {
     "",
     "🎯 Efectividad: {efectividad} · {visitas} visitas efectivas",
     "🏁 Lugar {lugar_dia} de {total_rutas} en el día {medalla_dia}",
+    "{sin_vuala}",
+    "",
+    "{retro_sin_vuala}",
     "",
     "{frase_dia}",
   ].join("\n"),
@@ -61,6 +66,8 @@ const PLANTILLAS_DEFAULT = {
     "",
     "⚠️ Atención:",
     "{abajo_dia}",
+    "",
+    "🧃 OTC Sin Vuala pendiente: {sin_vuala_pendientes}",
   ].join("\n"),
 };
 
@@ -80,18 +87,20 @@ const VARIABLES = {
     ["ranking", "Ranking completo"], ["nombre", "Nombre de quien recibe"],
   ],
 };
-VARIABLES.alerta = VARIABLES.matutino;
+VARIABLES.alerta = [...VARIABLES.matutino, ["retro_sin_vuala", "Retro si NO cubre Sin Vuala"]];
 VARIABLES.dia = [
   ["nombre", "Primer nombre"], ["ruta", "Ruta"], ["fecha", "Fecha"], ["hora", "Hora del corte"],
   ["dia_vendido", "Vendido hoy"], ["dia_objetivo", "Meta de hoy"], ["pct_dia", "% del día"], ["falta_dia", "Falta hoy"],
   ["efectividad", "Efectividad"], ["visitas", "Visitas efectivas"], ["lugar_dia", "Lugar del día"],
   ["total_rutas", "Total rutas"], ["medalla_dia", "🥇🥈🥉"], ["otc_dia", "OTC de hoy"], ["otc_objetivo", "Meta OTC"],
   ["marcas_dia", "Marcas de hoy"], ["frase_dia", "Frase automática"],
+  ["sin_vuala", "OTC Sin Vuala (piezas)"], ["retro_sin_vuala", "Retro si NO cubre Sin Vuala"],
 ];
 VARIABLES.equipo_dia = [
   ["fecha", "Fecha"], ["hora", "Hora del corte"], ["pct_dia_equipo", "% día equipo"], ["dia_vendido_equipo", "Vendido equipo"],
   ["dia_objetivo_equipo", "Meta equipo"], ["rutas_meta_dia", "Rutas con meta"], ["total_rutas", "Total rutas"],
   ["top_dia", "Top 3 del día"], ["abajo_dia", "3 más abajo"], ["ranking_dia", "Ranking del día"], ["nombre", "Nombre de quien recibe"],
+  ["sin_vuala_pendientes", "Rutas sin cubrir Sin Vuala"],
 ];
 
 const EJEMPLO = {
@@ -112,6 +121,9 @@ const EJEMPLO = {
   top_dia: "🥇 J202 Riqui – 110%\n🥈 J206 Selene – 91%\n🥉 J207 Alfredo – 72%",
   abajo_dia: "🔻 J203 Ana – 35%\n🔻 J205 Alejandro – 40%\n🔻 J204 Noema – 61%",
   ranking_dia: "1. J202 Riqui – 110%\n2. J206 Selene – 91%\n…",
+  sin_vuala: "🧃 OTC Sin Vuala: 1 de 2 piezas ❌",
+  retro_sin_vuala: "⚠️ *OTC Sin Vuala NO cubierto:* llevas 1 pieza de 2. Te falta 1 pieza para cubrirlo hoy.",
+  sin_vuala_pendientes: "J201 (1/2), J205 (0/2)",
 };
 
 function llenar(tpl, vars) {
