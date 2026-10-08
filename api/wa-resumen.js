@@ -14,7 +14,7 @@ import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
   configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
-  varsDia, calcularEquipoDia, varsEquipoDia,
+  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -190,12 +190,16 @@ async function modoAlerta() {
     const fila = porRuta[claveRuta(c.ruta)];
     if (!fila) continue;
     const m = calcular(fila, filasHoy);
-    if (m.pctDia === null || m.pctDia >= umbral) continue;
-    mensajes.push({
-      ruta: c.ruta,
-      numero: numeroEnvio(c.telefono),
-      texto: llenarPlantilla(plantilla(cfg, 'alerta'), varsVendedor(fila, m, c)),
-    });
+    const sv = sinVualaDe(fila);
+    const vaAbajo = m.pctDia !== null && m.pctDia < umbral;
+    const faltaSinVuala = sv && !sv.cumple;
+    if (!vaAbajo && !faltaSinVuala) continue;
+    const vars = varsDia(fila, m, filasHoy, c);
+    // Si solo le falta el Sin Vuala (la venta va bien), mensaje corto de retro.
+    const texto = vaAbajo
+      ? llenarPlantilla(plantilla(cfg, 'alerta'), vars)
+      : `⏰ *${vars.nombre}*, tu venta va bien (${vars.pct_dia || '—'}) 💪\n\n${vars.retro_sin_vuala}`;
+    mensajes.push({ ruta: c.ruta, numero: numeroEnvio(c.telefono), texto });
   }
   return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
 }
