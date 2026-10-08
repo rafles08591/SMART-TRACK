@@ -70,6 +70,21 @@ const PLANTILLAS_DEFAULT = {
     "🔻 *Retro para los de abajo:*",
     "{retro_bajos}",
   ].join("\n"),
+  grupo_dia: [
+    "📦 *AVANCE DEL DÍA · EQUIPO* · corte {hora}",
+    "",
+    "📦 Volumen: *{vol_vendido}* de {vol_objetivo}",
+    "{marcas_equipo}",
+    "💵 OTC: {otc_vendido} de {otc_objetivo}",
+    "🧃 Sin Vuala: {sv_piezas} piezas · {sv_cubiertas} de {total_rutas} rutas cubiertas",
+    "🛒 Visitas efectivas: {visitas_hoy}",
+    "",
+    "🏆 *Más volumen hoy:*",
+    "{top_volumen}",
+    "",
+    "🔻 *Retro, lo que les falta hoy:*",
+    "{retro_dia}",
+  ].join("\n"),
   equipo_dia: [
     "📦 *Avance del día · Equipo* · corte {hora}",
     "",
@@ -118,6 +133,12 @@ VARIABLES.grupo = [
   ["sin_vuala_cubiertas", "Rutas con Sin Vuala"], ["visitas_hoy", "Visitas con compra hoy"],
   ["top_general", "Top 3 general"], ["retro_bajos", "Retro de los 3 más bajos"], ["ranking_general", "Ranking general"],
 ];
+VARIABLES.grupo_dia = [
+  ["fecha", "Fecha"], ["hora", "Hora del corte"], ["vol_vendido", "Volumen vendido"], ["vol_objetivo", "Meta de volumen"],
+  ["marcas_equipo", "Marcas del día (lista)"], ["otc_vendido", "OTC vendido"], ["otc_objetivo", "Meta OTC"],
+  ["sv_piezas", "Piezas Sin Vuala"], ["sv_cubiertas", "Rutas con Sin Vuala"], ["total_rutas", "Total rutas"],
+  ["visitas_hoy", "Visitas efectivas"], ["top_volumen", "Top 3 volumen"], ["retro_dia", "Retro de los 3 más bajos"],
+];
 VARIABLES.equipo_dia = [
   ["fecha", "Fecha"], ["hora", "Hora del corte"], ["pct_dia_equipo", "% día equipo"], ["dia_vendido_equipo", "Vendido equipo"],
   ["dia_objetivo_equipo", "Meta equipo"], ["rutas_meta_dia", "Rutas con meta"], ["total_rutas", "Total rutas"],
@@ -146,6 +167,10 @@ const EJEMPLO = {
   sin_vuala: "🧃 OTC Sin Vuala: 1 de 2 piezas ❌",
   retro_sin_vuala: "⚠️ *OTC Sin Vuala NO cubierto:* llevas 1 pieza de 2. Te falta 1 pieza para cubrirlo hoy.",
   sin_vuala_pendientes: "J201 (1/2), J205 (0/2)",
+  vol_vendido: "500 paq", vol_objetivo: "742 paq", otc_vendido: "$8,350", otc_objetivo: "$11,500", sv_piezas: "6", sv_cubiertas: "2",
+  marcas_equipo: "• ICE MIX: 273 de 280 paq\n• BLOSSOM MIX: 77 de 84 paq\n• SUMMER MIX: 56 de 70 paq\n• FARONET: 315 de 560 paq",
+  top_volumen: "🥇 J202 Riqui – 110 paq\n🥈 J206 Selene – 109 paq\n🥉 J207 Alfredo – 72 paq",
+  retro_dia: "• *J203 Ana*: le faltan 83 paq de volumen, $700 de OTC, 30 paq FARONET.\n• *J205 Alejandro*: le faltan 1 pz Sin Vuala, $1,200 de OTC, 54 paq de volumen.",
   pct_max: "57%", pct_open: "63%", pct_champions: "62%", pct_otc_semana: "86%", sin_vuala_cubiertas: "2", visitas_hoy: "147",
   top_general: "🥇 J206 Selene – índice 95\n🥈 J202 Riqui – índice 89\n🥉 J203 Ana – índice 74",
   retro_bajos: "• *J205 Alejandro* (índice 65): le falta Sin Vuala 1/2, efectividad 20%, día 40%.\n• *J201 Francisco* (índice 65): le falta Sin Vuala 0/2, OTC semana 56%, día 65%.",
@@ -416,7 +441,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
               <div style={S.toggles}>
                 <Toggle on={c.activo !== false} disabled={deshabilitado} label="Activo" onChange={(v) => editarContacto(c.id, "activo", v)} />
                 <Toggle on={c.matutino !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Reporte completo 8 am" : c.tipo === "equipo" ? "Tarjeta del equipo 8 am" : "Resumen 8 am"} onChange={(v) => editarContacto(c.id, "matutino", v)} />
-                <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Reporte al cargar avance" : c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
+                <Toggle on={c.dia !== false} disabled={deshabilitado} label={c.tipo === "grupo" ? "Avance del día (paquetes) al cargar" : c.tipo === "equipo" ? "Avance del día del equipo" : "Avance del día"} onChange={(v) => editarContacto(c.id, "dia", v)} />
                 {c.tipo === "vendedor" && (
                   <Toggle on={c.alerta !== false} disabled={deshabilitado} label="Alerta de la tarde" onChange={(v) => editarContacto(c.id, "alerta", v)} />
                 )}
@@ -442,7 +467,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       {seccion === "mensajes" && (
         <div>
           <div style={S.tabs}>
-            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["grupo", "👥 Grupo"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
+            {[["matutino", "☀️ Resumen 8 am"], ["equipo", "📊 Equipo 8 am"], ["dia", "📦 Avance del día"], ["equipo_dia", "📦 Equipo día"], ["grupo", "👥 Grupo 8 am"], ["grupo_dia", "👥 Grupo día"], ["alerta", "⏰ Alerta tarde"]].map(([k, l]) => (
               <button key={k} onClick={() => setTipoPlantilla(k)} style={tipoPlantilla === k ? S.tabOn : S.tab}>{l}</button>
             ))}
           </div>
