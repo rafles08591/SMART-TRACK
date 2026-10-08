@@ -163,11 +163,15 @@ export async function listaContactos(cfg) {
   return lista
     .map((c) => ({
       id: c.id, ruta: c.ruta || '', nombre: c.nombre || '', telefono: tel10(c.telefono),
-      tipo: c.tipo === 'equipo' ? 'equipo' : 'vendedor',
+      grupo: String(c.grupo || '').trim(),
+      tipo: c.tipo === 'equipo' ? 'equipo' : c.tipo === 'grupo' ? 'grupo' : 'vendedor',
       activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.alerta !== false, dia: c.dia !== false,
     }))
-    .filter((c) => c.telefono.length === 10);
+    .filter((c) => (c.tipo === 'grupo' ? /@g\.us$/.test(c.grupo) : c.telefono.length === 10));
 }
+
+// A dónde se manda: grupos por su ID (…@g.us); personas con 52 + 10 dígitos.
+export const destino = (c) => (c.tipo === 'grupo' ? c.grupo : numeroEnvio(c.telefono));
 
 export async function contactos({ campo = null, cfg = null } = {}) {
   const lista = await listaContactos(cfg || (await configBot()));
@@ -183,7 +187,7 @@ export async function contactoPorTelefono(numero, cfg = null) {
   const t = tel10(numero);
   if (t.length !== 10) return null;
   const lista = await contactos({ cfg });
-  return lista.find((c) => c.telefono === t) || null;
+  return lista.find((c) => c.tipo !== 'grupo' && c.telefono === t) || null;
 }
 
 // ---------------------------------------------------------------- Plantillas
@@ -220,6 +224,20 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '⚠️ Atención:',
     '{abajo}',
+  ].join('\n'),
+  grupo: [
+    '📊 *REPORTE DEL EQUIPO* · corte {fecha} {hora}',
+    '',
+    '🚀 MAX: *{pct_max}* (ritmo esperado {esperado}) · OPEN {pct_open} · CHAMPIONS {pct_champions}',
+    '📦 Día: *{pct_dia_equipo}* · {rutas_meta_dia} de {total_rutas} rutas con meta',
+    '💵 OTC semana: {pct_otc_semana} · 🧃 Sin Vuala cubierto: {sin_vuala_cubiertas} de {total_rutas}',
+    '🛒 Visitas con compra hoy: {visitas_hoy}',
+    '',
+    '🏆 *Los que van jalando:*',
+    '{top_general}',
+    '',
+    '🔻 *Retro para los de abajo:*',
+    '{retro_bajos}',
   ].join('\n'),
   dia: [
     '📦 *Avance del día* · corte {hora}',
@@ -562,4 +580,102 @@ export function retroSinVuala(sv) {
   return sv.piezas === 0
     ? `⚠️ *OTC Sin Vuala NO cubierto:* llevas 0 de ${sv.minimo}. Coloca ${pz(sv.falta)} de OTC Sin Vuala hoy para cubrir el indicador.`
     : `⚠️ *OTC Sin Vuala NO cubierto:* llevas ${pz(sv.piezas)} de ${sv.minimo}. Te ${sv.falta === 1 ? 'falta' : 'faltan'} ${pz(sv.falta)} para cubrirlo hoy.`;
+}
+
+
+// ---------------------------------------------------------------- Reporte del GRUPO (todos los indicadores)
+const pctDe = (v, o) => (num(o) > 0 ? ((num(v) || 0) / num(o)) * 100 : null);
+
+export function calcularGrupo(filas, contactosLista = []) {
+  const eq = calcularEquipoDia(filas, contactosLista);
+  const ex = (r) => r.fila.extra || {};
+  const rutas = eq.rutas.map((r) => {
+    const e = ex(r);
+    const t = e.tabs || {};
+    const sv = sinVualaDe(r.fila);
+    const pMax = pctDe(t.max?.avance ?? r.fila.venta_mes, t.max?.objetivo ?? r.fila.objetivo_mes);
+    const pOpen = pctDe(t.open?.avance, t.open?.objetivo);
+    const pChamp = pctDe(t.champions?.avance, t.champions?.objetivo);
+    const pOtcSem = pctDe(e.otc_semana?.vendido, e.otc_semana?.objetivo);
+    const pOtcDia = pctDe(e.otc_dia, e.otc_dia_objetivo);
+    const esperado = r.m.esperado;
+    // Índice general: promedio de indicadores clave (mes contra ritmo, día, OTC semana, Sin Vuala, efectividad)
+    const comp = [
+      pMax !== null && esperado ? Math.min(120, (pMax / esperado) * 100) : null,
+      r.m.pctDia !== null ? Math.min(120, r.m.pctDia) : null,
+      pOtcSem !== null ? Math.min(120, pOtcSem) : null,
+      sv ? Math.min(100, (sv.piezas / sv.minimo) * 100) : null,
+      r.m.efectividad,
+    ].filter((x) => x !== null && Number.isFinite(x));
+    const indice = comp.length ? comp.reduce((a, b) => a + b, 0) / comp.length : null;
+
+    // Qué le falta (para la retro), del más grave al menos grave
+    const faltas = [];
+    if (r.m.pctDia !== null && r.m.pctDia < 80) faltas.push({ g: 100 - r.m.pctDia, t: `día ${pct(r.m.pctDia)}` });
+    if (sv && !sv.cumple) faltas.push({ g: 90, t: `Sin Vuala ${sv.piezas}/${sv.minimo}` });
+    if (pMax !== null && esperado && pMax < esperado - 5) faltas.push({ g: esperado - pMax, t: `MAX ${pct(pMax)} vs ${pct(esperado)} esperado` });
+    if (pOtcSem !== null && pOtcSem < 80) faltas.push({ g: 100 - pOtcSem, t: `OTC semana ${pct(pOtcSem)}` });
+    if (r.m.efectividad !== null && r.m.efectividad < 70) faltas.push({ g: 100 - r.m.efectividad, t: `efectividad ${pct(r.m.efectividad)}` });
+    for (const mk of (Array.isArray(e.marcas) ? e.marcas : [])) {
+      const p = pctDe(mk.vendido, mk.objetivo);
+      if (p !== null && esperado && p < esperado - 10) faltas.push({ g: esperado - p, t: `${mk.nombre} ${pct(p)}` });
+    }
+    faltas.sort((a, b) => b.g - a.g);
+
+    return { ...r, pMax, pOpen, pChamp, pOtcSem, pOtcDia, sv, indice, faltas: faltas.map((f) => f.t) };
+  });
+  const general = [...rutas].sort((a, b) => (b.indice ?? -1) - (a.indice ?? -1));
+  const suma = (fn) => rutas.reduce((s, r) => s + (fn(r) || 0), 0);
+  const tot = (k) => ({
+    v: suma((r) => num(r.fila.extra?.tabs?.[k]?.avance)),
+    o: suma((r) => num(r.fila.extra?.tabs?.[k]?.objetivo)),
+  });
+  const tMax = tot('max'), tOpen = tot('open'), tChamp = tot('champions');
+  const otcV = suma((r) => num(r.fila.extra?.otc_semana?.vendido)), otcO = suma((r) => num(r.fila.extra?.otc_semana?.objetivo));
+  const champMap = new Map();
+  for (const r of rutas) {
+    for (const mk of (Array.isArray(r.fila.extra?.marcas_champions) ? r.fila.extra.marcas_champions : [])) {
+      const acc = champMap.get(mk.clave) || { clave: mk.clave, nombre: mk.nombre, vendido: 0, objetivo: 0 };
+      acc.vendido += num(mk.vendido) || 0; acc.objetivo += num(mk.objetivo) || 0;
+      champMap.set(mk.clave, acc);
+    }
+  }
+  return {
+    ...eq,
+    rutasGrupo: general,
+    pctMax: tMax.o ? (tMax.v / tMax.o) * 100 : eq.pctMes,
+    pctOpen: tOpen.o ? (tOpen.v / tOpen.o) * 100 : null,
+    pctChamp: tChamp.o ? (tChamp.v / tChamp.o) * 100 : null,
+    pctOtcSem: otcO ? (otcV / otcO) * 100 : null,
+    otcSemV: otcV, otcSemO: otcO,
+    svCubiertas: rutas.filter((r) => r.sv && r.sv.cumple).length,
+    svTotal: rutas.filter((r) => r.sv).length,
+    visitasHoy: suma((r) => r.m.vis),
+    marcasChamp: [...champMap.values()].filter((x) => x.objetivo > 0),
+  };
+}
+
+export function varsGrupo(g) {
+  const nom = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+  const conIndice = g.rutasGrupo.filter((r) => r.indice !== null);
+  const bajos = conIndice.slice(-3).reverse();
+  return {
+    fecha: g.fecha ? fechaCorta(g.fecha) : null,
+    hora: horaMX(g.actualizado),
+    esperado: g.esperado === null ? null : pct(g.esperado),
+    pct_max: g.pctMax === null ? null : pct(g.pctMax),
+    pct_open: g.pctOpen === null ? null : pct(g.pctOpen),
+    pct_champions: g.pctChamp === null ? null : pct(g.pctChamp),
+    pct_dia_equipo: g.pctDia === null ? null : pct(g.pctDia),
+    rutas_meta_dia: String(g.metaCumplida),
+    total_rutas: String(g.rutas.length),
+    pct_otc_semana: g.pctOtcSem === null ? null : pct(g.pctOtcSem),
+    sin_vuala_cubiertas: g.svTotal ? String(g.svCubiertas) : null,
+    visitas_hoy: String(g.visitasHoy || 0),
+    top_general: conIndice.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – índice ${Math.round(r.indice)}`).join('\n'),
+    retro_bajos: bajos.map((r) =>
+      `• *${nom(r)}* (índice ${Math.round(r.indice)}): ${r.faltas.length ? 'le falta ' + r.faltas.slice(0, 3).join(', ') : 'va parejo, falta empujar'}.`
+    ).join('\n'),
+    ranking_general: conIndice.map((r, i) => `${i + 1}. ${nom(r)} – ${Math.round(r.indice)}`).join('\n'),
+  };
 }
