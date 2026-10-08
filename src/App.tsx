@@ -1433,6 +1433,21 @@ export default function App() {
         proyectado_mes: v.proyeccion?.max?.proyectado,
         otc_dia: v.hoy?.otc?.vendido,
         otc_dia_objetivo: v.hoy?.otc?.objetivo,
+        // Indicadores del periodo para el reporte del GRUPO (MAX / OPEN / CHAMPIONS / OTC / visitas)
+        tabs: {
+          max: { avance: v.tabs?.max?.avance ?? null, objetivo: v.tabs?.max?.objetivo ?? null, por_dia: v.tabs?.max?.ventaPorDiaNecesaria ?? null },
+          open: { avance: v.tabs?.open?.avance ?? null, objetivo: v.tabs?.open?.objetivo ?? null, por_dia: v.tabs?.open?.ventaPorDiaNecesaria ?? null },
+          champions: { avance: v.tabs?.champions?.avance ?? null, objetivo: v.tabs?.champions?.objetivo ?? null, por_dia: v.tabs?.champions?.ventaPorDiaNecesaria ?? null },
+        },
+        marcas_champions: MARCAS_CHAMPIONS.map((m) => ({
+          clave: m.key,
+          nombre: (m.label || m.key).replace(/^CHAM_/, "CH "),
+          vendido: v.marcasChampions?.[m.key]?.vendido ?? null,
+          objetivo: v.marcasChampions?.[m.key]?.objetivo ?? null,
+          resta: v.marcasChampions?.[m.key]?.restaPorVender ?? null,
+        })),
+        otc_semana: { vendido: v.ventaOtcSemanal ?? null, objetivo: v.marcaOtc?.objetivo ?? null },
+        visitas_periodo: v.visitasEfectivas ?? null,
         // OTC "Sin Vuala" del día (mínimo de piezas por ruta)
         otc_sin_vuala: {
           piezas: v.hoy?.otcSinVuala?.piezas ?? 0,
