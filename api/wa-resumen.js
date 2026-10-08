@@ -14,7 +14,7 @@ import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
   configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
-  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe,
+  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -112,6 +112,18 @@ async function modoMatutino(req) {
   const mensajes = [];
 
   for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      if (!fechaEq) continue;
+      const filas = await companerasDe(fechaEq, cache);
+      if (!filas.length) continue;
+      const g = calcularGrupo(filas, todos);
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: conAviso(llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)), cfg),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fechaEq, g.actualizado),
+      });
+      continue;
+    }
     if (c.tipo === 'equipo') {
       if (!fechaEq) continue;
       const filas = await companerasDe(fechaEq, cache);
@@ -120,7 +132,7 @@ async function modoMatutino(req) {
       mensajes.push({
         ruta: 'EQUIPO',
         tipo: 'equipo',
-        numero: numeroEnvio(c.telefono),
+        numero: destino(c),
         caption: conAviso(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), cfg),
         tarjeta_url: await urlTarjeta(req, 'EQUIPO', fechaEq),
       });
@@ -132,7 +144,7 @@ async function modoMatutino(req) {
     mensajes.push({
       ruta: c.ruta,
       tipo: 'vendedor',
-      numero: numeroEnvio(c.telefono),
+      numero: destino(c),
       caption: conAviso(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), cfg),
       tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
     });
@@ -154,11 +166,21 @@ async function modoDia(req) {
   const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
   const mensajes = [];
   for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      const g = calcularGrupo(filas, todos);
+      if (!g.rutas.length) continue;
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado),
+      });
+      continue;
+    }
     if (c.tipo === 'equipo') {
       const eq = calcularEquipoDia(filas, todos);
       if (!eq.rutasDia.length) continue;
       mensajes.push({
-        ruta: 'EQUIPO', tipo: 'equipo', numero: numeroEnvio(c.telefono),
+        ruta: 'EQUIPO', tipo: 'equipo', numero: destino(c),
         caption: llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }),
         tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha, eq.actualizado, 'dia'),
       });
@@ -169,7 +191,7 @@ async function modoDia(req) {
     const m = calcular(fila, filas);
     if (m.pctDia === null && !m.ventaDia) continue;
     mensajes.push({
-      ruta: c.ruta, tipo: 'vendedor', numero: numeroEnvio(c.telefono),
+      ruta: c.ruta, tipo: 'vendedor', numero: destino(c),
       caption: llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)),
       tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
     });
@@ -199,7 +221,7 @@ async function modoAlerta() {
     const texto = vaAbajo
       ? llenarPlantilla(plantilla(cfg, 'alerta'), vars)
       : `⏰ *${vars.nombre}*, tu venta va bien (${vars.pct_dia || '—'}) 💪\n\n${vars.retro_sin_vuala}`;
-    mensajes.push({ ruta: c.ruta, numero: numeroEnvio(c.telefono), texto });
+    mensajes.push({ ruta: c.ruta, numero: destino(c), texto });
   }
   return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
 }
