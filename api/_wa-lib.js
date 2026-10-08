@@ -20,6 +20,28 @@ export async function sb(path) {
   return res.json();
 }
 
+// Guardar / leer un valor en la tabla wa_estado (memoria del bot entre avances)
+export async function leerEstado(clave) {
+  try {
+    const r = await sb(`wa_estado?clave=eq.${encodeURIComponent(clave)}&select=valor`);
+    return r[0]?.valor ?? null;
+  } catch {
+    return null;
+  }
+}
+export async function guardarEstado(clave, valor) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/wa_estado`, {
+      method: 'POST',
+      headers: { ...headersSupabase(), Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ clave, valor, actualizado: new Date().toISOString() }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------- Auth
 export function autorizado(req) {
   return BOT_TOKEN && req.headers.get('x-bot-token') === BOT_TOKEN;
@@ -166,6 +188,7 @@ export async function listaContactos(cfg) {
       grupo: String(c.grupo || '').trim(),
       tipo: c.tipo === 'equipo' ? 'equipo' : c.tipo === 'grupo' ? 'grupo' : 'vendedor',
       activo: c.activo !== false, matutino: c.matutino !== false, alerta: c.alerta !== false, dia: c.dia !== false,
+      riesgo: c.riesgo !== false, rebase: c.rebase !== false,
     }))
     .filter((c) => (c.tipo === 'grupo' ? /@g\.us$/.test(c.grupo) : c.telefono.length === 10));
 }
@@ -254,6 +277,25 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '🔻 *Retro, lo que les falta hoy:*',
     '{retro_dia}',
+  ].join('\n'),
+  riesgo: [
+    '🚨 *RUTAS EN RIESGO* · corte {fecha}',
+    '{nombre}, así proyecta el mes cada ruta:',
+    '',
+    '📉 Equipo cierra en *{proyeccion_equipo}* · faltarían {falta_equipo}',
+    '{total_riesgo} de {total_rutas} rutas abajo del {umbral}',
+    '',
+    '{rutas_riesgo}',
+    '',
+    '✅ En ritmo: {rutas_ok}',
+  ].join('\n'),
+  riesgo_tarde: [
+    '🚨 *3 PM · RUTAS QUE NECESITAN APOYO*',
+    '{nombre}, estas rutas van mal hoy:',
+    '',
+    '{rutas_riesgo}',
+    '',
+    '✅ Bien hoy: {rutas_ok}',
   ].join('\n'),
   dia: [
     '📦 *Avance del día* · corte {hora}',
@@ -786,4 +828,306 @@ export function varsGrupoDia(g) {
     top_volumen: g.rutas.slice(0, 3).map((r, i) => `${medalla(i + 1)} ${nom(r)} – ${miles(r.vol.v)} paq`).join('\n'),
     retro_dia: bajos.map((r) => `• *${nom(r)}*: ${r.faltas.length ? 'le faltan ' + r.faltas.slice(0, 4).join(', ') : 'ya cumplió todo hoy 💪'}.`).join('\n'),
   };
+}
+
+
+// ---------------------------------------------------------------- RUTAS EN RIESGO (para Supervisor / Gerente)
+// Proyección del mes: lo que lleva + (su promedio diario × días que faltan).
+// nivel: 'ok' (proyecta ≥ umbral) · 'riesgo' (umbral-10 a umbral) · 'critico' (< umbral-10)
+const nomR = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+
+function accionSugerida(x) {
+  if (x.efectividad !== null && x.efectividad < 75) return `Revisar con él los clientes que no compraron y acompañarlo a los de más volumen.`;
+  if (x.marcaPeor) return `Empujar ${x.marcaPeor.nombre} con sus clientes top (va ${miles(x.marcaPeor.d)} paq abajo).`;
+  if (x.sv && !x.sv.cumple) return `Que coloque OTC Sin Vuala hoy (${x.sv.piezas} de ${x.sv.minimo} pz).`;
+  if (x.necesita) return `Acompañarlo en ruta y fijarle ${miles(x.necesita)} paq diarios.`;
+  return 'Darle seguimiento hoy.';
+}
+
+export function calcularRiesgo(filas, contactosLista = [], umbral = 95) {
+  const g = calcularGrupo(filas, contactosLista);
+  const rutas = g.rutasGrupo.map((r) => {
+    const ex = r.fila.extra || {};
+    const cal = diasHabiles(r.fila.fecha);
+    const trans = num(ex.dias_transcurridos) ?? cal.trans;
+    const rest = num(ex.dias_restantes) ?? cal.restantes;
+    const promedio = trans > 0 ? r.maxV / trans : null;
+    const proy = promedio !== null ? r.maxV + promedio * rest : null;
+    const pctProy = proy !== null && r.maxO ? (proy / r.maxO) * 100 : null;
+    const faltaProy = proy !== null ? Math.max(0, r.maxO - proy) : null;
+    const necesita = rest > 0 ? Math.max(0, r.maxO - r.maxV) / rest : null;
+    const brecha = necesita !== null && promedio !== null ? necesita - promedio : null;
+    // Marca OPEN más atrasada contra el ritmo
+    let marcaPeor = null;
+    for (const mk of (Array.isArray(ex.marcas) ? ex.marcas : [])) {
+      const o = num(mk.objetivo) || 0, v = num(mk.vendido) || 0;
+      const d = r.m.esperado ? (o * r.m.esperado) / 100 - v : 0;
+      if (o > 0 && d / o > 0.05 && (!marcaPeor || d > marcaPeor.d)) marcaPeor = { nombre: mk.nombre, d };
+    }
+    const nivel = pctProy === null ? null : pctProy >= umbral ? 'ok' : pctProy >= umbral - 10 ? 'riesgo' : 'critico';
+    const x = { ...r, trans, rest, promedio, proy, pctProy, faltaProy, necesita, brecha, marcaPeor, nivel, efectividad: r.m.efectividad };
+    // Señales extra
+    const senales = [];
+    if (marcaPeor) senales.push(`${marcaPeor.nombre} ${miles(marcaPeor.d)} paq abajo`);
+    if (r.sv && !r.sv.cumple) senales.push(`Sin Vuala ${r.sv.piezas}/${r.sv.minimo}`);
+    if (x.efectividad !== null && x.efectividad < 80) senales.push(`efectividad ${pct(x.efectividad)}`);
+    if (r.volAyer.o && r.volAyer.v / r.volAyer.o < 0.7) senales.push(`ayer ${miles(r.volAyer.v)} de ${miles(r.volAyer.o)} paq`);
+    if (r.pOtcSem !== null && r.pOtcSem < 80) senales.push(`OTC semana ${pct(r.pOtcSem)}`);
+    x.senales = senales;
+    x.accion = accionSugerida(x);
+    return x;
+  }).sort((a, b) => (a.pctProy ?? 999) - (b.pctProy ?? 999));
+  const enRiesgo = rutas.filter((r) => r.nivel === 'riesgo' || r.nivel === 'critico');
+  const sum = (fn) => rutas.reduce((s, r) => s + (fn(r) || 0), 0);
+  const proyEq = sum((r) => r.proy), objEq = sum((r) => r.maxO);
+  return {
+    fecha: g.fecha, umbral, rutas, enRiesgo, ok: rutas.filter((r) => r.nivel === 'ok'),
+    proyEquipo: proyEq, objEquipo: objEq, pctProyEquipo: objEq ? (proyEq / objEq) * 100 : null,
+  };
+}
+
+export function varsRiesgo(rk) {
+  const det = rk.enRiesgo.map((r) => [
+    `${r.nivel === 'critico' ? '🔴' : '🟠'} *${nomR(r)}* · cierra en *${pct(r.pctProy)}* (faltarían ${miles(r.faltaProy)} paq)`,
+    r.promedio !== null && r.necesita !== null
+      ? `   Lleva ${miles(r.promedio)} paq/día, necesita ${miles(r.necesita)}${r.brecha > 0 ? ` (+${miles(r.brecha)})` : ''}` : null,
+    r.senales.length ? `   ⚠️ ${r.senales.slice(0, 3).join(' · ')}` : null,
+    `   👉 ${r.accion}`,
+  ].filter(Boolean).join('\n')).join('\n\n');
+  return {
+    fecha: rk.fecha ? fechaCorta(rk.fecha) : null,
+    umbral: `${rk.umbral}%`,
+    total_riesgo: String(rk.enRiesgo.length),
+    total_rutas: String(rk.rutas.length),
+    proyeccion_equipo: rk.pctProyEquipo === null ? null : pct(rk.pctProyEquipo),
+    falta_equipo: `${miles(Math.max(0, rk.objEquipo - rk.proyEquipo))} paq`,
+    rutas_riesgo: det,
+    rutas_ok: rk.ok.map((r) => `${r.ruta} (${pct(r.pctProy)})`).join(', '),
+    criticas: rk.enRiesgo.filter((r) => r.nivel === 'critico').map(nomR).join(', '),
+  };
+}
+
+// 3 pm: rutas que van mal HOY (día abajo del umbral o sin Sin Vuala), con su proyección del mes.
+export function calcularRiesgoTarde(filasHoy, contactosLista = [], umbralDia = 70, umbralMes = 95) {
+  const gd = calcularGrupoDia(filasHoy, contactosLista);
+  const rk = calcularRiesgo(filasHoy, contactosLista, umbralMes);
+  const mesPor = Object.fromEntries(rk.rutas.map((r) => [r.ruta, r]));
+  const rutas = gd.rutas.map((r) => {
+    const pctDia = r.vol.o ? (r.vol.v / r.vol.o) * 100 : null;
+    const malDia = pctDia !== null && pctDia < umbralDia;
+    const sinSv = r.sv && !r.sv.cumple;
+    return { ...r, pctDia, mes: mesPor[r.ruta] || null, enRiesgo: malDia || sinSv, critico: pctDia !== null && pctDia < umbralDia - 25 };
+  }).sort((a, b) => (a.pctDia ?? 999) - (b.pctDia ?? 999));
+  return { fecha: gd.fecha, nombres: gd.nombres, rutas, enRiesgo: rutas.filter((r) => r.enRiesgo), ok: rutas.filter((r) => !r.enRiesgo) };
+}
+
+export function varsRiesgoTarde(rt) {
+  const det = rt.enRiesgo.map((r) => {
+    let marcaDia = null;
+    for (const [k, x] of Object.entries(r.marcas || {})) {
+      const d = x.o - x.v;
+      if (d > 0 && (!marcaDia || d > marcaDia.d)) marcaDia = { n: rt.nombres?.[k] || k, d };
+    }
+    const mes = r.mes && r.mes.nivel && r.mes.nivel !== 'ok' ? ` · mes cierra en ${pct(r.mes.pctProy)}` : '';
+    const acc = r.sv && !r.sv.cumple && (r.pctDia ?? 100) >= 70
+      ? 'Que coloque Sin Vuala antes de cerrar.'
+      : marcaDia ? `Llámale y que empuje ${marcaDia.n} (le faltan ${miles(marcaDia.d)} paq) en lo que le queda de ruta.`
+        : 'Llámale ya, todavía da tiempo de recuperar.';
+    return [
+      `${r.critico ? '🔴' : '🟠'} *${nomR(r)}* · ${miles(r.vol.v)} de ${miles(r.vol.o)} paq (${pct(r.pctDia)})${mes}`,
+      r.faltas.length ? `   Le falta: ${r.faltas.slice(0, 4).join(', ')}` : null,
+      `   👉 ${acc}`,
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+  return {
+    fecha: rt.fecha ? fechaCorta(rt.fecha) : null,
+    total_riesgo: String(rt.enRiesgo.length),
+    total_rutas: String(rt.rutas.length),
+    rutas_riesgo: det,
+    rutas_ok: rt.ok.map((r) => `${r.ruta} (${pct(r.pctDia)})`).join(', '),
+  };
+}
+
+
+// ---------------------------------------------------------------- 🎯 RETO DEL DÍA
+// Se calcula siempre igual para una fecha: con el corte ANTERIOR a esa fecha se elige la marca
+// (la más atrasada contra el ritmo del mes, o la que se fije en la pestaña) y la meta de cada ruta
+// (lo que necesita por día de esa marca, o una meta fija). Así no hay que guardar nada.
+const normK = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+export function elegirReto(filasBase, cfg = {}, fecha = null) {
+  if (!filasBase?.length || cfg?.retoActivo === false) return null;
+  const nombresDia = {};
+  for (const f of filasBase) for (const mk of (f.extra?.marcas_dia || [])) nombresDia[mk.clave] = mk.nombre || mk.clave;
+  const claves = Object.keys(nombresDia);
+  if (!claves.length) return null;
+
+  const fijo = cfg?.retoMarca && claves.includes(cfg.retoMarca) ? cfg.retoMarca : null;
+  let clave = fijo, motivo = fijo ? 'marca elegida por la gerencia' : '';
+  if (!clave) {
+    // Déficit del equipo contra el ritmo del mes, por marca
+    const acc = {};
+    for (const f of filasBase) {
+      const m = calcular(f, filasBase);
+      for (const mk of (Array.isArray(f.extra?.marcas) ? f.extra.marcas : [])) {
+        if (!claves.includes(mk.clave)) continue;
+        const o = num(mk.objetivo) || 0, v = num(mk.vendido) || 0;
+        const a = acc[mk.clave] || { def: 0, obj: 0, resta: 0 };
+        a.def += m.esperado ? (o * m.esperado) / 100 - v : 0;
+        a.obj += o;
+        a.resta += Math.max(0, o - v);
+        acc[mk.clave] = a;
+      }
+    }
+    const lista = Object.entries(acc).filter(([, a]) => a.obj > 0);
+    if (!lista.length) return null;
+    lista.sort((x, y) => (y[1].def / y[1].obj) - (x[1].def / x[1].obj) || y[1].resta - x[1].resta);
+    clave = lista[0][0];
+    const d = lista[0][1].def;
+    motivo = d > 0 ? `es la que va más atrasada del mes (${miles(d)} paq abajo del ritmo)` : 'es la que más le falta al equipo';
+  }
+
+  const metaFija = Number(cfg?.retoMeta) > 0 ? Math.round(Number(cfg.retoMeta)) : null;
+  const metas = {};
+  for (const f of filasBase) {
+    const ex = f.extra || {};
+    const mk = (ex.marcas || []).find((x) => x.clave === clave);
+    const mkDia = (ex.marcas_dia || []).find((x) => x.clave === clave);
+    let meta = metaFija;
+    if (!meta) {
+      const cal = diasHabiles(f.fecha);
+      const rest = Math.max(1, num(ex.dias_restantes) ?? cal.restantes);
+      meta = num(mk?.por_dia) ?? (mk ? Math.max(0, (num(mk.objetivo) || 0) - (num(mk.vendido) || 0)) / rest : null);
+      if (!meta || meta < 1) meta = num(mkDia?.objetivo) || null;
+      meta = meta ? Math.max(1, Math.ceil(meta)) : null;
+    }
+    if (meta) metas[claveRuta(f.ruta)] = meta;
+  }
+  if (!Object.keys(metas).length) return null;
+  return { fecha, clave, nombre: nombresDia[clave] || clave, metas, motivo };
+}
+
+// Cómo va el reto con las filas de ESA fecha.
+export function avanceReto(reto, filasDelDia, contactosLista = []) {
+  if (!reto) return null;
+  const nombrePorRuta = {};
+  for (const c of contactosLista) if (c.tipo === 'vendedor') nombrePorRuta[claveRuta(c.ruta)] = c.nombre;
+  const tabla = filasDelDia.map((f) => {
+    const ruta = claveRuta(f.ruta);
+    const meta = reto.metas[ruta];
+    if (!meta) return null;
+    const mk = (f.extra?.marcas_dia || []).find((x) => x.clave === reto.clave || normK(x.nombre) === normK(reto.nombre));
+    const v = num(mk?.vendido) || 0;
+    return { ruta, nombre: nombrePorRuta[ruta] || '', v, meta, cumple: v >= meta, pct: (v / meta) * 100 };
+  }).filter(Boolean).sort((a, b) => b.pct - a.pct || b.v - a.v);
+  const cumplieron = tabla.filter((r) => r.cumple);
+  const ganador = cumplieron.length ? [...cumplieron].sort((a, b) => b.v - a.v)[0] : null;
+  return { ...reto, tabla, cumplieron, ganador, total: tabla.reduce((s, r) => s + r.v, 0), metaTotal: tabla.reduce((s, r) => s + r.meta, 0) };
+}
+
+export function textoRetoAnuncio(reto, ayer = null) {
+  if (!reto) return '';
+  const metas = Object.entries(reto.metas).sort((a, b) => a[0].localeCompare(b[0])).map(([r, m]) => `${r} ${m}`).join(' · ');
+  const lineas = [
+    `🎯 *RETO DEL DÍA: ${reto.nombre}*`,
+    reto.motivo ? `_Porque ${reto.motivo}._` : null,
+    `Meta por ruta (paq): ${metas}`,
+    'Gana quien la pase con más paquetes. Se actualiza con cada avance 🔥',
+  ];
+  const g = textoGanadorAyer(ayer);
+  return [g, g ? '' : null, ...lineas].filter((x) => x !== null).join('\n');
+}
+
+export function textoGanadorAyer(av) {
+  if (!av || !av.tabla.length) return '';
+  const nom = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+  if (av.ganador) {
+    const otros = av.cumplieron.filter((r) => r.ruta !== av.ganador.ruta).map((r) => r.ruta);
+    return `🏆 *Ganador del reto de ayer (${av.nombre}):* ${nom(av.ganador)} con ${miles(av.ganador.v)} paq (meta ${av.ganador.meta})` +
+      (otros.length ? `\nTambién cumplieron: ${otros.join(', ')} 👏` : '');
+  }
+  const cerca = av.tabla[0];
+  return `😬 *Reto de ayer (${av.nombre}):* nadie llegó. El más cerca fue ${nom(cerca)} con ${miles(cerca.v)} de ${cerca.meta} paq.`;
+}
+
+export function textoRetoTabla(av) {
+  if (!av || !av.tabla.length) return '';
+  const nom = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
+  return [
+    `🎯 *RETO ${av.nombre}* · equipo ${miles(av.total)} de ${miles(av.metaTotal)} paq`,
+    ...av.tabla.map((r, i) => `${medalla(i + 1) || `${i + 1}.`} ${nom(r)}: ${miles(r.v)}/${r.meta}${r.cumple ? ' ✅' : ''}`),
+  ].join('\n');
+}
+
+export function textoRetoVendedor(av, ruta, modo = 'dia') {
+  if (!av) return '';
+  const k = claveRuta(ruta);
+  const meta = av.metas[k];
+  if (!meta) return '';
+  if (modo === 'anuncio') return `🎯 *Reto de hoy: ${av.nombre}* · tu meta ${meta} paq. ¡A ganarlo!`;
+  const i = av.tabla.findIndex((r) => r.ruta === k);
+  if (i < 0) return '';
+  const r = av.tabla[i];
+  return r.cumple
+    ? `🎯 Reto ${av.nombre}: ✅ ${miles(r.v)} de ${meta} paq · vas ${i + 1}° de ${av.tabla.length}${i === 0 ? ' 🏆' : ''}`
+    : `🎯 Reto ${av.nombre}: ${miles(r.v)} de ${meta} paq · te faltan ${miles(meta - r.v)} · vas ${i + 1}° de ${av.tabla.length}`;
+}
+
+// ---------------------------------------------------------------- 🏁 TE REBASARON
+// Ranking del día por paquetes vendidos. Se compara contra el último avance guardado en wa_estado.
+export function rankingPaquetes(filas) {
+  return filas
+    .map((f) => ({ ruta: claveRuta(f.ruta), v: num(f.venta_dia) }))
+    .filter((x) => x.v !== null)
+    .sort((a, b) => b.v - a.v);
+}
+
+// Devuelve [{ victima, rebasaron: [{ruta, v, ventaja}], v, lugarAntes, lugarAhora }]
+export function detectarRebases(antes, ahora) {
+  if (!antes?.length || !ahora?.length) return [];
+  const pos = (lista) => Object.fromEntries(lista.map((x, i) => [x.ruta, i]));
+  const pa = pos(antes), pn = pos(ahora);
+  const vAhora = Object.fromEntries(ahora.map((x) => [x.ruta, x.v]));
+  const res = [];
+  for (const b of ahora) {
+    if (pa[b.ruta] === undefined) continue;
+    const rebasaron = ahora
+      .filter((a) => a.ruta !== b.ruta && pa[a.ruta] !== undefined && pa[a.ruta] > pa[b.ruta] && pn[a.ruta] < pn[b.ruta] && a.v > b.v)
+      .map((a) => ({ ruta: a.ruta, v: a.v, ventaja: a.v - vAhora[b.ruta] }));
+    if (rebasaron.length && pn[b.ruta] > pa[b.ruta]) res.push({ victima: b.ruta, v: b.v, rebasaron, lugarAntes: pa[b.ruta] + 1, lugarAhora: pn[b.ruta] + 1 });
+  }
+  return res;
+}
+
+const FRASES_REBASE = {
+  picante: [
+    '¿Te vas a dejar, cabrón? 😤',
+    'No mames, te están comiendo el mandado 🥵',
+    '¡Ponte las pilas, güey! Todavía hay tiempo de regresársela 🔥',
+    'Te pasaron como si estuvieras parado, ¿o qué? 🐢',
+  ],
+  compa: [
+    '¿Te vas a dejar? 😤',
+    '¡Échale ganas, todavía da tiempo de regresársela! 🔥',
+    'Te están comiendo el mandado, compa 👀',
+  ],
+  normal: [
+    'Todavía hay tiempo para recuperar tu lugar 💪',
+    '¡Tú puedes recuperar el lugar! 🔥',
+  ],
+};
+
+export function textoRebase(r, nombre, nombresRutas = {}, tono = 'picante') {
+  const nomR2 = (k) => `${k}${nombresRutas[k] ? ` ${primerNombre(nombresRutas[k], k)}` : ''}`;
+  const frases = FRASES_REBASE[tono] || FRASES_REBASE.picante;
+  const frase = frases[Math.floor(Math.random() * frases.length)];
+  const quien = r.rebasaron.length === 1
+    ? `la *${nomR2(r.rebasaron[0].ruta)}* te acaba de pasar y ya te lleva ${miles(r.rebasaron[0].ventaja)} paq`
+    : `te acaban de pasar ${r.rebasaron.map((x) => `*${nomR2(x.ruta)}*`).join(' y ')}`;
+  const recuperar = Math.max(...r.rebasaron.map((x) => x.ventaja)) + 1;
+  return [
+    `🏁 *${nombre || r.victima}*, ${quien}.`,
+    `Bajaste del ${r.lugarAntes}° al *${r.lugarAhora}°* del día con ${miles(r.v)} paq.`,
+    `Con ${miles(recuperar)} paq más recuperas tu lugar. ${frase}`,
+  ].join('\n');
 }
