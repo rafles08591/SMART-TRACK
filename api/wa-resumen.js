@@ -4,6 +4,7 @@
 //                                          vendedores: su tarjeta · equipo (Supervisor/Gerente): tarjeta del equipo
 //   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA (la dispara la app al cargar el avance)
 //   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a vendedores que van abajo hoy
+//   GET  /api/wa-resumen?modo=riesgo     → (prueba) texto de Rutas en riesgo para supervisores
 //   POST /api/wa-resumen?modo=bot        → body { numero, texto }  → respuesta del bot
 //   GET  /api/wa-resumen?modo=diag       → diagnóstico
 //
@@ -15,6 +16,9 @@ import {
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
   configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
   varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo, calcularGrupoDia, varsGrupoDia,
+  calcularRiesgo, varsRiesgo, calcularRiesgoTarde, varsRiesgoTarde,
+  elegirReto, avanceReto, textoRetoAnuncio, textoRetoTabla, textoRetoVendedor,
+  rankingPaquetes, detectarRebases, textoRebase, leerEstado, guardarEstado,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -59,6 +63,15 @@ async function fechaUltimoCorte({ antesDe = null, hasta = null } = {}) {
   return r[0]?.fecha || null;
 }
 
+// 🎯 Reto de una fecha: se elige con el corte anterior a esa fecha (siempre da lo mismo).
+async function retoDe(fecha, cfg, cache) {
+  if (!fecha || cfg?.retoActivo === false) return null;
+  const base = await fechaUltimoCorte({ antesDe: fecha });
+  if (!base) return null;
+  return elegirReto(await companerasDe(base, cache), cfg, fecha);
+}
+const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
+
 // ------------------------------------------------------------------ menús
 const MENU_VENDEDOR = [
   '🤖 *Bot SMART-TRACK*',
@@ -69,6 +82,7 @@ const MENU_VENDEDOR = [
   '• *ranking* – tu lugar en el equipo',
   '• *clientes* – tus visitas',
   '• *marcas* – cómo vas en cada marca',
+  '• *reto* – cómo vas en el reto del día',
 ].join('\n');
 
 const MENU_EQUIPO = [
@@ -78,6 +92,8 @@ const MENU_EQUIPO = [
   '• *avance* – tarjeta del equipo completo',
   '• *ranking* – las 7 rutas ordenadas',
   '• *hoy* – avance del día por ruta',
+  '• *riesgo* – rutas en riesgo y qué hacer con cada una',
+  '• *reto* – tabla del reto del día',
 ].join('\n');
 
 function normalizar(t) {
@@ -90,6 +106,8 @@ function comando(texto) {
   const t = normalizar(texto).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!t || t.split(' ').length > 3) return 'nada';
   if (/^(menu|ayuda|bot|comandos|opciones)$/.test(t)) return 'menu';
+  if (/\b(riesgo|alerta|alertas|focos|apoyo)\b/.test(t)) return 'riesgo';
+  if (/\b(reto|retos|concurso|competencia)\b/.test(t)) return 'reto';
   if (/\b(marcas?|ice|bloss|summ|faronet)\b/.test(t)) return 'marcas';
   if (/\b(avance|resumen|mes|cuota|numeros|meta|tarjeta|equipo)\b/.test(t)) return 'avance';
   if (/\b(hoy|dia)\b/.test(t)) return 'hoy';
@@ -110,6 +128,14 @@ async function modoMatutino(req) {
   const todos = await listaContactos(cfg);
   const cache = {};
   const mensajes = [];
+  // 🎯 Reto de hoy + ganador del reto de ayer
+  let retoHoy = null, retoAyer = null;
+  if (fechaEq && cfg?.retoActivo !== false) {
+    const filasEq = await companerasDe(fechaEq, cache);
+    retoHoy = elegirReto(filasEq, cfg, hoy);
+    retoAyer = avanceReto(await retoDe(fechaEq, cfg, cache), filasEq, todos);
+  }
+  const anuncio = textoRetoAnuncio(retoHoy, retoAyer);
 
   for (const c of lista) {
     if (c.tipo === 'grupo') {
@@ -119,7 +145,7 @@ async function modoMatutino(req) {
       const g = calcularGrupo(filas, todos);
       mensajes.push({
         ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
-        caption: conAviso(llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)), cfg),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)), anuncio), cfg),
         tarjeta_url: await urlTarjeta(req, 'GRUPO', fechaEq, g.actualizado),
       });
       continue;
@@ -133,7 +159,7 @@ async function modoMatutino(req) {
         ruta: 'EQUIPO',
         tipo: 'equipo',
         numero: destino(c),
-        caption: conAviso(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), cfg),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), anuncio), cfg),
         tarjeta_url: await urlTarjeta(req, 'EQUIPO', fechaEq),
       });
       continue;
@@ -145,11 +171,34 @@ async function modoMatutino(req) {
       ruta: c.ruta,
       tipo: 'vendedor',
       numero: destino(c),
-      caption: conAviso(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), cfg),
+      caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), textoRetoVendedor(retoHoy, c.ruta, 'anuncio')), cfg),
       tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
     });
   }
+  // 🚨 Rutas en riesgo → solo texto, a Supervisor / Gerente
+  if (cfg?.riesgoActivo !== false && fechaEq) {
+    const sup = (await contactos({ campo: 'riesgo', cfg })).filter((c) => c.tipo === 'equipo');
+    if (sup.length) {
+      const filas = await companerasDe(fechaEq, cache);
+      if (filas.length) {
+        const rk = calcularRiesgo(filas, todos, umbralRiesgo(cfg));
+        for (const c of sup) {
+          mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), tarjeta_url: '', texto: textoRiesgo(cfg, rk, c) });
+        }
+      }
+    }
+  }
   return json({ fecha: hoy, total: mensajes.length, mensajes });
+}
+
+const umbralRiesgo = (cfg) => (Number(cfg?.umbralRiesgo) > 0 ? Math.min(100, Number(cfg.umbralRiesgo)) : 95);
+
+function textoRiesgo(cfg, rk, c) {
+  const v = { ...varsRiesgo(rk), nombre: primerNombre(c?.nombre, '') || 'Equipo' };
+  if (!rk.enRiesgo.length) {
+    return `✅ *RUTAS EN RIESGO* · corte ${v.fecha || ''}\nNinguna 🙌 Las ${v.total_rutas} rutas proyectan cerrar arriba del ${v.umbral}.\nEquipo cierra en *${v.proyeccion_equipo || '—'}*.`;
+  }
+  return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
 }
 
 // ------------------------------------------------------------------ avance del día
@@ -165,6 +214,8 @@ async function modoDia(req) {
   ]);
   const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
   const mensajes = [];
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const tablaReto = textoRetoTabla(av);
   for (const c of lista) {
     if (c.tipo === 'grupo') {
       // Al cargar avance: SOLO indicadores del día, en paquetes / piezas / pesos (sin %)
@@ -172,7 +223,7 @@ async function modoDia(req) {
       if (!g.rutas.length) continue;
       mensajes.push({
         ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
-        caption: llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)), tablaReto),
         tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
       });
       continue;
@@ -182,7 +233,7 @@ async function modoDia(req) {
       if (!eq.rutasDia.length) continue;
       mensajes.push({
         ruta: 'EQUIPO', tipo: 'equipo', numero: destino(c),
-        caption: llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }), tablaReto),
         tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha, eq.actualizado, 'dia'),
       });
       continue;
@@ -193,11 +244,31 @@ async function modoDia(req) {
     if (m.pctDia === null && !m.ventaDia) continue;
     mensajes.push({
       ruta: c.ruta, tipo: 'vendedor', numero: destino(c),
-      caption: llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)),
+      caption: junta(llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)), textoRetoVendedor(av, c.ruta)),
       tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
     });
   }
-  return json({ fecha, total: mensajes.length, mensajes });
+
+  // 🏁 Te rebasaron: se compara el ranking del día (paquetes) contra el avance anterior
+  let rebases = [];
+  if (cfg?.rebaseActivo !== false) {
+    const ahora = rankingPaquetes(filas);
+    const antes = await leerEstado('ranking_dia');
+    if (antes?.fecha === fecha) rebases = detectarRebases(antes.lista, ahora);
+    if (ahora.length) await guardarEstado('ranking_dia', { fecha, lista: ahora });
+    const nombres = {};
+    for (const c of todos) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = c.nombre;
+    const vend = (await contactos({ campo: 'rebase', cfg })).filter((c) => c.tipo === 'vendedor');
+    for (const r of rebases) {
+      for (const c of vend.filter((x) => claveRuta(x.ruta) === r.victima)) {
+        mensajes.push({
+          ruta: c.ruta, tipo: 'rebase', numero: destino(c), tarjeta_url: '',
+          texto: textoRebase(r, primerNombre(c.nombre, r.victima), nombres, cfg?.tonoBot || 'picante'),
+        });
+      }
+    }
+  }
+  return json({ fecha, total: mensajes.length, mensajes, rebases: rebases.length });
 }
 
 // ------------------------------------------------------------------ alerta
@@ -205,7 +276,9 @@ async function modoAlerta() {
   const hoy = fechaMX();
   const cfg = await configBot();
   const umbral = Number(cfg?.umbralAlerta) > 0 ? Number(cfg.umbralAlerta) : 70;
-  const [lista, filasHoy] = await Promise.all([contactos({ campo: 'alerta', cfg }), filasDeFecha(hoy)]);
+  const [lista, filasHoy, sup, todos] = await Promise.all([
+    contactos({ campo: 'alerta', cfg }), filasDeFecha(hoy), contactos({ campo: 'riesgo', cfg }), listaContactos(cfg),
+  ]);
   const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
   const mensajes = [];
   for (const c of lista) {
@@ -223,6 +296,16 @@ async function modoAlerta() {
       ? llenarPlantilla(plantilla(cfg, 'alerta'), vars)
       : `⏰ *${vars.nombre}*, tu venta va bien (${vars.pct_dia || '—'}) 💪\n\n${vars.retro_sin_vuala}`;
     mensajes.push({ ruta: c.ruta, numero: destino(c), texto });
+  }
+  // 🚨 Supervisor / Gerente: rutas que necesitan apoyo HOY
+  if (cfg?.riesgoActivo !== false && filasHoy.length) {
+    const rt = calcularRiesgoTarde(filasHoy, todos, umbral, umbralRiesgo(cfg));
+    if (rt.enRiesgo.length) {
+      for (const c of sup.filter((x) => x.tipo === 'equipo')) {
+        const texto = llenarPlantilla(plantilla(cfg, 'riesgo_tarde'), { ...varsRiesgoTarde(rt), nombre: primerNombre(c.nombre, '') || 'Equipo' });
+        mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), texto });
+      }
+    }
   }
   return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
 }
@@ -244,6 +327,10 @@ async function botEquipo(req, c, cmd, cfg, responder) {
       caption: llenarPlantilla(plantilla(cfg, 'equipo'), { ...v, nombre: primerNombre(c.nombre, '') }),
       tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha),
     });
+  }
+  if (cmd === 'riesgo') {
+    const rk = calcularRiesgo(filas, await listaContactos(cfg), umbralRiesgo(cfg));
+    return responder({ tipo: 'texto', texto: textoRiesgo(cfg, rk, c) + aviso });
   }
   if (cmd === 'ranking') {
     return responder({ tipo: 'texto', texto: `🏁 *Ranking del mes* · corte del ${v.fecha}\n\n${v.ranking}${aviso}` });
@@ -277,7 +364,20 @@ async function modoBot(req) {
   const cmd = comando(body.texto);
   // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
   if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
+  if (cmd === 'reto') {
+    const hoy = fechaMX();
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    const filas = fecha ? await filasDeFecha(fecha) : [];
+    const reto = await retoDe(hoy, cfg, fecha ? { [fecha]: filas } : {});
+    if (!reto) return responder({ tipo: 'texto', texto: 'Hoy no hay reto activo.' });
+    const av = fecha === hoy ? avanceReto(reto, filas, await listaContactos(cfg)) : null;
+    const texto = c.tipo === 'equipo'
+      ? (av ? textoRetoTabla(av) : textoRetoAnuncio(reto))
+      : (av ? textoRetoVendedor(av, c.ruta) : textoRetoVendedor(reto, c.ruta, 'anuncio')) || textoRetoAnuncio(reto);
+    return responder({ tipo: 'texto', texto });
+  }
   if (c.tipo === 'equipo') return botEquipo(req, c, cmd, cfg, responder);
+  if (cmd === 'riesgo') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
   if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
 
   const hoy = fechaMX();
@@ -363,7 +463,9 @@ async function contextoDatos(c) {
     const todos = await listaContactos(await configBot());
     const v = varsEquipo(calcularEquipo(filas, todos));
     const d = varsEquipoDia(calcularEquipoDia(filas, todos));
-    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d };
+    const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
+    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
+      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, en_ritmo: rk.rutas_ok } };
   }
   const ultimos = await ultimosPorRuta({ hasta: hoy });
   const fila = ultimos[claveRuta(c.ruta)];
@@ -448,6 +550,13 @@ export default async function handler(req) {
     if (modo === 'alerta') return await modoAlerta(req);
     if (modo === 'dia') return await modoDia(req);
     if (modo === 'diag') return await modoDiag();
+    if (modo === 'riesgo') {
+      const cfg = await configBot();
+      const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+      if (!fecha) return json({ texto: 'sin datos' });
+      const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
+      return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
+    }
     if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | diag)' }, 400);
   } catch (e) {
