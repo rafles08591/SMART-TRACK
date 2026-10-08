@@ -7,7 +7,7 @@ import { ImageResponse } from '@vercel/og';
 import {
   firmar, claveRuta, filasDeFecha, calcular, estadoMes, frase, cantidad, cantidadCorta, pct, fechaCorta, contactoPorRuta,
   configBot, listaContactos, calcularEquipo, primerNombre,
-  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero,
+  calcularEquipoDia, rankingDia, fraseDia, marcasDiaDe, horaMX, dinero, sinVualaDe,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -340,9 +340,37 @@ function bloqueMarcasDia(lista, titulo) {
   );
 }
 
+function bloqueSinVuala(fila) {
+  const sv = sinVualaDe(fila);
+  if (!sv) return null;
+  const col = sv.cumple ? C.verde : C.rojo;
+  const pz = (n) => `${n} pieza${n === 1 ? '' : 's'}`;
+  return h('div', {
+    flexDirection: 'column', marginTop: 24, padding: '24px 32px', borderRadius: 28,
+    background: sv.cumple ? 'rgba(34,197,94,0.10)' : 'rgba(239,68,68,0.12)', border: `3px solid ${col}`,
+  },
+    h('div', { justifyContent: 'space-between', alignItems: 'center' },
+      h('div', { flexDirection: 'column' },
+        h('div', { fontSize: 26, color: C.gris, letterSpacing: 3 }, 'OTC SIN VUALA'),
+        h('div', { fontSize: 64, fontWeight: 800, color: col, marginTop: 4 }, `${sv.piezas} / ${sv.minimo}`),
+        h('div', { fontSize: 26, color: C.gris }, 'piezas del día'),
+      ),
+      h('div', {
+        fontSize: 34, fontWeight: 800, color: sv.cumple ? '#04130a' : '#fff', background: col,
+        padding: '12px 26px', borderRadius: 999,
+      }, sv.cumple ? '✅ CUBIERTO' : '❌ NO CUBIERTO'),
+    ),
+    sv.cumple ? null : h('div', { fontSize: 30, lineHeight: 1.3, marginTop: 16, color: C.texto },
+      sv.piezas === 0
+        ? `Hoy no llevas OTC Sin Vuala. Coloca ${pz(sv.falta)} para cubrir el indicador.`
+        : `Te ${sv.falta === 1 ? 'falta' : 'faltan'} ${pz(sv.falta)} de OTC Sin Vuala para cubrir el indicador de hoy.`),
+  );
+}
+
 export function altoDia(fila) {
   const n = marcasDiaDe(fila).length;
-  return 1400 + (n ? 130 + n * 116 : 0);
+  const sv = sinVualaDe(fila);
+  return 1400 + (n ? 130 + n * 116 : 0) + (sv ? (sv.cumple ? 210 : 280) : 0);
 }
 
 function tarjetaDia(fila, m, companeras) {
@@ -385,6 +413,7 @@ function tarjetaDia(fila, m, companeras) {
       tile('OTC HOY', Number.isFinite(otcV) ? dinero(otcV) : '—', otcO > 0 ? `de ${dinero(otcO)}` : 'venta OTC', otcO > 0 ? colorPct(Math.round((otcV / otcO) * 100)) : C.texto),
     ),
 
+    bloqueSinVuala(fila),
     bloqueMarcasDia(marcasDiaDe(fila), 'MARCAS · HOY'),
 
     h('div', {
@@ -410,19 +439,24 @@ function tarjetaEquipoDia(eq) {
       background: i % 2 ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.065)',
     },
       h('div', { width: 60, fontSize: 34, fontWeight: 800, color: i < 3 ? C.cian : C.gris }, `${i + 1}`),
-      h('div', { width: 250, flexDirection: 'column' },
+      h('div', { width: 220, flexDirection: 'column' },
         h('div', { fontSize: 30, fontWeight: 800 }, r.ruta),
         h('div', { fontSize: 24, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
       ),
-      h('div', { width: 400, flexDirection: 'column', paddingRight: 24 },
+      h('div', { width: 360, flexDirection: 'column', paddingRight: 24 },
         h('div', { justifyContent: 'space-between' },
           h('div', { fontSize: 34, fontWeight: 800, color: c }, pct(m.pctDia)),
           h('div', { fontSize: 24, color: C.gris }, m.objDia ? `${miles(m.ventaDia || 0)}/${miles(m.objDia)}` : `${miles(m.ventaDia || 0)} paq`),
         ),
         h('div', { marginTop: 8 }, barra(m.pctDia, c, 12)),
       ),
-      h('div', { width: 120, justifyContent: 'center', fontSize: 30, fontWeight: 800, color: colorPct(m.efectividad === null ? null : Math.round(m.efectividad)) }, pct(m.efectividad)),
-      h('div', { width: 110, justifyContent: 'center', fontSize: 30, fontWeight: 800 }, m.vis === null ? '—' : String(m.vis)),
+      h('div', { width: 110, justifyContent: 'center', fontSize: 30, fontWeight: 800, color: colorPct(m.efectividad === null ? null : Math.round(m.efectividad)) }, pct(m.efectividad)),
+      h('div', { width: 100, justifyContent: 'center', fontSize: 30, fontWeight: 800 }, m.vis === null ? '—' : String(m.vis)),
+      (() => {
+        const sv = sinVualaDe(r.fila);
+        return h('div', { width: 110, justifyContent: 'center', fontSize: 28, fontWeight: 800, color: !sv ? C.gris : sv.cumple ? C.verde : C.rojo },
+          !sv ? '—' : `${sv.piezas}/${sv.minimo}`);
+      })(),
     );
   };
   const eqParaMatriz = { ...eq, marcas: eq.marcasDia, rutas: eq.rutasDia };
@@ -451,10 +485,11 @@ function tarjetaEquipoDia(eq) {
     ),
     h('div', { marginTop: 30, padding: '0 24px', fontSize: 22, color: C.gris, letterSpacing: 3 },
       h('div', { width: 60 }, '#'),
-      h('div', { width: 250 }, 'RUTA'),
-      h('div', { width: 400 }, 'VENTA DE HOY'),
-      h('div', { width: 120, justifyContent: 'center' }, 'EFECT.'),
-      h('div', { width: 110, justifyContent: 'center' }, 'VISITAS'),
+      h('div', { width: 220 }, 'RUTA'),
+      h('div', { width: 360 }, 'VENTA DE HOY'),
+      h('div', { width: 110, justifyContent: 'center' }, 'EFECT.'),
+      h('div', { width: 100, justifyContent: 'center' }, 'VISITAS'),
+      h('div', { width: 110, justifyContent: 'center' }, 'SIN V.'),
     ),
     ...eq.rutasDia.map(filaR),
     bloqueMarcasDia(eq.marcasDia, 'MARCAS · HOY · EQUIPO'),
