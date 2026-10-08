@@ -14,7 +14,7 @@ import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
   ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
   configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
-  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo,
+  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo, calcularGrupoDia, varsGrupoDia,
 } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
@@ -167,12 +167,13 @@ async function modoDia(req) {
   const mensajes = [];
   for (const c of lista) {
     if (c.tipo === 'grupo') {
-      const g = calcularGrupo(filas, todos);
+      // Al cargar avance: SOLO indicadores del día, en paquetes / piezas / pesos (sin %)
+      const g = calcularGrupoDia(filas, todos);
       if (!g.rutas.length) continue;
       mensajes.push({
         ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
-        caption: llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)),
-        tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado),
+        caption: llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
       });
       continue;
     }
