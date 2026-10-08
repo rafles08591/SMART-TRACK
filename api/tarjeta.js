@@ -524,38 +524,98 @@ function kpi(etq, valor, sub, color) {
 const celda = (txt, color, w = 104) => h('div', { width: w, justifyContent: 'center', fontSize: 26, fontWeight: 800, color }, txt);
 const cp = (p) => colorPct(p === null || p === undefined ? null : Math.round(p));
 
-function tablaGrupo(g) {
-  const cols = ['MAX', 'OPEN', 'CHAMP', 'DÍA', 'OTC SEM', 'SIN V.', 'VISIT.'];
+// Celda en unidades coloreada contra el RITMO esperado (indicadores del periodo)
+function celdaRitmo(v, o, esperado, w, fmt = miles, abajo = null) {
+  const p = o > 0 ? (v / o) * 100 : null;
+  const col = o > 0 ? colorRitmo(p, esperado) : C.texto;
+  return h('div', { width: w, flexDirection: 'column', alignItems: 'center' },
+    h('div', { fontSize: 26, fontWeight: 800, color: col }, fmt(v)),
+    h('div', { fontSize: 17, color: C.gris }, abajo ?? (o > 0 ? `de ${fmt(o)}` : ' ')),
+  );
+}
+
+function cajaRitmo(etq, v, o, esperado, fmt = miles, sufijo = '', sub = null) {
+  const p = o > 0 ? (v / o) * 100 : null;
+  const col = o > 0 ? colorRitmo(p, esperado) : C.texto;
   return h('div', {
-    flexDirection: 'column', marginTop: 26, padding: '22px 20px 14px', borderRadius: 28,
+    flex: 1, flexDirection: 'column', padding: '16px 18px', borderRadius: 20,
+    background: C.panel, border: `2px solid ${o > 0 ? col + '88' : C.borde}`,
+  },
+    h('div', { fontSize: 19, color: C.gris, letterSpacing: 2 }, etq),
+    h('div', { fontSize: 38, fontWeight: 800, color: col, marginTop: 2 }, `${fmt(v)}${sufijo}`),
+    h('div', { fontSize: 19, color: C.gris }, sub ?? (o > 0 ? `de ${fmt(o)}${sufijo}` : ' ')),
+  );
+}
+
+// "Lo que falta" para una meta del periodo: en verde si ya la cubrió, color de ritmo si no.
+function celdaFalta(v, o, esperado, w) {
+  if (!(o > 0)) return h('div', { width: w, justifyContent: 'center', color: C.gris }, '—');
+  const falta = Math.max(0, o - v);
+  const col = falta === 0 ? C.verde : colorRitmo((v / o) * 100, esperado);
+  return h('div', { width: w, flexDirection: 'column', alignItems: 'center' },
+    h('div', { fontSize: 26, fontWeight: 800, color: col }, falta === 0 ? 'OK' : miles(falta)),
+    h('div', { fontSize: 17, color: C.gris }, `meta ${miles(o)}`),
+  );
+}
+
+function tablaMesUnid(g) {
+  const cols = [['VENDIDO', 112], ['FALTA MAX', 104], ['FALTA OPEN', 100], ['FALTA CHAMP', 100], ['X DÍA', 92], ['OTC SEM', 112], ['VISIT.', 84]];
+  return h('div', {
+    flexDirection: 'column', marginTop: 24, padding: '18px 16px 10px', borderRadius: 26,
     background: C.panel, border: `2px solid ${C.borde}`,
   },
-    h('div', { fontSize: 24, color: C.gris, letterSpacing: 3, marginBottom: 8, paddingLeft: 6 }, 'INDICADORES POR RUTA · RANKING GENERAL'),
-    h('div', { fontSize: 18, color: C.gris, letterSpacing: 1, padding: '8px 0' },
-      h('div', { width: 44, justifyContent: 'center' }, '#'),
-      h('div', { width: 190 }, 'RUTA'),
-      ...cols.map((c) => h('div', { width: 104, justifyContent: 'center' }, c)),
+    h('div', { fontSize: 22, color: C.gris, letterSpacing: 3, marginBottom: 6, paddingLeft: 6 }, 'MES POR RUTA · PAQUETES · RANKING GENERAL'),
+    h('div', { fontSize: 14, color: C.gris, padding: '8px 0', letterSpacing: 0 },
+      h('div', { width: 40, justifyContent: 'center' }, '#'),
+      h('div', { width: 140 }, 'RUTA'),
+      ...cols.map(([c, w]) => h('div', { width: w, justifyContent: 'center' }, c)),
     ),
     ...g.rutasGrupo.map((r, i) => {
-      const m = r.m;
-      const colMax = colorEstado(estadoMes({ diferencia: r.pMax !== null && m.esperado !== null ? r.pMax - m.esperado : null }));
-      return h('div', { alignItems: 'center', padding: '14px 0', borderTop: '1px solid rgba(255,255,255,0.08)' },
-        h('div', { width: 44, justifyContent: 'center', fontSize: 26, fontWeight: 800, color: i < 3 ? C.cian : C.gris }, `${i + 1}`),
-        h('div', { width: 190, flexDirection: 'column' },
-          h('div', { fontSize: 26, fontWeight: 800 }, r.ruta),
-          h('div', { fontSize: 19, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
+      const esp = r.m.esperado;
+      const v = r.maxV;
+      return h('div', {
+        alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.08)',
+        background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.025)',
+      },
+        h('div', { width: 40, justifyContent: 'center', fontSize: 25, fontWeight: 800, color: i < 3 ? C.cian : C.gris }, `${i + 1}`),
+        h('div', { width: 140, flexDirection: 'column' },
+          h('div', { fontSize: 25, fontWeight: 800 }, r.ruta),
+          h('div', { fontSize: 17, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
         ),
-        celda(pct(r.pMax), colMax),
-        celda(pct(r.pOpen), colorRitmo(r.pOpen, m.esperado)),
-        celda(pct(r.pChamp), colorRitmo(r.pChamp, m.esperado)),
-        celda(pct(m.pctDia), cp(m.pctDia)),
-        celda(pct(r.pOtcSem), cp(r.pOtcSem)),
-        celda(r.sv ? `${r.sv.piezas}/${r.sv.minimo}` : '—', !r.sv ? C.gris : r.sv.cumple ? C.verde : C.rojo),
-        celda(m.vis === null ? '—' : String(m.vis), C.texto),
+        celdaRitmo(v, r.maxO, esp, 112, miles, r.maxO ? `de ${miles(r.maxO)}` : ' '),
+        celdaFalta(v, r.maxO, esp, 104),
+        celdaFalta(v, r.openO, esp, 100),
+        celdaFalta(v, r.champO, esp, 100),
+        h('div', { width: 92, justifyContent: 'center', fontSize: 26, fontWeight: 800, color: C.ambar }, r.porDia ? miles(r.porDia) : '—'),
+        celdaRitmo(r.otcSemV, r.otcSemO, null, 112, dineroCorto),
+        h('div', { width: 84, justifyContent: 'center', fontSize: 26, fontWeight: 800 }, r.fila.extra?.visitas_periodo != null ? miles(r.fila.extra.visitas_periodo) : '—'),
       );
     }),
-    h('div', { fontSize: 19, color: C.gris, padding: '10px 6px 0' },
-      `MAX / OPEN / CHAMP en verde = en ritmo (${pct(g.esperado)} esperado a la fecha) · OTC SEM = OTC de la semana`),
+    h('div', { fontSize: 17, color: C.gris, padding: '10px 6px 0' },
+      'Color contra el ritmo del mes (verde = en ritmo) · FALTA = paquetes para llegar a cada meta · X DÍA = paquetes diarios que necesita para MAX'),
+  );
+}
+
+function matrizUnid(rutas, marcas, campo, titulo, esperado) {
+  if (!marcas.length) return null;
+  const ancho = Math.floor(720 / marcas.length);
+  return h('div', {
+    flexDirection: 'column', marginTop: 24, padding: '20px 22px 14px', borderRadius: 26,
+    background: C.panel, border: `2px solid ${C.borde}`,
+  },
+    h('div', { fontSize: 22, color: C.gris, letterSpacing: 3, marginBottom: 4 }, titulo),
+    h('div', { fontSize: 17, color: C.gris, padding: '8px 0' },
+      h('div', { width: 200 }, 'RUTA'),
+      ...marcas.map((mk) => h('div', { width: ancho, justifyContent: 'center' }, String(mk.nombre).toUpperCase())),
+    ),
+    ...rutas.map((r) => h('div', { alignItems: 'center', padding: '10px 0', borderTop: '1px solid rgba(255,255,255,0.08)' },
+      h('div', { width: 200, fontSize: 24, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}`),
+      ...marcas.map((mk) => {
+        const x = (r.fila.extra?.[campo] || []).find((y) => (y.clave || y.nombre) === mk.clave);
+        if (!x || !(Number(x.objetivo) > 0)) return h('div', { width: ancho, justifyContent: 'center', color: C.gris }, '—');
+        return celdaRitmo(Number(x.vendido) || 0, Number(x.objetivo), esperado, ancho);
+      }),
+    )),
   );
 }
 
@@ -563,32 +623,31 @@ function retroGrupo(g) {
   const bajos = g.rutasGrupo.filter((r) => r.indice !== null).slice(-3).reverse();
   if (!bajos.length) return null;
   return h('div', {
-    flexDirection: 'column', marginTop: 26, padding: '24px 30px', borderRadius: 28,
+    flexDirection: 'column', marginTop: 24, padding: '22px 28px', borderRadius: 26,
     background: 'rgba(239,68,68,0.10)', border: `3px solid ${C.rojo}`,
   },
-    h('div', { fontSize: 26, color: C.rojo, letterSpacing: 3, fontWeight: 800 }, 'RETRO · LOS QUE VAN MÁS BAJO'),
-    ...bajos.map((r) => h('div', { flexDirection: 'column', marginTop: 18 },
-      h('div', { fontSize: 30, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}  ·  índice ${Math.round(r.indice)}`),
-      h('div', { flexWrap: 'wrap', gap: 10, marginTop: 8 },
+    h('div', { fontSize: 24, color: C.rojo, letterSpacing: 3, fontWeight: 800 }, 'RETRO · LOS QUE VAN MÁS BAJO'),
+    ...bajos.map((r) => h('div', { flexDirection: 'column', marginTop: 14 },
+      h('div', { fontSize: 28, fontWeight: 800 }, `${r.ruta}${r.nombre ? ` · ${primerNombre(r.nombre, r.ruta)}` : ''}`),
+      h('div', { flexWrap: 'wrap', gap: 10, marginTop: 6 },
         ...(r.faltas.length ? r.faltas.slice(0, 4) : ['va parejo, falta empujar']).map((f) =>
-          h('div', { fontSize: 22, color: '#fecaca', background: 'rgba(239,68,68,0.18)', padding: '6px 14px', borderRadius: 999 }, f)),
+          h('div', { fontSize: 21, color: '#fecaca', background: 'rgba(239,68,68,0.18)', padding: '6px 14px', borderRadius: 999 }, f)),
       ),
     )),
   );
 }
 
-export function altoGrupo(g) {
+export function altoGrupo(g, gd) {
   const n = g.rutasGrupo.length;
-  const mOpen = g.marcas.length ? 140 + n * 63 : 0;
-  const mChamp = g.marcasChamp.length ? 140 + n * 63 : 0;
-  const mDia = g.marcasDia.length ? 140 + n * 63 : 0;
-  return 360 + 400 + (150 + n * 80) + mOpen + mChamp + mDia + 170 + 3 * 125 + 60;
+  const mOpen = g.marcas.length ? 130 + n * 78 : 0;
+  const mChamp = g.marcasChamp.length ? 130 + n * 78 : 0;
+  return 330 + 2 * 150 + 40 + (150 + n * 88) + mOpen + mChamp + (gd ? 140 + gd.rutas.length * 92 : 0) + 120 + 3 * 95 - 140;
 }
 
-function tarjetaGrupo(g) {
-  const hora = horaMX(g.actualizado);
-  const colMax = g.esperado !== null && g.pctMax !== null
-    ? colorEstado(g.pctMax - g.esperado >= 3 ? 'arriba' : g.pctMax - g.esperado >= -5 ? 'ritmo' : 'abajo') : C.cian;
+function tarjetaGrupo(g, gd) {
+  const esp = g.esperado;
+  const ritmoPaq = esp !== null ? (g.maxO * esp) / 100 : null;
+  const falta = Math.max(0, g.maxO - g.maxV);
   return h('div', {
     width: '100%', height: '100%', flexDirection: 'column', padding: 56, fontFamily: 'Inter',
     color: C.texto, backgroundImage: `linear-gradient(160deg, ${C.fondo1} 0%, ${C.fondo2} 55%, ${C.fondo1} 100%)`,
@@ -597,24 +656,25 @@ function tarjetaGrupo(g) {
       h('div', { fontSize: 30, fontWeight: 800, color: C.cian, letterSpacing: 6 }, 'SMART-TRACK'),
       h('div', { fontSize: 30, fontWeight: 800, padding: '10px 26px', borderRadius: 999, border: `3px solid ${C.cian}`, color: C.cian }, 'GRUPO'),
     ),
-    h('div', { fontSize: 58, fontWeight: 800, marginTop: 24 }, 'Reporte del equipo'),
-    h('div', { fontSize: 28, color: C.gris, marginTop: 4 }, `Corte del ${g.fecha ? fechaCorta(g.fecha) : '—'}${hora ? ` · ${hora}` : ''} · ritmo esperado ${pct(g.esperado)}`),
+    h('div', { fontSize: 56, fontWeight: 800, marginTop: 22 }, 'Reporte del equipo'),
+    h('div', { fontSize: 27, color: C.gris, marginTop: 4 },
+      `Corte del ${g.fecha ? fechaCorta(g.fecha) : '—'}${ritmoPaq !== null ? ` · al ritmo deberían llevar ${miles(ritmoPaq)} paq` : ''}`),
 
-    h('div', { marginTop: 28, gap: 16 },
-      kpi('MAX', pct(g.pctMax), `esperado ${pct(g.esperado)}`, colMax),
-      kpi('OPEN', pct(g.pctOpen), `esperado ${pct(g.esperado)}`, colorRitmo(g.pctOpen, g.esperado)),
-      kpi('CHAMPIONS', pct(g.pctChamp), `esperado ${pct(g.esperado)}`, colorRitmo(g.pctChamp, g.esperado)),
+    h('div', { marginTop: 26, gap: 14 },
+      cajaRitmo('MAX · VENDIDO', g.maxV, g.maxO, esp, miles, ' paq'),
+      cajaRitmo('AL RITMO', ritmoPaq ?? 0, 0, null, miles, ' paq', 'deberían llevar a la fecha'),
+      cajaRitmo('FALTAN', falta, 0, null, miles, ' paq', g.porDiaTot ? `${miles(g.porDiaTot)} paq por día` : ' '),
     ),
-    h('div', { marginTop: 16, gap: 16 },
-      kpi('DÍA', pct(g.pctDia), `${g.metaCumplida}/${g.rutas.length} con meta`, cp(g.pctDia)),
-      kpi('OTC SEMANA', pct(g.pctOtcSem), g.otcSemO ? `${dineroCorto(g.otcSemV)} / ${dineroCorto(g.otcSemO)}` : '—', cp(g.pctOtcSem)),
-      kpi('SIN VUALA', g.svTotal ? `${g.svCubiertas}/${g.svTotal}` : '—', `rutas cubiertas · ${g.visitasHoy || 0} visitas c/compra`, g.svTotal && g.svCubiertas === g.svTotal ? C.verde : C.rojo),
+    h('div', { marginTop: 14, gap: 14 },
+      cajaRitmo('META OPEN', g.openO, g.openO, esp, miles, ' paq', `faltan ${miles(Math.max(0, g.openO - g.maxV))} paq`),
+      cajaRitmo('META CHAMPIONS', g.champO, g.champO, esp, miles, ' paq', `faltan ${miles(Math.max(0, g.champO - g.maxV))} paq`),
+      cajaRitmo('OTC SEMANA', g.otcSemV, g.otcSemO, null, dineroCorto),
     ),
 
-    tablaGrupo(g),
-    matrizMarcas({ marcas: g.marcas, rutas: g.rutasGrupo }, 'marcas', `MARCAS OPEN · % DEL PERIODO (ritmo ${pct(g.esperado)})`, g.esperado),
-    matrizMarcas({ marcas: g.marcasChamp, rutas: g.rutasGrupo }, 'marcas_champions', `CHAMPIONS · % DEL PERIODO (ritmo ${pct(g.esperado)})`, g.esperado),
-    matrizMarcas({ marcas: g.marcasDia, rutas: g.rutasGrupo }, 'marcas_dia', 'MARCAS · % DE HOY'),
+    tablaMesUnid(g),
+    matrizUnid(g.rutasGrupo, g.marcas, 'marcas', 'MARCAS OPEN · PAQUETES DEL MES (vendido / meta)', esp),
+    matrizUnid(g.rutasGrupo, g.marcasChamp, 'marcas_champions', 'CHAMPIONS · PAQUETES DEL MES (vendido / meta)', esp),
+    gd ? tablaDiaUnid(gd, `CIERRE DEL ${g.fecha ? fechaCorta(g.fecha).toUpperCase() : 'DÍA'} · VENDIDO / META DEL DÍA`) : null,
     retroGrupo(g),
   );
 }
@@ -639,6 +699,38 @@ function totalBox(etq, v, o, fmt = miles, sufijo = '') {
     h('div', { fontSize: 40, fontWeight: 800, color: colCumpl(v, o), marginTop: 2 }, `${fmt(v)}${sufijo}`),
     h('div', { fontSize: 19, color: C.gris }, o > 0 ? `de ${fmt(o)}${sufijo}` : ' '),
   );
+}
+
+
+function tablaDiaUnid(g, titulo) {
+  const abrevia = (n) => String(n).replace('BLOSSOM', 'BLOSS').replace('SUMMER', 'SUMM').replace(' MIX', '');
+  const cols = [['VOLUMEN', 112], ...g.claves.map((k) => [abrevia(g.nombres[k]), 98]), ['OTC $', 112], ['S/VUALA', 92], ['VISIT.', 80]];
+  const dineroK = (n) => dineroCorto(n);
+  return h('div', {
+      flexDirection: 'column', marginTop: 24, padding: '18px 14px 10px', borderRadius: 26,
+      background: C.panel, border: `2px solid ${C.borde}`,
+    },
+      h('div', { fontSize: 22, color: C.gris, letterSpacing: 3, marginBottom: 6, paddingLeft: 8 }, titulo),
+      h('div', { fontSize: 17, color: C.gris, padding: '8px 0' },
+        h('div', { width: 150, paddingLeft: 8 }, 'RUTA'),
+        ...cols.map(([c, w]) => h('div', { width: w, justifyContent: 'center' }, c)),
+      ),
+      ...g.rutas.map((r, i) => h('div', {
+        alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.08)',
+        background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.025)',
+      },
+        h('div', { width: 150, flexDirection: 'column', paddingLeft: 8 },
+          h('div', { fontSize: 26, fontWeight: 800 }, r.ruta),
+          h('div', { fontSize: 18, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
+        ),
+        celdaUnid(r.vol.v, r.vol.o, 112),
+        ...g.claves.map((k) => celdaUnid(r.marcas[k]?.v || 0, r.marcas[k]?.o || 0, 98)),
+        celdaUnid(r.otc.v, r.otc.o, 112, dineroK),
+        r.sv ? celdaUnid(r.sv.piezas, r.sv.minimo, 92, String) : h('div', { width: 92, justifyContent: 'center', color: C.gris }, '—'),
+        h('div', { width: 80, justifyContent: 'center', fontSize: 27, fontWeight: 800 }, r.vis === null ? '—' : String(r.vis)),
+      )),
+      h('div', { fontSize: 18, color: C.gris, padding: '10px 8px 0' }, 'Verde = ya cubrió la meta del día · ámbar = 80% o más · rojo = abajo'),
+    );
 }
 
 export function altoGrupoDia(g) {
@@ -672,31 +764,7 @@ function tarjetaGrupoDia(g) {
       ...g.marcasTot.map((m) => totalBox(m.nombre, m.v, m.o, miles)),
     ),
 
-    h('div', {
-      flexDirection: 'column', marginTop: 24, padding: '18px 14px 10px', borderRadius: 26,
-      background: C.panel, border: `2px solid ${C.borde}`,
-    },
-      h('div', { fontSize: 22, color: C.gris, letterSpacing: 3, marginBottom: 6, paddingLeft: 8 }, 'POR RUTA · VENDIDO HOY / META DEL DÍA'),
-      h('div', { fontSize: 17, color: C.gris, padding: '8px 0' },
-        h('div', { width: 150, paddingLeft: 8 }, 'RUTA'),
-        ...cols.map(([c, w]) => h('div', { width: w, justifyContent: 'center' }, c)),
-      ),
-      ...g.rutas.map((r, i) => h('div', {
-        alignItems: 'center', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.08)',
-        background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.025)',
-      },
-        h('div', { width: 150, flexDirection: 'column', paddingLeft: 8 },
-          h('div', { fontSize: 26, fontWeight: 800 }, r.ruta),
-          h('div', { fontSize: 18, color: C.gris }, r.nombre ? primerNombre(r.nombre, r.ruta) : ' '),
-        ),
-        celdaUnid(r.vol.v, r.vol.o, 112),
-        ...g.claves.map((k) => celdaUnid(r.marcas[k]?.v || 0, r.marcas[k]?.o || 0, 98)),
-        celdaUnid(r.otc.v, r.otc.o, 112, dineroK),
-        r.sv ? celdaUnid(r.sv.piezas, r.sv.minimo, 92, String) : h('div', { width: 92, justifyContent: 'center', color: C.gris }, '—'),
-        h('div', { width: 80, justifyContent: 'center', fontSize: 27, fontWeight: 800 }, r.vis === null ? '—' : String(r.vis)),
-      )),
-      h('div', { fontSize: 18, color: C.gris, padding: '10px 8px 0' }, 'Verde = ya cubrió la meta del día · ámbar = 80% o más · rojo = abajo'),
-    ),
+    tablaDiaUnid(g, 'POR RUTA · VENDIDO HOY / META DEL DÍA'),
 
     bajos.length ? h('div', {
       flexDirection: 'column', marginTop: 24, padding: '22px 28px', borderRadius: 26,
@@ -738,10 +806,12 @@ export default async function handler(req) {
 
   if (ruta === 'GRUPO') {
     if (!filas.length) return new Response('sin datos', { status: 404 });
-    const g = calcularGrupo(filas, await listaContactos(await configBot()));
+    const cts = await listaContactos(await configBot());
+    const g = calcularGrupo(filas, cts);
+    const gd = calcularGrupoDia(filas, cts);
     const fg = await cargarFuentes();
-    return new ImageResponse(tarjetaGrupo(g), {
-      width: 1080, height: altoGrupo(g), ...(fg.length ? { fonts: fg } : {}), emoji: 'twemoji',
+    return new ImageResponse(tarjetaGrupo(g, gd), {
+      width: 1080, height: altoGrupo(g, gd), ...(fg.length ? { fonts: fg } : {}), emoji: 'twemoji',
       headers: { 'Cache-Control': 'no-store' },
     });
   }
