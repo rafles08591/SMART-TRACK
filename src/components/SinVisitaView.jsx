@@ -13,11 +13,28 @@
    Día, y el vendedor puede descartar manualmente lo que quede — pero
    SOLO ese día.
 
-   El cruce cliente-a-cliente entre clientes_ruta.nombre y el campo
-   "cliente" que trae Mesa de Control/Avance del Día se hace por nombre
-   normalizado (mayúsculas, sin acentos, espacios colapsados) — si algún
-   día los nombres no calzan por venir muy distintos entre sistemas,
-   avisar para agregar otra forma de cruce (por código de cliente, etc.).
+   IDENTIDAD DEL CLIENTE = CÓDIGO (no el nombre)
+   ---------------------------------------------------------------------
+   Antes el cruce caía al nombre aunque el cliente tuviera código, y eso
+   fallaba de dos formas:
+     1) Un cliente que cambia de nombre (en clientes_ruta o en el reporte)
+        se tomaba como OTRO cliente → aparecía sin visita aunque sí se
+        visitó, o salía dos veces.
+     2) Dos clientes distintos con el mismo nombre (ej. dos "ABARROTES
+        LUPITA" con códigos diferentes) se mezclaban entre sí.
+   Ahora:
+     • Se cruza SIEMPRE por código normalizado (sin ceros a la izquierda).
+     • Si en visitasSemana hay varias entradas del mismo código (ej. una
+       guardada con el nombre viejo y otra con el nuevo), se FUSIONAN
+       (se juntan sus fechas de visita y el descarte manual).
+     • Las entradas sin código (las que solo vienen de Avance del Día) se
+       ligan a un código buscando su nombre en clientes_ruta de esa ruta —
+       solo si ese nombre es único en la ruta (si hay dos clientes con el
+       mismo nombre, no se adivina).
+     • El cruce por nombre queda solo como último recurso para entradas
+       sin código, y nunca contra un nombre repetido en la ruta.
+     • En clientes_ruta, si un mismo código viene repetido en el mismo
+       día (ej. con nombre viejo y nuevo), se cuenta una sola vez.
 
    Cómo se conecta:
      <SinVisitaView data={data} rol={rol} puesto={puesto} rutaPropia={rutaPropia} persistFresco={persistFresco} />
@@ -79,16 +96,18 @@ function nombreRutaBonito(ruta) {
 }
 function normalizarTexto(s) {
   return String(s || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .toUpperCase()
     .replace(/\s+/g, " ")
     .trim();
 }
 // Igual que en App.tsx: quita ceros a la izquierda para poder cruzar el
 // código de Mesa de Control contra codigo_cliente de clientes_ruta aunque
-// vengan con distinto formato (ej. "0010167065" vs "10167065").
+// vengan con distinto formato (ej. "0010167065" vs "10167065"). También
+// se pasa a mayúsculas y sin espacios (hay códigos alfanuméricos como
+// "ABC0003440" o "536H000127").
 function normalizarCodigo(c) {
-  return String(c || "").trim().replace(/^0+/, "");
+  return String(c || "").trim().toUpperCase().replace(/\s+/g, "").replace(/^0+/, "");
 }
 // Dado un ISO date y el lunes de su semana, regresa el nombre del día
 // ("Miércoles") — se usa para explicar en qué día SÍ se visitó a alguien
@@ -96,6 +115,57 @@ function normalizarCodigo(c) {
 function nombreDiaDeFecha(fechaISO, semanaInicio) {
   const idx = DIAS_SEMANA.findIndex((d) => sumarDiasISOLocal(semanaInicio, d.offset) === fechaISO);
   return idx >= 0 ? DIAS_SEMANA[idx].nombre : fechaISO;
+}
+
+// Junta dos registros de visita del MISMO cliente (mismo código).
+function unirFechas(a, b) {
+  return Array.from(new Set([...(a || []), ...(b || [])])).sort();
+}
+function fusionarInfo(a, b) {
+  if (!a) return { ...b };
+  if (!b) return { ...a };
+  return {
+    ...a,
+    ...b,
+    codigo: a.codigo || b.codigo || null,
+    nombre: b.nombre || a.nombre,
+    visitadoManual: !!(a.visitadoManual || b.visitadoManual),
+    fechasVisitado: unirFechas(a.fechasVisitado, b.fechasVisitado),
+    fechasVistas: unirFechas(a.fechasVistas, b.fechasVistas),
+  };
+}
+
+// Índice de visitas de una ruta/semana:
+//   porCodigo: código normalizado -> info fusionada
+//   porNombreSinCodigo: nombre -> info, SOLO de entradas que no traen código
+//                       y que no se pudieron ligar a un código.
+function indexarVisitas(entrada, nombreACodigo) {
+  const porCodigo = {};
+  const porNombreSinCodigo = {};
+  Object.values(entrada?.clientes || {}).forEach((info) => {
+    let cod = normalizarCodigo(info.codigo);
+    const nom = normalizarTexto(info.nombre);
+    // Entrada sin código (viene de Avance del Día): se liga al código del
+    // cliente con ese nombre en clientes_ruta, si el nombre es único.
+    if (!cod && nom && nombreACodigo && nombreACodigo[nom]) cod = nombreACodigo[nom];
+    if (cod) {
+      porCodigo[cod] = fusionarInfo(porCodigo[cod], { ...info, codigo: info.codigo || cod });
+    } else if (nom) {
+      porNombreSinCodigo[nom] = fusionarInfo(porNombreSinCodigo[nom], info);
+    }
+  });
+  return { porCodigo, porNombreSinCodigo };
+}
+
+// Busca el registro de visitas de un cliente de clientes_ruta.
+function buscarInfo(c, idx, nombresRepetidos) {
+  const cod = normalizarCodigo(c.codigo_cliente);
+  if (cod && idx.porCodigo[cod]) return idx.porCodigo[cod];
+  // Último recurso: entradas SIN código con el mismo nombre, y solo si ese
+  // nombre no lo comparten varios clientes de la ruta.
+  const nom = normalizarTexto(c.nombre);
+  if (!nom || nombresRepetidos.has(nom)) return null;
+  return idx.porNombreSinCodigo[nom] || null;
 }
 
 export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFresco }) {
@@ -154,12 +224,9 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   // ⚠️ Antes `semanaSeleccionada` se fijaba una sola vez al abrir la
   // pantalla y nunca se volvía a tocar — si alguien la dejaba abierta
   // cruzando el fin de semana (o el sábado tarde), se quedaba viendo la
-  // semana anterior para siempre, porque esa semana pasada seguía siendo
-  // una opción "válida" del selector (`semanasDisponibles.includes(...)`
-  // seguía dando true). Este efecto detecta cuándo la semana actual de
-  // verdad avanzó mientras la pantalla seguía abierta y, SOLO si seguían
-  // viendo "esta semana" por default (no si habían elegido a propósito
-  // otra semana pasada), la avanza sola a la nueva semana actual.
+  // semana anterior para siempre. Este efecto detecta cuándo la semana
+  // actual de verdad avanzó mientras la pantalla seguía abierta y, SOLO si
+  // seguían viendo "esta semana" por default, la avanza sola.
   const semanaActualRef = useRef(semanaActual);
   useEffect(() => {
     if (semanaActualRef.current !== semanaActual) {
@@ -172,10 +239,6 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   // el día de hoy (si es lunes-sábado), o "Total semana" el domingo.
   const nombreDiaHoy = DIAS_SEMANA[hoy.getDay() === 0 ? -1 : hoy.getDay() - 1]?.nombre || null;
   const [pestanaDia, setPestanaDia] = useState(nombreDiaHoy || "Total semana");
-  // Mismo problema que con la semana: si la pantalla se queda abierta de
-  // un día para otro, "hoy" avanza pero la pestaña seleccionada no lo hacía
-  // sola. Se avanza automáticamente solo si seguían en la pestaña de "hoy"
-  // por default (no si habían elegido otro día a propósito).
   const nombreDiaHoyRef = useRef(nombreDiaHoy);
   useEffect(() => {
     if (nombreDiaHoyRef.current !== nombreDiaHoy) {
@@ -196,12 +259,15 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
         const clave = `${ruta}|${semanaActual}`;
         const actual = fresca.visitasSemana || {};
         const entrada = actual[clave] || { ruta, semanaInicio: semanaActual, clientes: {}, fechasMesaControl: [] };
-        // Busca si ya existe una entrada para este cliente (por código o,
-        // si no, por nombre) antes de decidir bajo qué llave guardar.
+        // Busca si ya existe una entrada para este cliente. Con código se
+        // busca SOLO por código (así un cambio de nombre no crea otro
+        // cliente, y dos clientes con el mismo nombre no se pisan); sin
+        // código, por nombre entre las entradas que tampoco traen código.
         const nombreNorm = normalizarTexto(clienteNombre);
         const claveExistente = Object.keys(entrada.clientes).find((k) => {
           const info = entrada.clientes[k];
-          return (codigoNorm && normalizarCodigo(info.codigo) === codigoNorm) || normalizarTexto(info.nombre) === nombreNorm;
+          if (codigoNorm) return normalizarCodigo(info.codigo) === codigoNorm;
+          return !normalizarCodigo(info.codigo) && normalizarTexto(info.nombre) === nombreNorm;
         });
         const claveCliente = claveExistente || codigoNorm || clienteNombre;
         const clienteActual = entrada.clientes[claveCliente] || { codigo: codigoNorm || null, nombre: clienteNombre, visitado: false, ultimaFecha: hoyISO, fechasVistas: [], fechasVisitado: [] };
@@ -212,7 +278,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
               ...entrada,
               clientes: {
                 ...entrada.clientes,
-                [claveCliente]: { ...clienteActual, visitadoManual: visitado },
+                [claveCliente]: { ...clienteActual, codigo: clienteActual.codigo || codigoNorm || null, visitadoManual: visitado },
               },
             },
           },
@@ -238,75 +304,88 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const clientesRutaPorRutaYDia = useMemo(() => {
     if (!clientesRuta) return {};
     const mapa = {};
+    const vistosPorClave = {};
     clientesRuta.forEach((c) => {
       const diaNorm = normalizarTexto(c.dia);
       // El campo `dia` puede traer más de un nombre de día (ej.
-      // "LUNES,JUEVES" para clientes visitados 2x/semana) y/o texto extra
-      // pegado (ej. "MARTES, UNICA" con la frecuencia) — antes se exigía
-      // que el campo fuera EXACTAMENTE igual al nombre de un día, así que
-      // cualquier variante así hacía que el cliente se cayera de TODOS
-      // los días (no aparecía en ningún lado) o, según el orden de
-      // comparación, se agrupara bajo el día equivocado. Ahora se busca
-      // cada nombre de día como texto contenido dentro del campo (los 6
-      // nombres de día no se confunden entre sí como substring), y el
-      // cliente se asigna a TODOS los días que encuentre — no solo al
-      // primero.
+      // "LUNES,JUEVES") y/o texto extra (ej. "MARTES, UNICA"): se busca cada
+      // nombre de día como texto contenido y el cliente se asigna a TODOS
+      // los días que encuentre.
       const diasEncontrados = DIAS_SEMANA.filter((d) => diaNorm.includes(normalizarTexto(d.nombre)));
+      const cod = normalizarCodigo(c.codigo_cliente);
       diasEncontrados.forEach((diaMatch) => {
         const clave = `${c.ruta}|${diaMatch.nombre}`;
-        if (!mapa[clave]) mapa[clave] = [];
+        if (!mapa[clave]) { mapa[clave] = []; vistosPorClave[clave] = {}; }
+        // Mismo código repetido el mismo día (ej. una fila con el nombre
+        // viejo y otra con el nuevo) → se cuenta una sola vez; se queda el
+        // último nombre cargado.
+        if (cod && vistosPorClave[clave][cod] !== undefined) {
+          mapa[clave][vistosPorClave[clave][cod]] = c;
+          return;
+        }
+        if (cod) vistosPorClave[clave][cod] = mapa[clave].length;
         mapa[clave].push(c);
       });
     });
     return mapa;
   }, [clientesRuta]);
 
+  // Por ruta (J201…): nombre normalizado -> código, SOLO para nombres
+  // únicos; y el conjunto de nombres que comparten varios códigos.
+  const nombresPorRuta = useMemo(() => {
+    const res = {};
+    (clientesRuta || []).forEach((c) => {
+      const r = c.ruta;
+      if (!res[r]) res[r] = { codigosPorNombre: {} };
+      const nom = normalizarTexto(c.nombre);
+      const cod = normalizarCodigo(c.codigo_cliente);
+      if (!nom || !cod) return;
+      (res[r].codigosPorNombre[nom] = res[r].codigosPorNombre[nom] || new Set()).add(cod);
+    });
+    const salida = {};
+    Object.entries(res).forEach(([r, { codigosPorNombre }]) => {
+      const nombreACodigo = {};
+      const repetidos = new Set();
+      Object.entries(codigosPorNombre).forEach(([nom, set]) => {
+        if (set.size === 1) nombreACodigo[nom] = [...set][0];
+        else repetidos.add(nom);
+      });
+      salida[r] = { nombreACodigo, repetidos };
+    });
+    return salida;
+  }, [clientesRuta]);
+
   const visitasSemanaNorm = useMemo(() => {
     const mapa = {};
     Object.entries(visitasSemana).forEach(([clave, entrada]) => {
-      const porCodigo = {};
-      const porNombre = {};
-      Object.values(entrada.clientes || {}).forEach((info) => {
-        if (info.codigo) porCodigo[normalizarCodigo(info.codigo)] = info;
-        if (info.nombre) porNombre[normalizarTexto(info.nombre)] = info;
-      });
-      mapa[clave] = { porCodigo, porNombre };
+      const codigoRuta = String(entrada?.ruta || clave.split("|")[0] || "").replace("RUTA ", "");
+      mapa[clave] = indexarVisitas(entrada, nombresPorRuta[codigoRuta]?.nombreACodigo);
     });
     return mapa;
-  }, [visitasSemana]);
+  }, [visitasSemana, nombresPorRuta]);
 
   const rutasVisibles = esVendedor ? RUTAS.filter((r) => r === `RUTA ${rutaPropia}`) : RUTAS;
+  const VACIO = { porCodigo: {}, porNombreSinCodigo: {} };
 
   const tablero = useMemo(() => {
     if (!clientesRuta) return [];
     return rutasVisibles.map((ruta) => {
       const codigoRuta = ruta.replace("RUTA ", "");
-      const { porCodigo, porNombre } = visitasSemanaNorm[`${ruta}|${semana}`] || { porCodigo: {}, porNombre: {} };
+      const idx = visitasSemanaNorm[`${ruta}|${semana}`] || VACIO;
+      const repetidos = nombresPorRuta[codigoRuta]?.repetidos || new Set();
       const dias = diasCompletos.map((d) => {
         const asignados = clientesRutaPorRutaYDia[`${codigoRuta}|${d.nombre}`] || [];
         const pendientes = [];
         const fueraDeDia = [];
         asignados.forEach((c) => {
-          // Cruce principal por código (más confiable); si no hay
-          // coincidencia por código, se intenta por nombre (caso de
-          // clientes que solo aparecieron en Avance del Día, que no trae
-          // código).
-          const codigoClienteNorm = normalizarCodigo(c.codigo_cliente);
-          const info = (codigoClienteNorm && porCodigo[codigoClienteNorm]) || porNombre[normalizarTexto(c.nombre)];
+          const info = buscarInfo(c, idx, repetidos);
           if (!info) { pendientes.push(c); return; } // nunca apareció en ningún reporte
           if (info.visitadoManual) return; // descartado a mano, resuelto sin nota
           const fechasVisitado = info.fechasVisitado || [];
           if (fechasVisitado.includes(d.fecha)) return; // visitado justo su día -> resuelto sin nota
-          // ⚠️ Antes, si el cliente aparecía visitado CUALQUIER otro día de
-          // la semana, se quitaba de "pendientes" de este día (solo se
-          // anotaba en `fueraDeDia`) — eso contradice el diseño original
-          // ("cada día descuenta contra el listado de ESE día específico")
-          // y hacía que pareciera que ya se había visitado a todos con que
-          // aparecieran en el reporte de CUALQUIER día. Visitarlo otro día
-          // no resuelve la visita que le tocaba HOY — sigue pendiente para
-          // este día; que también se haya visitado otro día se deja nada
-          // más como nota informativa para Staff (fueraDeDia), sin sacarlo
-          // de pendientes.
+          // Visitarlo otro día no resuelve la visita que le tocaba ESTE día
+          // — sigue pendiente; que se haya visitado otro día queda como nota
+          // informativa para Staff (fueraDeDia).
           pendientes.push(c);
           if (fechasVisitado.length > 0) {
             const otraFecha = [...fechasVisitado].sort().find((f) => f !== d.fecha) || fechasVisitado[0];
@@ -318,42 +397,36 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
       const totalPendientesRuta = dias.reduce((s, d) => s + d.pendientes.length, 0);
       return { ruta, dias, totalPendientesRuta };
     });
-  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, diasCompletos, semana, rutasVisibles]);
+  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, nombresPorRuta, diasCompletos, semana, rutasVisibles]);
 
-  // Total de la SEMANA (pestaña "Total semana" y los KPIs de arriba): a
-  // diferencia de cada pestaña de día (que exige que la visita haya sido
-  // JUSTO ese día — ver `tablero` arriba), aquí sí cuenta como resuelto
-  // que se haya visitado CUALQUIER día de la semana, sin importar cuál —
-  // es el balance final: "¿a este cliente ya lo vieron esta semana o no?".
-  // Se deduplica por cliente (uno con 2 días asignados en la semana solo
-  // cuenta una vez).
+  // Total de la SEMANA: aquí sí cuenta como resuelto que se haya visitado
+  // CUALQUIER día de la semana. Se deduplica por cliente (por código).
   const tableroSemanal = useMemo(() => {
     if (!clientesRuta) return [];
     return rutasVisibles.map((ruta) => {
       const codigoRuta = ruta.replace("RUTA ", "");
-      const { porCodigo, porNombre } = visitasSemanaNorm[`${ruta}|${semana}`] || { porCodigo: {}, porNombre: {} };
+      const idx = visitasSemanaNorm[`${ruta}|${semana}`] || VACIO;
+      const repetidos = nombresPorRuta[codigoRuta]?.repetidos || new Set();
       const vistos = new Set();
       const pendientesSemana = [];
       let totalAsignadosSemana = 0;
       diasCompletos.forEach((d) => {
         const asignados = clientesRutaPorRutaYDia[`${codigoRuta}|${d.nombre}`] || [];
         asignados.forEach((c) => {
-          const idCliente = normalizarCodigo(c.codigo_cliente) || normalizarTexto(c.nombre);
+          const idCliente = normalizarCodigo(c.codigo_cliente) || `N:${normalizarTexto(c.nombre)}`;
           if (vistos.has(idCliente)) return;
           vistos.add(idCliente);
           totalAsignadosSemana++;
-          const codigoClienteNorm = normalizarCodigo(c.codigo_cliente);
-          const info = (codigoClienteNorm && porCodigo[codigoClienteNorm]) || porNombre[normalizarTexto(c.nombre)];
+          const info = buscarInfo(c, idx, repetidos);
           if (!info) { pendientesSemana.push(c); return; } // nunca apareció en ningún reporte
           if (info.visitadoManual) return; // descartado a mano
-          const fechasVisitado = info.fechasVisitado || [];
-          if (fechasVisitado.length > 0) return; // se visitó algún día de la semana -> resuelto para el total
+          if ((info.fechasVisitado || []).length > 0) return; // se visitó algún día de la semana
           pendientesSemana.push(c); // nunca visitado ningún día
         });
       });
       return { ruta, pendientesSemana, totalAsignadosSemana };
     });
-  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, diasCompletos, semana, rutasVisibles]);
+  }, [clientesRuta, clientesRutaPorRutaYDia, visitasSemanaNorm, nombresPorRuta, diasCompletos, semana, rutasVisibles]);
 
   const pendientesSemanaPorRuta = useMemo(() => {
     const mapa = {};
@@ -368,6 +441,9 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
     () => rutasVisibles.map((ruta) => ({ ruta, fechasSubidas: (visitasSemana[`${ruta}|${semana}`]?.fechasMesaControl) || [] })),
     [visitasSemana, semana, rutasVisibles]
   );
+
+  // Llave estable para cada fila de cliente (código si hay; si no, nombre).
+  const llaveCliente = (c) => normalizarCodigo(c.codigo_cliente) || `N:${c.nombre}`;
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
@@ -397,7 +473,6 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
           {[...diasCompletos.map((d) => d.nombre), "Total semana"].map((nombreTab) => {
             const activa = pestanaDia === nombreTab;
-            const dCorrespondiente = diasCompletos.find((d) => d.nombre === nombreTab);
             const conteoTab = nombreTab === "Total semana"
               ? totalPendientes
               : tablero.reduce((s, r) => s + (r.dias.find((d) => d.dia === nombreTab)?.pendientes.length || 0), 0);
@@ -508,10 +583,8 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
               {esVendedor ? "No tienes clientes sin visita esta semana." : "Ninguna ruta tiene clientes sin visita esta semana."}
             </div>
           ) : (() => {
-            // La pestaña "Total semana" NO es simplemente juntar los días
-            // (eso duplicaría/mostraría distinto al KPI de arriba, que ya
-            // usa el criterio semanal deduplicado) — arma un único bloque
-            // "día" sintético con la lista semanal ya calculada arriba.
+            // "Total semana" arma un único bloque "día" sintético con la lista
+            // semanal ya deduplicada (mismo criterio que el KPI de arriba).
             const diasFiltrados = (r) => {
               if (pestanaDia === "Total semana") {
                 const info = pendientesSemanaPorRuta[r.ruta] || { pendientes: [], totalAsignados: 0 };
@@ -520,8 +593,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
               }
               return r.dias.filter((d) => d.dia === pestanaDia);
             };
-            const rutasBase = esVendedor ? tablero : tablero;
-            const rutasParaMostrar = rutasBase
+            const rutasParaMostrar = tablero
               .map((r) => ({ ...r, diasVisibles: diasFiltrados(r).filter((d) => d.pendientes.length > 0 || (!esVendedor && d.fueraDeDia.length > 0)) }))
               .filter((r) => esVendedor || r.diasVisibles.length > 0)
               .sort((a, b) => {
@@ -567,8 +639,13 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                               {d.pendientes.map((c) => {
                                 const idGuardado = normalizarCodigo(c.codigo_cliente) || c.nombre;
                                 return (
-                                  <div key={c.codigo_cliente || c.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.cardSoft, borderRadius: 8, gap: 10, flexWrap: "wrap" }}>
-                                    <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+                                  <div key={llaveCliente(c)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.cardSoft, borderRadius: 8, gap: 10, flexWrap: "wrap" }}>
+                                    <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {c.nombre}
+                                      {!esVendedor && c.codigo_cliente && (
+                                        <span style={{ fontSize: 11, color: T.muted, marginLeft: 6 }}>· {c.codigo_cliente}</span>
+                                      )}
+                                    </span>
                                     {puedeMarcarManual && (
                                       <button
                                         onClick={() => marcarVisitaManual(r.ruta, c.codigo_cliente, c.nombre, true)}
@@ -588,12 +665,8 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                             </div>
                           </>
                         )}
-                        {/* La sección "visitado otro día" (fueraDeDia) solo se
-                            muestra a Staff (Supervisor-1/Gerente), como
-                            referencia de supervisión. Al vendedor no le sirve
-                            de nada ver algo que ya está resuelto — solo le
-                            confunde y le hace parecer que le falta más de lo
-                            que realmente le falta. */}
+                        {/* "Visitado otro día" (fueraDeDia) solo para Staff, como
+                            referencia de supervisión. */}
                         {!esVendedor && d.fueraDeDia.length > 0 && (
                           <>
                             {d.pendientes.length === 0 && (
@@ -603,7 +676,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
                             )}
                             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                               {d.fueraDeDia.map((c) => (
-                                <div key={c.codigo_cliente || c.nombre} style={{ padding: "8px 10px", background: "rgba(242,177,52,0.08)", borderRadius: 8, border: `1px dashed ${T.primary}` }}>
+                                <div key={llaveCliente(c)} style={{ padding: "8px 10px", background: "rgba(242,177,52,0.08)", borderRadius: 8, border: `1px dashed ${T.primary}` }}>
                                   <div style={{ fontSize: 13 }}>{c.nombre}</div>
                                   <div style={{ fontSize: 11, color: T.primary, marginTop: 2 }}>
                                     Visitado el {c.fechaVisitaReal} ({c.diaVisitaReal}) — no fue su día asignado ({d.dia})
