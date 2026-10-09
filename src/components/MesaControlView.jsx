@@ -8,13 +8,16 @@ import {
 } from "../constants";
 import {
   money, unidades, metaColor, analizarMesaControl, calcularResumenPedidos,
-  calcularVisitasVsObjetivo, calcularClientesFaltantes, todayISO,
+  calcularVisitasVsObjetivo, todayISO,
   formatCrono,
 } from "../utils";
 import { esDeEsteAno, esVencido, diasParaVencer, aFecha } from "../carteraVencidaParser";
 import { KpiCard, BotonGuardarImagen } from "./ui";
 import { useCapturaImagen } from "./hooks";
 import TiemposView, { supabaseTiempos } from "./TiemposView";
+// "Clientes no visitados" ahora se calcula por CÓDIGO de cliente y valida
+// contra las 3 fuentes: Mesa de Control, Avance del Día y Visitas NUR.
+import { calcularClientesFaltantesPorCodigo } from "../clientesFaltantesPorCodigo";
 
 // html2canvas solo entiende colores en formato rgb()/rgba()/hex. Si el CSS
 // del proyecto usa formatos modernos (oklch(), color-mix(), variables CSS,
@@ -367,6 +370,8 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
   const [faltantesInfo, setFaltantesInfo] = useState(null);
   const [faltantesCargando, setFaltantesCargando] = useState(false);
 
+  // "Clientes no visitados": cruza por CÓDIGO y valida contra Mesa de
+  // Control + Avance del Día + Visitas NUR (data.visitasSemana).
   useEffect(() => {
     let activo = true;
     const fecha = analisis?.fecha || todayISO();
@@ -375,14 +380,14 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
       return;
     }
     setFaltantesCargando(true);
-    calcularClientesFaltantes(nombreRuta, mesaControl, fecha).then((res) => {
+    calcularClientesFaltantesPorCodigo(nombreRuta, mesaControl, fecha, data?.visitasSemana).then((res) => {
       if (activo) {
         setFaltantesInfo(res);
         setFaltantesCargando(false);
       }
     });
     return () => { activo = false; };
-  }, [nombreRuta, mesaControl, analisis?.fecha]);
+  }, [nombreRuta, mesaControl, analisis?.fecha, data?.visitasSemana]);
   const capturaRef = useRef(null);
 
   const [mostrarDetalleSalida, setMostrarDetalleSalida] = useState(false);
@@ -877,8 +882,13 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
                 <div className="mono" style={{ fontSize: 22 }}>{faltantesInfo.totalDebia}</div>
               </div>
               <div>
-                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Visitados (Mesa Control)</div>
+                <div style={{ fontSize: 12, color: "#9AA7BD" }}>Visitados</div>
                 <div className="mono" style={{ fontSize: 22, color: "#3DDC97" }}>{faltantesInfo.totalVisitados}</div>
+                {faltantesInfo.porFuente && (
+                  <div style={{ fontSize: 10.5, color: "#9AA7BD" }}>
+                    MC {faltantesInfo.porFuente.mesaControl} · Avance/NUR +{faltantesInfo.porFuente.otrasFuentes}
+                  </div>
+                )}
               </div>
               <div>
                 <div style={{ fontSize: 12, color: "#9AA7BD" }}>Faltantes</div>
@@ -886,6 +896,12 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
                   {faltantesInfo.faltantes.length}
                 </div>
               </div>
+              {faltantesInfo.visitasFueraDeLista > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, color: "#9AA7BD" }}>Fuera de su listado</div>
+                  <div className="mono" style={{ fontSize: 22, color: "#F2B134" }}>{faltantesInfo.visitasFueraDeLista}</div>
+                </div>
+              )}
             </div>
 
             {faltantesInfo.error && (
@@ -912,12 +928,12 @@ export default function MesaControlView({ data, analisis, nombreRuta, nombreVend
             ) : faltantesInfo.faltantes.length > 0 ? (
               <div style={{ maxHeight: 320, overflowY: "auto" }}>
                 {faltantesInfo.faltantes.map((c, i) => (
-                  <div key={c.codigo_cliente} style={{ 
-                    display: "flex", 
-                    justifyContent: "space-between", 
-                    padding: "6px 0", 
+                  <div key={c.codigo_cliente || c.nombre} style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "6px 0",
                     borderBottom: "1px solid #1E2A42",
-                    fontSize: 13 
+                    fontSize: 13
                   }}>
                     <span>{i + 1}. {c.nombre}</span>
                     <span className="mono" style={{ color: "#9AA7BD", marginLeft: 12 }}>{c.codigo_cliente}</span>
