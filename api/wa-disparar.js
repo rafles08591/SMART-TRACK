@@ -1,10 +1,12 @@
-// api/wa-disparar.js — la app lo llama cuando Gerente / Supervisor cargan el
-// "Avance del día". Verifica que quien llama tenga sesión válida de SMART-TRACK
-// y avisa a n8n (flujo 4) para que mande las tarjetas del avance del día.
+// api/wa-disparar.js — dispara el flujo 4 de n8n (tarjetas del "Avance del día").
 //
-//   POST /api/wa-disparar   body { tipo: "dia" }   header Authorization: Bearer <token de sesión Supabase>
+// Dos formas de llamarlo:
+//   1) Desde la app (Gerente / Supervisor):
+//        POST /api/wa-disparar   body { tipo: "dia" }   header Authorization: Bearer <token de sesión Supabase>
+//   2) Llamada interna (robot de PowerStreet, trigger de Supabase, etc.), sin sesión:
+//        POST /api/wa-disparar   body { tipo: "dia", por: "robot" }   header x-bot-token: <BOT_TOKEN>
 //
-// Variable de entorno requerida en Vercel: N8N_WEBHOOK_DIA (Production URL del webhook del flujo 4)
+// Variables de entorno en Vercel: N8N_WEBHOOK_DIA (Production URL del webhook del flujo 4), BOT_TOKEN
 
 import { configBot } from './_wa-lib.js';
 
@@ -26,10 +28,24 @@ async function usuarioDeSesion(req) {
   return res.json();
 }
 
+// Comparación en tiempo constante para no filtrar el token por diferencias de tiempo
+function mismoToken(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function esLlamadaInterna(req) {
+  return mismoToken(req.headers.get('x-bot-token') || '', process.env.BOT_TOKEN || '');
+}
+
 export default async function handler(req) {
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
-  const user = await usuarioDeSesion(req);
-  if (!user?.id) return json({ error: 'sesión inválida' }, 401);
+
+  const interna = esLlamadaInterna(req);
+  const user = interna ? null : await usuarioDeSesion(req);
+  if (!interna && !user?.id) return json({ error: 'sesión inválida' }, 401);
 
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
@@ -41,10 +57,12 @@ export default async function handler(req) {
   const destino = process.env.N8N_WEBHOOK_DIA;
   if (!destino) return json({ ok: false, error: 'Falta la variable N8N_WEBHOOK_DIA en Vercel' }, 500);
 
+  const por = interna ? String(body.por || 'sistema').slice(0, 60) : (user.email || user.id);
+
   const r = await fetch(destino, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
-    body: JSON.stringify({ tipo: 'dia', por: user.email || user.id, en: new Date().toISOString() }),
+    body: JSON.stringify({ tipo: 'dia', por, en: new Date().toISOString() }),
   });
   return json({ ok: r.ok, enviado: r.ok, status: r.status });
 }
