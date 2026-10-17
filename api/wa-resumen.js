@@ -391,9 +391,18 @@ async function modoBot(req) {
     const texto = c.tipo === 'equipo'
       ? (av ? textoRetoTabla(av) : textoRetoAnuncio(reto))
       : (av ? textoRetoVendedor(av, c.ruta) : textoRetoVendedor(reto, c.ruta, 'anuncio')) || textoRetoAnuncio(reto);
-    return responder({ tipo: 'texto', texto });
+    return responder({ tipo: 'texto', texto: c.tipo === 'equipo' ? `A la orden, ${tratoDe(c)} 🫡\n\n${texto}` : texto });
   }
-  if (c.tipo === 'equipo') return botEquipo(req, c, cmd, cfg, responder);
+  if (c.tipo === 'equipo') {
+    // Respuestas fijas al jefe / supervisores: con "A la orden, jefe/supervisor" al inicio
+    const saludo = `A la orden, ${tratoDe(c)} 🫡`;
+    const alJefe = (extra) => responder({
+      ...extra,
+      ...(extra.texto ? { texto: `${saludo}\n\n${extra.texto}` } : {}),
+      ...(extra.caption ? { caption: `${saludo}\n\n${extra.caption}` } : {}),
+    });
+    return botEquipo(req, c, cmd, cfg, alJefe);
+  }
   if (cmd === 'riesgo') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
   if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
 
@@ -471,6 +480,17 @@ const TONOS = {
   picante: 'Habla como vendedor de ruta mexicano bien entrón: directo, con carrilla pesada, albures ligeros y groserías comunes (güey, cabrón, chingón, a huevo, no mames, ponte las pilas). Si el vendedor te insulta, regrésale la carrilla con humor y llévalo a sus números.',
 };
 
+// Cómo se le dice a cada contacto de tipo Equipo (por los últimos 4 dígitos de su teléfono).
+// Quien no esté en la lista y sea Equipo recibe "supervisor".
+const TRATO_EQUIPO = { '1493': 'jefe', '8737': 'supervisor' };
+const tratoDe = (c) => TRATO_EQUIPO[String(c?.telefono || '').slice(-4)] || 'supervisor';
+
+const tonoEquipo = (titulo) => [
+  `Le hablas a tu ${titulo.toUpperCase()}. Trátalo con mucho respeto y disposición, como un asistente leal.`,
+  `Empieza SIEMPRE con "Sí, ${titulo}." o "A la orden, ${titulo}." y dile "${titulo}" (nunca por su nombre de pila ni "güey/compa").`,
+  'CERO groserías, cero albures y cero carrilla hacia él. Español mexicano formal pero cálido.',
+].join(' ');
+
 async function contextoDatos(c) {
   const hoy = fechaMX();
   if (c.tipo === 'equipo') {
@@ -504,17 +524,22 @@ async function respuestaIA(c, texto, cfg) {
   if (!key) return fallback;
   try {
     const datos = await contextoDatos(c);
-    const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+    const esJefe = c.tipo === 'equipo';
+    const titulo = tratoDe(c);
+    // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
+    const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
     const sistema = [
       'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
       tono,
       'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
-      'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
+      esJefe
+        ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
+        : 'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
       'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
       'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
-      `Te habla: ${c.nombre || 'un vendedor'} (${c.tipo === 'equipo' ? 'supervisor/gerente' : 'ruta ' + claveRuta(c.ruta)}).`,
+      `Te habla: ${c.nombre || 'un vendedor'} (${esJefe ? `tu ${titulo}` : 'ruta ' + claveRuta(c.ruta)}).`,
       `Datos (JSON): ${JSON.stringify(datos)}`,
     ].join('\n');
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
