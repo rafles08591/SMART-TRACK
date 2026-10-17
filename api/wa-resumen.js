@@ -108,6 +108,7 @@ function comando(texto) {
   const t = normalizar(texto).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!t || t.split(' ').length > 3) return 'nada';
   if (/^(menu|ayuda|bot|comandos|opciones)$/.test(t)) return 'menu';
+  if (/\b(actualiza|actualizar|actualizate|actualizalo|reinicia|reiniciar|reiniciate|refresca)\b/.test(t)) return 'actualizar';
   if (/\b(riesgo|alerta|alertas|focos|apoyo)\b/.test(t)) return 'riesgo';
   if (/\b(reto|retos|concurso|competencia)\b/.test(t)) return 'reto';
   if (/\b(marcas?|ice|bloss|summ|faronet)\b/.test(t)) return 'marcas';
@@ -379,6 +380,16 @@ async function modoBot(req) {
   }
 
   const cmd = comando(body.texto);
+  // 🔄 "Robotina actualiza": solo jefe / supervisores. n8n reinicia el robot de PowerStreet al ver tipo 'actualizar'.
+  if (cmd === 'actualizar') {
+    if (c.tipo !== 'equipo') {
+      return responder({ tipo: 'texto', texto: '🔒 Solo el jefe o un supervisor me pueden pedir que actualice. Pídeselo a tu supervisor.' });
+    }
+    return responder({
+      tipo: 'actualizar',
+      texto: `A la orden, ${tratoDe(c)} 🫡\n\n🔄 Ya arranqué la actualización: entro a PowerStreet y cargo Avance y OTC en SMART-TRACK. En unos minutos llegan las tarjetas.`,
+    });
+  }
   // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
   if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
   if (cmd === 'reto') {
