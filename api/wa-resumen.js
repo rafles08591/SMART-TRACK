@@ -5,7 +5,9 @@
 //   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA (la dispara la app al cargar el avance)
 //   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a vendedores que van abajo hoy
 //   GET  /api/wa-resumen?modo=riesgo     → (prueba) texto de Rutas en riesgo para supervisores
-//   POST /api/wa-resumen?modo=bot        → body { numero, texto }  → respuesta del bot
+//   POST /api/wa-resumen?modo=bot        → body { numero, texto, grupo? }  → respuesta del bot
+//                                          (con grupo = …@g.us contesta en el grupo mencionando a quien preguntó)
+//   GET  /api/wa-resumen?modo=retro_grupo → retro de cada hora al grupo (9 am – 8 pm), candidatos a la Tercera Mano
 //   GET  /api/wa-resumen?modo=diag       → diagnóstico
 //
 // Todas requieren el header  x-bot-token: <BOT_TOKEN>
@@ -74,7 +76,7 @@ const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\
 
 // ------------------------------------------------------------------ menús
 const MENU_VENDEDOR = [
-  '🤖 *Bot SMART-TRACK*',
+  '🤖 *ROBOTINA · SMART-TRACK*',
   'Escríbeme una palabra:',
   '',
   '• *avance* – tu tarjeta con los números',
@@ -86,7 +88,7 @@ const MENU_VENDEDOR = [
 ].join('\n');
 
 const MENU_EQUIPO = [
-  '🤖 *Bot SMART-TRACK · Equipo*',
+  '🤖 *ROBOTINA · Equipo*',
   'Escríbeme una palabra:',
   '',
   '• *avance* – tarjeta del equipo completo',
@@ -350,10 +352,25 @@ async function modoBot(req) {
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
   const numero = String(body.numero || '').replace(/\D/g, '');
-  const responder = (extra) => json({ numero, ...extra });
+  // Mensaje desde el GRUPO: se contesta en el grupo, mencionando a quien preguntó.
+  const grupo = /@g\.us$/.test(String(body.grupo || '')) ? String(body.grupo) : null;
+  const tag = grupo ? mencion(numero) : null;
+  const responder = (extra) => {
+    if (!grupo || extra.tipo === 'ninguno') return json({ numero, ...extra });
+    const pre = `@${tag} `;
+    return json({
+      ...extra,
+      numero: grupo,
+      mencionados: [tag],
+      ...(extra.texto ? { texto: pre + extra.texto } : {}),
+      ...(extra.caption ? { caption: pre + extra.caption } : {}),
+    });
+  };
   const cfg = await configBot();
 
   const c = await contactoPorTelefono(numero, cfg);
+  // En el grupo, a quien no está dado de alta simplemente no se le contesta.
+  if (!c && grupo) return responder({ tipo: 'ninguno' });
   if (!c) {
     return responder({
       tipo: 'texto',
@@ -489,7 +506,7 @@ async function respuestaIA(c, texto, cfg) {
     const datos = await contextoDatos(c);
     const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
     const sistema = [
-      'Eres el Bot de SMART-TRACK, el compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
+      'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
       tono,
       'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
@@ -516,6 +533,202 @@ async function respuestaIA(c, texto, cfg) {
   } catch {
     return fallback;
   }
+}
+
+// ------------------------------------------------------------------ 🔥 RETRO AL GRUPO (cada hora, 9 am – 8 pm)
+//   GET /api/wa-resumen?modo=retro_grupo            → solo manda si hay avance nuevo desde la última retro
+//   GET /api/wa-resumen?modo=retro_grupo&forzar=1   → manda aunque no haya avance nuevo (pruebas)
+// Señala a los más bajos en venta del día, Sin Vuala y reto del día como candidatos a
+// "La Tercera Mano del Pachuco", y a los que siguen en 0 desde que salieron del CLO.
+const GRUPO_RETRO = process.env.WA_GRUPO_RETRO || '5213221821493-1614005509@g.us';
+const RETRO_DESDE = 9, RETRO_HASTA = 20;          // 9 am a 8 pm (hora de México)
+const MIN_EN_CERO = Number(process.env.RETRO_MIN_EN_CERO || 45); // minutos desde la salida del CLO
+
+const n = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const mencion = (tel) => (tel ? `521${String(tel).replace(/\D/g, '').slice(-10)}` : null);
+
+function horaActualMX() {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(new Date());
+  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
+  return { h: g('hour') % 24, min: g('minute') };
+}
+
+// ⏱️ Hora de salida del CLO por ruta → { J201: 1760710000000, ... }
+// Sale del panel de Tiempos (su propio Supabase): tabla panel_kv, key "board-activo",
+// value = { fecha: 'YYYY-MM-DD', rutas: { J201: { areas: { salida_ruta: { ts } } } } }.
+// Si no hay dato, a los que van en 0 se les señala solo a partir de las 11 am.
+const TIEMPOS_URL = (process.env.TIEMPOS_SUPABASE_URL || 'https://nzbsmkscvzttekkwgkqz.supabase.co').replace(/\/+$/, '');
+const TIEMPOS_KEY = process.env.TIEMPOS_SUPABASE_KEY || 'sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU';
+
+async function salidasCLO(fecha) {
+  try {
+    const r = await fetch(`${TIEMPOS_URL}/rest/v1/panel_kv?key=eq.board-activo&select=value`, {
+      headers: { apikey: TIEMPOS_KEY },
+    });
+    if (!r.ok) return {};
+    const board = (await r.json())[0]?.value;
+    if (!board || board.fecha !== fecha) return {};
+    const out = {};
+    for (const [ruta, datos] of Object.entries(board.rutas || {})) {
+      const ts = datos?.areas?.salida_ruta?.ts;
+      if (ts) out[claveRuta(ruta)] = ts;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function datosRetro(fecha, cfg) {
+  const [filas, todos] = await Promise.all([filasDeFecha(fecha), listaContactos(cfg)]);
+  const vend = {};
+  for (const c of todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const retoPorRuta = Object.fromEntries((av?.tabla || []).map((r, i) => [r.ruta, { ...r, lugar: i + 1 }]));
+  const salidas = await salidasCLO(fecha);
+  const ahora = Date.now();
+
+  const rutas = filas.map((f) => {
+    const ruta = claveRuta(f.ruta);
+    const m = calcular(f, filas);
+    const sv = sinVualaDe(f);
+    const rt = retoPorRuta[ruta];
+    const c = vend[ruta];
+    const salida = salidas[ruta] ? new Date(salidas[ruta]) : null;
+    const minSalida = salida && !Number.isNaN(salida.getTime()) ? Math.round((ahora - salida.getTime()) / 60000) : null;
+    const pDia = m.pctDia;
+    const pSv = sv ? Math.min(100, (sv.piezas / sv.minimo) * 100) : null;
+    const pReto = rt ? Math.min(100, rt.pct) : null;
+    const partes = [pDia === null ? null : Math.min(100, pDia), pSv, pReto].filter((x) => x !== null);
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      venta_dia: n(m.ventaDia) || 0,
+      meta_dia: n(m.objDia),
+      pct_dia: pDia === null ? null : Math.round(pDia),
+      falta_dia: m.objDia ? Math.max(0, Math.round(m.objDia - (m.ventaDia || 0))) : null,
+      efectividad: m.efectividad === null ? null : Math.round(m.efectividad),
+      sin_vuala: sv ? { piezas: sv.piezas, minimo: sv.minimo, falta: sv.falta, cumple: sv.cumple } : null,
+      reto: rt ? { vendido: rt.v, meta: rt.meta, falta: Math.max(0, rt.meta - rt.v), cumple: rt.cumple, lugar: rt.lugar } : null,
+      salida_clo: salida ? horaMXCorta(salida) : null,
+      min_desde_salida: minSalida,
+      indice: partes.length ? Math.round(partes.reduce((s, x) => s + x, 0) / partes.length) : null,
+    };
+  }).filter((r) => vend[r.ruta]); // solo rutas con vendedor activo en SMART-TRACK
+
+  const { h } = horaActualMX();
+  const conDia = rutas.filter((r) => r.pct_dia !== null).sort((a, b) => a.pct_dia - b.pct_dia);
+  // En cero: ya salió del CLO hace ≥ 45 min y no ha vendido; sin dato de salida, solo desde las 11 am.
+  const enCero = rutas.filter((r) => r.venta_dia === 0 && (
+    r.min_desde_salida !== null ? r.min_desde_salida >= MIN_EN_CERO : (r.salida_clo === null && h >= 11)
+  ));
+  return {
+    fecha,
+    hora: `${h}:00`,
+    reto: av ? { marca: av.nombre, equipo: av.total, meta_equipo: av.metaTotal } : null,
+    lider_dia: conDia.length ? conDia[conDia.length - 1] : null,
+    tercera_mano: rutas.filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice).slice(0, 3),
+    abajo_venta: conDia.filter((r) => r.pct_dia < 100).slice(0, 3),
+    sin_vuala_pendiente: rutas.filter((r) => r.sin_vuala && !r.sin_vuala.cumple).sort((a, b) => b.sin_vuala.falta - a.sin_vuala.falta).slice(0, 3),
+    abajo_reto: rutas.filter((r) => r.reto && !r.reto.cumple).sort((a, b) => b.reto.lugar - a.reto.lugar).slice(0, 3),
+    en_cero: enCero,
+    rutas,
+  };
+}
+
+function horaMXCorta(d) {
+  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+}
+
+// Texto sin IA (respaldo si OpenAI falla)
+function textoRetroFijo(d) {
+  const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
+  const L = [`🔥 *RETRO ${d.hora}* · ¿Quién se lleva La Tercera Mano del Pachuco? 🖐️`];
+  if (d.lider_dia) L.push(`🥇 Manda ${d.lider_dia.ruta} ${d.lider_dia.nombre} con ${d.lider_dia.pct_dia}% del día.`);
+  if (d.en_cero.length) {
+    L.push('', '🥶 *Siguen en CERO:*');
+    for (const r of d.en_cero) L.push(`• ${tag(r)}${r.salida_clo ? ` salió del CLO a las ${r.salida_clo}` : ''} y no ha vendido nada. ¡Primer cliente YA!`);
+  }
+  if (d.tercera_mano.length) {
+    L.push('', '🖐️ *Candidatos a la Tercera Mano:*');
+    for (const r of d.tercera_mano) {
+      const det = [
+        r.pct_dia !== null ? `día ${r.pct_dia}% (faltan ${r.falta_dia} paq)` : null,
+        r.sin_vuala && !r.sin_vuala.cumple ? `Sin Vuala ${r.sin_vuala.piezas}/${r.sin_vuala.minimo}` : null,
+        r.reto && !r.reto.cumple ? `reto ${r.reto.vendido}/${r.reto.meta}` : null,
+      ].filter(Boolean).join(' · ');
+      L.push(`• ${tag(r)} – ${det}`);
+    }
+  }
+  return L.join('\n');
+}
+
+async function textoRetroIA(d, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK, y escribes en el GRUPO de WhatsApp de los vendedores de ruta de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Cada hora das retro del AVANCE DEL DÍA. La "Tercera Mano del Pachuco" es el castigo/burla para los 3 más bajos del día; los de "tercera_mano" son los candidatos.',
+    'Estructura (formato WhatsApp, *negritas*, máximo 14 líneas):',
+    '1) Una línea de arranque con la hora y el reconocimiento al líder del día.',
+    '2) Si hay "en_cero": señálalos primero, di a qué hora salieron del CLO si viene el dato, y exígeles su primera venta ya.',
+    '3) Los candidatos a la Tercera Mano: a cada uno dile en una línea qué le falta (venta del día, Sin Vuala y/o reto) con los números exactos y un consejo concreto y corto para salir de ahí.',
+    '4) Cierra con una frase corta que prenda al equipo.',
+    'Para mencionar a alguien escribe EXACTAMENTE su campo "mencion" precedido de @ (ej. @5213221234567). Si no tiene mencion, usa ruta y nombre.',
+    'Usa SOLO los números del JSON; nunca inventes cifras, premios ni castigos distintos. Paquetes = paq; Sin Vuala = piezas.',
+    'Límites: la carrilla es sobre los números y el trabajo, nunca sobre físico, familia, género, orientación, religión u origen; nada sexual; nada de amenazas.',
+    `Datos (JSON): ${JSON.stringify({ ...d, rutas: undefined })}`,
+  ].join('\n');
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.9,
+        max_tokens: 600,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro de esta hora para el grupo.' }],
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function modoRetroGrupo(req) {
+  const url = new URL(req.url);
+  const forzar = url.searchParams.get('forzar') === '1';
+  const cfg = await configBot();
+  if (cfg?.retroGrupoActivo === false) return json({ total: 0, mensajes: [], nota: 'retro del grupo desactivada' });
+  const { h } = horaActualMX();
+  if (!forzar && (h < RETRO_DESDE || h > RETRO_HASTA)) return json({ total: 0, mensajes: [], nota: `fuera de horario (${h} h)` });
+
+  const hoy = fechaMX();
+  const filasHoy = await filasDeFecha(hoy);
+  if (!filasHoy.length) return json({ total: 0, mensajes: [], nota: 'sin avance de hoy todavía' });
+
+  // Solo una retro por cada avance nuevo
+  const ultimo = filasHoy.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || '';
+  const previo = await leerEstado('retro_grupo');
+  if (!forzar && previo?.fecha === hoy && previo?.actualizado === ultimo) {
+    return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
+  }
+
+  const d = await datosRetro(hoy, cfg);
+  if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
+  const texto = (await textoRetroIA(d, cfg)) || textoRetroFijo(d);
+  // Solo se mencionan los números que de verdad aparecen en el texto
+  const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
+
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo });
+  return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
 }
 
 // ------------------------------------------------------------------ diagnóstico
@@ -558,7 +771,8 @@ export default async function handler(req) {
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
     if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
-    return json({ error: 'modo inválido (matutino | dia | alerta | bot | diag)' }, 400);
+    if (modo === 'retro_grupo') return await modoRetroGrupo(req);
+    return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
   } catch (e) {
     return json({ error: String(e.message || e) }, 500);
   }
