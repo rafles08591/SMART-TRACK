@@ -349,6 +349,28 @@ async function botEquipo(req, c, cmd, cfg, responder) {
   });
 }
 
+// ------------------------------------------------------------------ 🧠 memoria corta por persona
+// Se guarda en wa_estado (clave chat_<10 dígitos>): las últimas 4 vueltas, y caduca a los 15 min.
+const MEMORIA_MIN = 15, MEMORIA_VUELTAS = 4;
+const claveChat = (numero) => `chat_${String(numero || '').replace(/\D/g, '').slice(-10)}`;
+
+async function leerHistorial(numero) {
+  if (String(numero || '').replace(/\D/g, '').length < 10) return [];
+  const h = await leerEstado(claveChat(numero));
+  if (!h?.t || Date.now() - h.t > MEMORIA_MIN * 60000) return [];
+  return Array.isArray(h.msgs) ? h.msgs : [];
+}
+
+async function recordar(numero, historial, pregunta, respuesta) {
+  if (String(numero || '').replace(/\D/g, '').length < 10 || !respuesta) return;
+  const msgs = [
+    ...historial,
+    { role: 'user', content: String(pregunta).slice(0, 800) },
+    { role: 'assistant', content: String(respuesta).slice(0, 1500) },
+  ].slice(-MEMORIA_VUELTAS * 2);
+  await guardarEstado(claveChat(numero), { t: Date.now(), msgs });
+}
+
 async function modoBot(req) {
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
@@ -356,7 +378,12 @@ async function modoBot(req) {
   // Mensaje desde el GRUPO: se contesta en el grupo, mencionando a quien preguntó.
   const grupo = /@g\.us$/.test(String(body.grupo || '')) ? String(body.grupo) : null;
   const tag = grupo ? mencion(numero) : null;
-  const responder = (extra) => {
+  // 🧠 Memoria corta: lo que esta persona platicó con Robotina en los últimos 15 min
+  const historial = await leerHistorial(numero);
+  const responder = async (extra) => {
+    if (extra.tipo !== 'ninguno' && body.texto) {
+      await recordar(numero, historial, body.texto, extra.texto || extra.caption || '');
+    }
     if (!grupo || extra.tipo === 'ninguno') return json({ numero, ...extra });
     const pre = `@${tag} `;
     return json({
@@ -391,7 +418,7 @@ async function modoBot(req) {
     });
   }
   // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
-  if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
+  if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg, { historial, grupo }) });
   if (cmd === 'reto') {
     const hoy = fechaMX();
     const fecha = await fechaUltimoCorte({ hasta: hoy });
@@ -529,12 +556,13 @@ async function contextoDatos(c) {
   };
 }
 
-async function respuestaIA(c, texto, cfg) {
+async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
   const key = process.env.OPENAI_API_KEY;
   const fallback = 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.';
   if (!key) return fallback;
   try {
-    const datos = await contextoDatos(c);
+    const [datos, retroPrev] = await Promise.all([contextoDatos(c), grupo ? leerEstado('retro_grupo') : null]);
+    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX() ? String(retroPrev.texto) : '';
     const esJefe = c.tipo === 'equipo';
     const titulo = tratoDe(c);
     // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
@@ -551,6 +579,9 @@ async function respuestaIA(c, texto, cfg) {
       'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
       'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
       `Te habla: ${c.nombre || 'un vendedor'} (${esJefe ? `tu ${titulo}` : 'ruta ' + claveRuta(c.ruta)}).`,
+      'Conversación: los mensajes previos (si hay) son de los últimos 15 minutos con esta misma persona. Úsalos para entender respuestas cortas como "sí", "dale", "¿y la J206?" o "¿por qué?". Si contesta que sí a algo que ofreciste, cúmplelo de inmediato con los datos.',
+      'Al final puedes ofrecer UNA sola opción de seguimiento, solo si suma información nueva que no diste (p. ej. detalle por ruta, qué clientes le faltan, qué marca empujar). Nunca ofrezcas repetir lo que ya dijiste ni preguntes por preguntar; si ya diste todo lo útil, no ofrezcas nada.',
+      ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
       `Datos (JSON): ${JSON.stringify(datos)}`,
     ].join('\n');
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -560,7 +591,7 @@ async function respuestaIA(c, texto, cfg) {
         model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
         temperature: 0.8,
         max_tokens: 300,
-        messages: [{ role: 'system', content: sistema }, { role: 'user', content: String(texto || '').slice(0, 800) }],
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(texto || '').slice(0, 800) }],
       }),
     });
     if (!r.ok) return fallback;
@@ -763,7 +794,7 @@ async function modoRetroGrupo(req) {
   // Solo se mencionan los números que de verdad aparecen en el texto
   const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
 
-  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo });
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
   return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
 }
 
