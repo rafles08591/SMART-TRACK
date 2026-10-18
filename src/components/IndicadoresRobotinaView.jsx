@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA } from "../constants";
 
 // Indicadores que Robotina (bot de WhatsApp) sigue. Se guardan en
@@ -33,8 +33,22 @@ const COLUMNAS = [
 ];
 
 export default function IndicadoresRobotinaView({ data, persistFresco, puedeEditar = true }) {
-  const guardado = data?.whatsappBot?.indicadores || {};
+  // Cambios locales: no se guardan hasta dar clic en "Guardar"
+  const indGuardados = data?.whatsappBot?.indicadores || {};
+  const retroGuardada = data?.whatsappBot?.retroGrupoActivo !== false;
+  const [guardado, setLocal] = useState(indGuardados);
+  const [retroActiva, setRetroActiva] = useState(retroGuardada);
+  const [sucio, setSucio] = useState(false);
   const [guardando, setGuardando] = useState(false);
+  const [estado, setEstado] = useState("");
+
+  // Si alguien más guarda y aquí no hay cambios pendientes, refrescar
+  useEffect(() => {
+    if (sucio) return;
+    setLocal(data?.whatsappBot?.indicadores || {});
+    setRetroActiva(data?.whatsappBot?.retroGrupoActivo !== false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.whatsappBot]);
 
   const rallies = (data?.rallyOtcs || []).filter((r) => r.activo);
   const marca = (prefijo, m, nombre) => ({ clave: `${prefijo}_${m.key}`, nombre, unidad: "paq", def: DEF_MARCA, tipo: "marca" });
@@ -62,34 +76,42 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
     return g && typeof g[campo] === "boolean" ? g[campo] : f.def[campo];
   };
 
-  const retroActiva = data?.whatsappBot?.retroGrupoActivo !== false;
-  async function cambiarRetro() {
+  function cambiarRetro() {
     if (!puedeEditar || guardando) return;
-    setGuardando(true);
-    try {
-      await persistFresco((fresca) => ({
-        whatsappBot: { ...(fresca.whatsappBot || {}), retroGrupoActivo: !(fresca.whatsappBot?.retroGrupoActivo !== false) },
-      }));
-    } finally {
-      setGuardando(false);
-    }
+    setRetroActiva((v) => !v);
+    setSucio(true);
+    setEstado("");
   }
 
-  async function cambiar(f, campo) {
+  function cambiar(f, campo) {
     if (!puedeEditar || guardando) return;
+    setLocal((g) => {
+      const previo = { ...f.def, ...(g[f.clave] || {}) };
+      return { ...g, [f.clave]: { ...previo, [campo]: !previo[campo] } };
+    });
+    setSucio(true);
+    setEstado("");
+  }
+
+  function descartar() {
+    setLocal(indGuardados);
+    setRetroActiva(retroGuardada);
+    setSucio(false);
+    setEstado("");
+  }
+
+  async function guardar() {
+    if (!puedeEditar || guardando || !sucio) return;
     setGuardando(true);
+    setEstado("Guardando…");
     try {
-      await persistFresco((fresca) => {
-        const bot = fresca.whatsappBot || {};
-        const actual = bot.indicadores || {};
-        const previo = { ...f.def, ...(actual[f.clave] || {}) };
-        return {
-          whatsappBot: {
-            ...bot,
-            indicadores: { ...actual, [f.clave]: { ...previo, [campo]: !previo[campo] } },
-          },
-        };
-      });
+      await persistFresco((fresca) => ({
+        whatsappBot: { ...(fresca.whatsappBot || {}), indicadores: guardado, retroGrupoActivo: retroActiva },
+      }));
+      setSucio(false);
+      setEstado("✅ Guardado. Robotina ya usa estos indicadores.");
+    } catch (err) {
+      setEstado("❌ No se pudo guardar: " + (err?.message || err));
     } finally {
       setGuardando(false);
     }
@@ -99,7 +121,7 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
     <div className="card" style={{ padding: 16, marginBottom: 20 }}>
       <div className="display" style={{ fontSize: 14, color: "#E8EDF5", marginBottom: 4 }}>🤖 INDICADORES DE ROBOTINA</div>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 14 }}>
-        Prende o apaga qué sigue Robotina. Los cambios aplican desde la siguiente retro o pregunta.
+        Prende o apaga qué sigue Robotina y da clic en <b>Guardar</b> al final. Los cambios aplican desde la siguiente retro o pregunta.
         Los rallies activos aparecen solos aquí.
       </div>
       <button
@@ -174,6 +196,25 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
       {rallies.length === 0 && (
         <div style={{ fontSize: 11, color: "#5b6478", marginTop: 10 }}>
           No hay rallies activos. Cuando actives uno en la pestaña RALLY OTC aparecerá aquí.
+        </div>
+      )}
+      {puedeEditar && (
+        <div style={{ position: "sticky", bottom: 0, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 16, padding: "12px 0 4px", background: "linear-gradient(transparent, #0e1626 30%)" }}>
+          <button
+            onClick={guardar}
+            disabled={!sucio || guardando}
+            style={{ padding: "10px 22px", borderRadius: 12, border: "none", fontWeight: 800, cursor: sucio ? "pointer" : "default", background: "#22c55e", color: "#04130a", opacity: sucio && !guardando ? 1 : 0.45 }}
+          >
+            {guardando ? "Guardando…" : "Guardar"}
+          </button>
+          {sucio && !guardando && (
+            <button onClick={descartar} style={{ padding: "10px 16px", borderRadius: 12, border: "1px solid #334155", background: "transparent", color: "#cbd5e1", cursor: "pointer" }}>
+              Descartar cambios
+            </button>
+          )}
+          <span style={{ fontSize: 12, color: sucio ? "#f59e0b" : "#9AA7BD" }}>
+            {sucio ? "Tienes cambios sin guardar" : estado}
+          </span>
         </div>
       )}
     </div>
