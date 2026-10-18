@@ -8,6 +8,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NOMBRES, MARCAS_DIA } from "../constants";
 import { supabase } from "../supabaseClient";
+import IndicadoresRobotinaView from "./IndicadoresRobotinaView";
 
 // Deben coincidir con PLANTILLAS_DEFAULT de api/_wa-lib.js
 const PLANTILLAS_DEFAULT = {
@@ -426,7 +427,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
       {sucio && puedeEditar && <div style={S.pendiente}>Tienes cambios sin guardar</div>}
 
       <div style={S.tabs}>
-        {[["contactos", "📇 Contactos"], ["mensajes", "✏️ Mensajes"]].map(([k, l]) => (
+        {[["contactos", "📇 Contactos"], ["mensajes", "✏️ Mensajes"], ["robotina", "🤖 Robotina"]].map(([k, l]) => (
           <button key={k} onClick={() => setSeccion(k)} style={seccion === k ? S.tabOn : S.tab}>{l}</button>
         ))}
       </div>
@@ -536,6 +537,11 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
             al bot <i>avance</i>, <i>ranking</i>, <i>hoy</i> y <i>riesgo</i> del equipo completo. Con 🚨 activo también reciben las Rutas en riesgo a las 8 am y a las 3 pm.
           </div>
         </div>
+      )}
+
+      {seccion === "robotina" && (
+        // Se guarda al momento (no necesita "Guardar cambios")
+        <IndicadoresRobotinaView data={data} persistFresco={persistFresco} puedeEditar={puedeEditar} />
       )}
 
       {seccion === "mensajes" && (
