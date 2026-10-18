@@ -1,567 +1,1032 @@
-// @ts-nocheck
-import React, { useState, useRef } from "react";
-import { Target, Trash2, Plus, Calendar } from "lucide-react";
-import { NOMBRES } from "../constants";
-import { money, unidades, fechaHoyISO, metaColor } from "../utils";
-import { supabase } from "../supabaseClient";
-import { KpiCard, BotonGuardarImagen } from "./ui";
-import { useCapturaImagen } from "./hooks";
+// api/wa-resumen.js — arma los mensajes que n8n envía por Evolution API.
+//
+//   GET  /api/wa-resumen?modo=matutino   → tarjeta + texto para cada contacto (corte más reciente antes de hoy)
+//                                          vendedores: su tarjeta · equipo (Supervisor/Gerente): tarjeta del equipo
+//   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA (la dispara la app al cargar el avance)
+//   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a vendedores que van abajo hoy
+//   GET  /api/wa-resumen?modo=riesgo     → (prueba) texto de Rutas en riesgo para supervisores
+//   POST /api/wa-resumen?modo=bot        → body { numero, texto, grupo? }  → respuesta del bot
+//                                          (con grupo = …@g.us contesta en el grupo mencionando a quien preguntó)
+//   GET  /api/wa-resumen?modo=retro_grupo → retro de cada hora al grupo (9 am – 8 pm), candidatos a la Tercera Mano
+//   GET  /api/wa-resumen?modo=diag       → diagnóstico
+//
+// Todas requieren el header  x-bot-token: <BOT_TOKEN>
+// Contactos y textos se editan en SMART-TRACK (pestaña WhatsApp) → data.whatsappBot
 
-// Normaliza nombre de ruta para comparar:
-// "RUTA J201", "J201", "ruta j201" → "j201"
-function normalizarRuta(nombre) {
-  return String(nombre || "")
-    .trim()
-    .toLowerCase()
-    .replace(/^ruta\s+/i, "")
-    .replace(/\s+/g, " ");
+import {
+  autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
+  ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
+  configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
+  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo, calcularGrupoDia, varsGrupoDia,
+  calcularRiesgo, varsRiesgo, calcularRiesgoTarde, varsRiesgoTarde,
+  elegirReto, avanceReto, textoRetoAnuncio, textoRetoTabla, textoRetoVendedor,
+  rankingPaquetes, detectarRebases, textoRebase, leerEstado, guardarEstado,
+} from './_wa-lib.js';
+
+export const config = { runtime: 'edge' };
+
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
+
+function baseUrl(req) {
+  return (process.env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, '');
 }
 
-// Normaliza código de artículo: trim + mayúsculas, sin espacios.
-function normalizarCodigoArticulo(codigo) {
-  return String(codigo || "").trim().toUpperCase().replace(/\s+/g, "");
+async function urlTarjeta(req, ruta, fecha, actualizadoEn, tipo = '') {
+  const s = await firmar(tipo ? `${tipo.toUpperCase()}:${ruta}` : ruta, fecha);
+  const v = actualizadoEn ? new Date(actualizadoEn).getTime() : Date.now();
+  return `${baseUrl(req)}/api/tarjeta?ruta=${encodeURIComponent(ruta)}&f=${fecha}&s=${s}&v=${v}${tipo ? `&t=${tipo}` : ''}`;
 }
 
-function otcEnRango(data, rally, nombreRuta, desde, hasta) {
-  const codigosRaw = rally.codigosParticipantes || [];
-  const codigos = codigosRaw.map(normalizarCodigoArticulo).filter(Boolean);
-  const enPiezas = rally.unidad === "piezas";
-  const rutaNorm = normalizarRuta(nombreRuta);
+const plantilla = (cfg, tipo) => {
+  const t = cfg?.plantillas?.[tipo];
+  return typeof t === 'string' && t.trim() ? t : PLANTILLAS_DEFAULT[tipo];
+};
 
-  return (data.otcDia || [])
-    .filter((r) => {
-      // Match de ruta tolerante (con o sin prefijo "RUTA ", mayúsculas, espacios)
-      if (normalizarRuta(r.vendedor) !== rutaNorm) return false;
-      if (desde && r.fecha < desde) return false;
-      if (hasta && r.fecha > hasta) return false;
-      // Si hay códigos seleccionados, solo sumar esos. Si la lista está vacía, suma TODO el OTC.
-      if (codigos.length > 0) {
-        const cod = normalizarCodigoArticulo(r.codigoArticulo);
-        if (!cod || !codigos.includes(cod)) return false;
+const conAviso = (texto, cfg) => {
+  const aviso = String(cfg?.aviso || '').trim();
+  return aviso ? `${texto}\n\n📣 ${aviso}` : texto;
+};
+
+async function companerasDe(fecha, cache) {
+  if (!cache[fecha]) cache[fecha] = await filasDeFecha(fecha);
+  return cache[fecha];
+}
+
+// Fecha del corte más reciente (opcionalmente antes de hoy).
+async function fechaUltimoCorte({ antesDe = null, hasta = null } = {}) {
+  let q = 'resumen_vendedores?select=fecha&order=fecha.desc&limit=1';
+  if (antesDe) q += `&fecha=lt.${antesDe}`;
+  if (hasta) q += `&fecha=lte.${hasta}`;
+  const r = await sb(q);
+  return r[0]?.fecha || null;
+}
+
+// 🎯 Reto de una fecha: se elige con el corte anterior a esa fecha (siempre da lo mismo).
+async function retoDe(fecha, cfg, cache) {
+  if (!fecha || cfg?.retoActivo === false) return null;
+  const base = await fechaUltimoCorte({ antesDe: fecha });
+  if (!base) return null;
+  return elegirReto(await companerasDe(base, cache), cfg, fecha);
+}
+const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
+
+// ------------------------------------------------------------------ menús
+const MENU_VENDEDOR = [
+  '🤖 *ROBOTINA · SMART-TRACK*',
+  'Escríbeme una palabra:',
+  '',
+  '• *avance* – tu tarjeta con los números',
+  '• *hoy* – cómo vas en el día',
+  '• *ranking* – tu lugar en el equipo',
+  '• *clientes* – tus visitas',
+  '• *marcas* – cómo vas en cada marca',
+  '• *reto* – cómo vas en el reto del día',
+].join('\n');
+
+const MENU_EQUIPO = [
+  '🤖 *ROBOTINA · Equipo*',
+  'Escríbeme una palabra:',
+  '',
+  '• *avance* – tarjeta del equipo completo',
+  '• *ranking* – las 7 rutas ordenadas',
+  '• *hoy* – avance del día por ruta',
+  '• *riesgo* – rutas en riesgo y qué hacer con cada una',
+  '• *reto* – tabla del reto del día',
+].join('\n');
+
+function normalizar(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+// El número del bot es el de la empresa (también le escriben clientes), así que
+// SOLO se contesta a mensajes cortos que sean un comando. Todo lo demás se ignora.
+function comando(texto) {
+  const t = normalizar(texto).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.split(' ').length > 3) return 'nada';
+  if (/^(menu|ayuda|bot|comandos|opciones)$/.test(t)) return 'menu';
+  if (/\b(actualiza|actualizar|actualizate|actualizalo|reinicia|reiniciar|reiniciate|refresca)\b/.test(t)) return 'actualizar';
+  if (/\b(riesgo|alerta|alertas|focos|apoyo)\b/.test(t)) return 'riesgo';
+  if (/\b(reto|retos|concurso|competencia)\b/.test(t)) return 'reto';
+  if (/\b(marcas?|ice|bloss|summ|faronet)\b/.test(t)) return 'marcas';
+  if (/\b(avance|resumen|mes|cuota|numeros|meta|tarjeta|equipo)\b/.test(t)) return 'avance';
+  if (/\b(hoy|dia)\b/.test(t)) return 'hoy';
+  if (/\b(ranking|lugar|posicion|tabla)\b/.test(t)) return 'ranking';
+  if (/\b(clientes|visitas|efectividad)\b/.test(t)) return 'clientes';
+  return 'nada';
+}
+
+// ------------------------------------------------------------------ matutino
+async function modoMatutino(req) {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const [lista, ultimos, fechaEq] = await Promise.all([
+    contactos({ campo: 'matutino', cfg }),
+    ultimosPorRuta({ antesDe: hoy }),
+    fechaUltimoCorte({ antesDe: hoy }),
+  ]);
+  const todos = await listaContactos(cfg);
+  const cache = {};
+  const mensajes = [];
+  // 🎯 Reto de hoy + ganador del reto de ayer
+  let retoHoy = null, retoAyer = null;
+  if (fechaEq && cfg?.retoActivo !== false) {
+    const filasEq = await companerasDe(fechaEq, cache);
+    retoHoy = elegirReto(filasEq, cfg, hoy);
+    retoAyer = avanceReto(await retoDe(fechaEq, cfg, cache), filasEq, todos);
+  }
+  const anuncio = textoRetoAnuncio(retoHoy, retoAyer);
+
+  for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      if (!fechaEq) continue;
+      const filas = await companerasDe(fechaEq, cache);
+      if (!filas.length) continue;
+      const g = calcularGrupo(filas, todos);
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)), anuncio), cfg),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fechaEq, g.actualizado),
+      });
+      continue;
+    }
+    if (c.tipo === 'equipo') {
+      if (!fechaEq) continue;
+      const filas = await companerasDe(fechaEq, cache);
+      if (!filas.length) continue;
+      const eq = calcularEquipo(filas, todos);
+      mensajes.push({
+        ruta: 'EQUIPO',
+        tipo: 'equipo',
+        numero: destino(c),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), anuncio), cfg),
+        tarjeta_url: await urlTarjeta(req, 'EQUIPO', fechaEq),
+      });
+      continue;
+    }
+    const fila = ultimos[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, await companerasDe(fila.fecha, cache));
+    mensajes.push({
+      ruta: c.ruta,
+      tipo: 'vendedor',
+      numero: destino(c),
+      caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), textoRetoVendedor(retoHoy, c.ruta, 'anuncio')), cfg),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
+  }
+  // 🚨 Rutas en riesgo → solo texto, a Supervisor / Gerente
+  if (cfg?.riesgoActivo !== false && fechaEq) {
+    const sup = (await contactos({ campo: 'riesgo', cfg })).filter((c) => c.tipo === 'equipo');
+    if (sup.length) {
+      const filas = await companerasDe(fechaEq, cache);
+      if (filas.length) {
+        const rk = calcularRiesgo(filas, todos, umbralRiesgo(cfg));
+        for (const c of sup) {
+          mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), tarjeta_url: '', texto: textoRiesgo(cfg, rk, c) });
+        }
       }
-      return true;
-    })
-    .reduce((s, r) => {
-      // Piezas → Unidades<BR>Vendidas (campo unidadesVendidas)
-      // Dinero → TOTAL $ (campo monto)
-      if (enPiezas) return s + (Number(r.unidadesVendidas) || 0);
-      return s + (Number(r.monto) || 0);
-    }, 0);
+    }
+  }
+  return json({ fecha: hoy, total: mensajes.length, mensajes });
 }
 
-// Exportada: App.tsx la usa para mandar el avance del rally a Robotina (WhatsApp).
-export function calcularAvanceRallyRuta(data, rally, nombreRuta) {
-  const obj = rally.objetivos?.[nombreRuta] || { dia: 0, final: 0 };
-  const hoy = fechaHoyISO();
-  // El "avance del día" solo debe contar si HOY cae dentro de la vigencia
-  // del rally (fechaInicio → fechaFin). Si el rally todavía no empieza, o
-  // ya terminó, el avance del día debe ser 0 — aunque la ruta sí haya
-  // vendido OTC hoy por su cuenta (esa venta no es parte de ESTE rally).
-  const hoyEnVigencia = (!rally.fechaInicio || hoy >= rally.fechaInicio) && (!rally.fechaFin || hoy <= rally.fechaFin);
+const umbralRiesgo = (cfg) => (Number(cfg?.umbralRiesgo) > 0 ? Math.min(100, Number(cfg.umbralRiesgo)) : 95);
+
+function textoRiesgo(cfg, rk, c) {
+  const v = { ...varsRiesgo(rk), nombre: primerNombre(c?.nombre, '') || 'Equipo' };
+  if (!rk.enRiesgo.length) {
+    return `✅ *RUTAS EN RIESGO* · corte ${v.fecha || ''}\nNinguna 🙌 Las ${v.total_rutas} rutas proyectan cerrar arriba del ${v.umbral}.\nEquipo cierra en *${v.proyeccion_equipo || '—'}*.`;
+  }
+  return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
+}
+
+// ------------------------------------------------------------------ avance del día
+// Lo dispara la app cada vez que Gerente / Supervisor cargan el Avance del día.
+async function modoDia(req) {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  if (cfg?.avanceDiaActivo === false) return json({ fecha: hoy, total: 0, mensajes: [], nota: 'avance del día desactivado' });
+  const fecha = await fechaUltimoCorte({ hasta: hoy });
+  if (!fecha) return json({ fecha: hoy, total: 0, mensajes: [] });
+  const [lista, filas, todos] = await Promise.all([
+    contactos({ campo: 'dia', cfg }), filasDeFecha(fecha), listaContactos(cfg),
+  ]);
+  const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
+  const mensajes = [];
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const tablaReto = textoRetoTabla(av);
+  for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      // Al cargar avance: SOLO indicadores del día, en paquetes / piezas / pesos (sin %)
+      const g = calcularGrupoDia(filas, todos);
+      if (!g.rutas.length) continue;
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)), tablaReto),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
+      });
+      continue;
+    }
+    if (c.tipo === 'equipo') {
+      const eq = calcularEquipoDia(filas, todos);
+      if (!eq.rutasDia.length) continue;
+      mensajes.push({
+        ruta: 'EQUIPO', tipo: 'equipo', numero: destino(c),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }), tablaReto),
+        tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha, eq.actualizado, 'dia'),
+      });
+      continue;
+    }
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filas);
+    if (m.pctDia === null && !m.ventaDia) continue;
+    mensajes.push({
+      ruta: c.ruta, tipo: 'vendedor', numero: destino(c),
+      caption: junta(llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)), textoRetoVendedor(av, c.ruta)),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
+    });
+  }
+
+  // 🏁 Te rebasaron: se compara el ranking del día (paquetes) contra el avance anterior
+  let rebases = [];
+  if (cfg?.rebaseActivo !== false) {
+    const ahora = rankingPaquetes(filas);
+    const antes = await leerEstado('ranking_dia');
+    if (antes?.fecha === fecha) rebases = detectarRebases(antes.lista, ahora);
+    if (ahora.length) await guardarEstado('ranking_dia', { fecha, lista: ahora });
+    const nombres = {};
+    for (const c of todos) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = c.nombre;
+    const vend = (await contactos({ campo: 'rebase', cfg })).filter((c) => c.tipo === 'vendedor');
+    for (const r of rebases) {
+      for (const c of vend.filter((x) => claveRuta(x.ruta) === r.victima)) {
+        mensajes.push({
+          ruta: c.ruta, tipo: 'rebase', numero: destino(c), tarjeta_url: '',
+          texto: textoRebase(r, primerNombre(c.nombre, r.victima), nombres, cfg?.tonoBot || 'picante'),
+        });
+      }
+    }
+  }
+  return json({ fecha, total: mensajes.length, mensajes, rebases: rebases.length });
+}
+
+// ------------------------------------------------------------------ alerta
+async function modoAlerta() {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const umbral = Number(cfg?.umbralAlerta) > 0 ? Number(cfg.umbralAlerta) : 70;
+  const [lista, filasHoy, sup, todos] = await Promise.all([
+    contactos({ campo: 'alerta', cfg }), filasDeFecha(hoy), contactos({ campo: 'riesgo', cfg }), listaContactos(cfg),
+  ]);
+  const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
+  const mensajes = [];
+  for (const c of lista) {
+    if (c.tipo !== 'vendedor') continue;
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filasHoy);
+    const sv = sinVualaDe(fila);
+    const vaAbajo = m.pctDia !== null && m.pctDia < umbral;
+    const faltaSinVuala = sv && !sv.cumple;
+    if (!vaAbajo && !faltaSinVuala) continue;
+    const vars = varsDia(fila, m, filasHoy, c);
+    // Si solo le falta el Sin Vuala (la venta va bien), mensaje corto de retro.
+    const texto = vaAbajo
+      ? llenarPlantilla(plantilla(cfg, 'alerta'), vars)
+      : `⏰ *${vars.nombre}*, tu venta va bien (${vars.pct_dia || '—'}) 💪\n\n${vars.retro_sin_vuala}`;
+    mensajes.push({ ruta: c.ruta, numero: destino(c), texto });
+  }
+  // 🚨 Supervisor / Gerente: rutas que necesitan apoyo HOY
+  if (cfg?.riesgoActivo !== false && filasHoy.length) {
+    const rt = calcularRiesgoTarde(filasHoy, todos, umbral, umbralRiesgo(cfg));
+    if (rt.enRiesgo.length) {
+      for (const c of sup.filter((x) => x.tipo === 'equipo')) {
+        const texto = llenarPlantilla(plantilla(cfg, 'riesgo_tarde'), { ...varsRiesgoTarde(rt), nombre: primerNombre(c.nombre, '') || 'Equipo' });
+        mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), texto });
+      }
+    }
+  }
+  return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
+}
+
+// ------------------------------------------------------------------ bot
+async function botEquipo(req, c, cmd, cfg, responder) {
+  if (cmd === 'menu' || cmd === 'clientes' || cmd === 'marcas') return responder({ tipo: 'texto', texto: MENU_EQUIPO });
+  const hoy = fechaMX();
+  const fecha = await fechaUltimoCorte({ hasta: hoy });
+  if (!fecha) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados.' });
+  const filas = await filasDeFecha(fecha);
+  const eq = calcularEquipo(filas, await listaContactos(cfg));
+  const v = varsEquipo(eq);
+  const aviso = fecha === hoy ? '' : `\n\n_Los datos de hoy aún no se cargan; esto es del ${fechaCorta(fecha)}._`;
+
+  if (cmd === 'avance') {
+    return responder({
+      tipo: 'imagen',
+      caption: llenarPlantilla(plantilla(cfg, 'equipo'), { ...v, nombre: primerNombre(c.nombre, '') }),
+      tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha),
+    });
+  }
+  if (cmd === 'riesgo') {
+    const rk = calcularRiesgo(filas, await listaContactos(cfg), umbralRiesgo(cfg));
+    return responder({ tipo: 'texto', texto: textoRiesgo(cfg, rk, c) + aviso });
+  }
+  if (cmd === 'ranking') {
+    return responder({ tipo: 'texto', texto: `🏁 *Ranking del mes* · corte del ${v.fecha}\n\n${v.ranking}${aviso}` });
+  }
+  // hoy
+  const lineas = eq.rutas
+    .filter((r) => r.m.pctDia !== null)
+    .sort((a, b) => b.m.pctDia - a.m.pctDia)
+    .map((r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}: ${cantidad(r.m.ventaDia, r.m.unidad)} de ${cantidad(r.m.objDia, r.m.unidad)} (${pct(r.m.pctDia)})`);
+  return responder({
+    tipo: 'texto',
+    texto: `📦 *Avance del día* · ${v.fecha}\nEquipo: ${v.pct_dia_equipo || '—'}\n\n${lineas.join('\n') || 'Sin datos del día.'}${aviso}`,
+  });
+}
+
+// ------------------------------------------------------------------ 🧠 memoria corta por persona
+// Se guarda en wa_estado (clave chat_<10 dígitos>): las últimas 4 vueltas, y caduca a los 15 min.
+const MEMORIA_MIN = 15, MEMORIA_VUELTAS = 4;
+const claveChat = (numero) => `chat_${String(numero || '').replace(/\D/g, '').slice(-10)}`;
+
+async function leerHistorial(numero) {
+  if (String(numero || '').replace(/\D/g, '').length < 10) return [];
+  const h = await leerEstado(claveChat(numero));
+  if (!h?.t || Date.now() - h.t > MEMORIA_MIN * 60000) return [];
+  return Array.isArray(h.msgs) ? h.msgs : [];
+}
+
+async function recordar(numero, historial, pregunta, respuesta) {
+  if (String(numero || '').replace(/\D/g, '').length < 10 || !respuesta) return;
+  const msgs = [
+    ...historial,
+    { role: 'user', content: String(pregunta).slice(0, 800) },
+    { role: 'assistant', content: String(respuesta).slice(0, 1500) },
+  ].slice(-MEMORIA_VUELTAS * 2);
+  await guardarEstado(claveChat(numero), { t: Date.now(), msgs });
+}
+
+async function modoBot(req) {
+  let body = {};
+  try { body = await req.json(); } catch { /* vacío */ }
+  const numero = String(body.numero || '').replace(/\D/g, '');
+  // Mensaje desde el GRUPO: se contesta en el grupo, mencionando a quien preguntó.
+  const grupo = /@g\.us$/.test(String(body.grupo || '')) ? String(body.grupo) : null;
+  const tag = grupo ? mencion(numero) : null;
+  // 🧠 Memoria corta: lo que esta persona platicó con Robotina en los últimos 15 min
+  const historial = await leerHistorial(numero);
+  const responder = async (extra) => {
+    if (extra.tipo !== 'ninguno' && body.texto) {
+      await recordar(numero, historial, body.texto, extra.texto || extra.caption || '');
+    }
+    if (!grupo || extra.tipo === 'ninguno') return json({ numero, ...extra });
+    const pre = `@${tag} `;
+    return json({
+      ...extra,
+      numero: grupo,
+      mencionados: [tag],
+      ...(extra.texto ? { texto: pre + extra.texto } : {}),
+      ...(extra.caption ? { caption: pre + extra.caption } : {}),
+    });
+  };
+  const cfg = await configBot();
+
+  const c = await contactoPorTelefono(numero, cfg);
+  // En el grupo, a quien no está dado de alta simplemente no se le contesta.
+  if (!c && grupo) return responder({ tipo: 'ninguno' });
+  if (!c) {
+    return responder({
+      tipo: 'texto',
+      texto: 'Hola 👋 Este número no está registrado en SMART-TRACK. Pídele a tu supervisor que te dé de alta.',
+    });
+  }
+
+  const cmd = comando(body.texto);
+  // 🔄 "Robotina actualiza": solo jefe / supervisores. n8n reinicia el robot de PowerStreet al ver tipo 'actualizar'.
+  if (cmd === 'actualizar') {
+    if (c.tipo !== 'equipo') {
+      return responder({ tipo: 'texto', texto: '🔒 Solo el jefe o un supervisor me pueden pedir que actualice. Pídeselo a tu supervisor.' });
+    }
+    return responder({
+      tipo: 'actualizar',
+      texto: `A la orden, ${tratoDe(c)} 🫡\n\n🔄 Ya arranqué la actualización: entro a PowerStreet y cargo Avance y OTC en SMART-TRACK. En unos minutos llegan las tarjetas.`,
+    });
+  }
+  // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
+  if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg, { historial, grupo }) });
+  if (cmd === 'reto') {
+    const hoy = fechaMX();
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    const filas = fecha ? await filasDeFecha(fecha) : [];
+    const reto = await retoDe(hoy, cfg, fecha ? { [fecha]: filas } : {});
+    if (!reto) return responder({ tipo: 'texto', texto: 'Hoy no hay reto activo.' });
+    const av = fecha === hoy ? avanceReto(reto, filas, await listaContactos(cfg)) : null;
+    const texto = c.tipo === 'equipo'
+      ? (av ? textoRetoTabla(av) : textoRetoAnuncio(reto))
+      : (av ? textoRetoVendedor(av, c.ruta) : textoRetoVendedor(reto, c.ruta, 'anuncio')) || textoRetoAnuncio(reto);
+    return responder({ tipo: 'texto', texto: c.tipo === 'equipo' ? `A la orden, ${tratoDe(c)} 🫡\n\n${texto}` : texto });
+  }
+  if (c.tipo === 'equipo') {
+    // Respuestas fijas al jefe / supervisores: con "A la orden, jefe/supervisor" al inicio
+    const saludo = `A la orden, ${tratoDe(c)} 🫡`;
+    const alJefe = (extra) => responder({
+      ...extra,
+      ...(extra.texto ? { texto: `${saludo}\n\n${extra.texto}` } : {}),
+      ...(extra.caption ? { caption: `${saludo}\n\n${extra.caption}` } : {}),
+    });
+    return botEquipo(req, c, cmd, cfg, alJefe);
+  }
+  if (cmd === 'riesgo') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
+  if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
+
+  const hoy = fechaMX();
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados para tu ruta. Intenta más tarde.' });
+
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsVendedor(fila, m, c);
+  const nombre = v.nombre;
+  const aviso = fila.fecha === hoy ? '' : `\n\n_Los datos de hoy aún no se cargan; esto es del ${fechaCorta(fila.fecha)}._`;
+
+  if (cmd === 'avance') {
+    const texto = llenarPlantilla(plantilla(cfg, 'matutino'), v)
+      .replace(/^☀️.*\n/, ''); // sin el "Buenos días" cuando lo piden a cualquier hora
+    return responder({
+      tipo: 'imagen',
+      caption: texto,
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
+  }
+
+  if (cmd === 'hoy') {
+    if (m.pctDia === null) return responder({ tipo: 'texto', texto: `No tengo tu avance del día todavía.${aviso}` });
+    const falta = Math.max(0, (m.objDia || 0) - (m.ventaDia || 0));
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `📦 *${nombre}*, en el día llevas:`,
+        `${cantidad(m.ventaDia, m.unidad)} de ${cantidad(m.objDia, m.unidad)} (*${pct(m.pctDia)}*)`,
+        falta > 0 ? `Te faltan ${cantidad(falta, m.unidad)} para la meta.` : '¡Meta del día cumplida! 🎉',
+      ].join('\n') + aviso,
+    });
+  }
+
+  if (cmd === 'marcas') {
+    return responder({
+      tipo: 'texto',
+      texto: v.marcas ? `🏷️ *${nombre}*, tus marcas OPEN:\n\n${v.marcas}${aviso}` : `No tengo datos de marcas todavía.${aviso}`,
+    });
+  }
+
+  if (cmd === 'ranking') {
+    if (!m.ranking) return responder({ tipo: 'texto', texto: `Aún no hay ranking disponible.${aviso}` });
+    const top = m.rankingLista.slice(0, 3)
+      .map((r, i) => `${medalla(i + 1)} ${claveRuta(r.ruta)} – ${pct(r.p * 100)}`).join('\n');
+    return responder({
+      tipo: 'texto',
+      texto: `🏁 *${nombre}*, vas en el lugar *${m.ranking} de ${m.totalRutas}* (${pct(m.pctMes)} del mes).\n\nTop 3:\n${top}${aviso}`,
+    });
+  }
+
+  if (cmd === 'clientes') {
+    if (m.efectividad === null && m.vis === null) return responder({ tipo: 'texto', texto: `No tengo datos de visitas todavía.${aviso}` });
+    const pendientes = m.prog ? Math.max(0, m.prog - (m.vis || 0)) : null;
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `🎯 *${nombre}*, efectividad del día: *${pct(m.efectividad)}*`,
+        m.prog ? `Visitas efectivas: ${m.vis ?? 0} de ${m.prog}` : m.vis !== null ? `Visitas efectivas hoy: ${m.vis}` : null,
+        pendientes ? `Te quedan ${pendientes} clientes por visitar.` : null,
+      ].filter(Boolean).join('\n') + aviso,
+    });
+  }
+
+  return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
+}
+
+// Llamada a OpenAI con tiempo límite: si tarda más de 15 s se cancela y se usa el texto
+// de respaldo, para que Vercel no corte la función (límite de ~25 s en Edge).
+async function fetchIA(opciones, ms = 15000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch('https://api.openai.com/v1/chat/completions', { ...opciones, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ------------------------------------------------------------------ IA (conversación libre)
+const TONOS = {
+  normal: 'Habla en español mexicano, amable y profesional. Nada de groserías.',
+  compa: 'Habla como compa de ruta: informal, con carrilla y frases mexicanas (qué onda, échale ganas, ¿cómo ves?), pero SIN groserías.',
+  picante: 'Habla como vendedor de ruta mexicano bien entrón: directo, con carrilla pesada, albures ligeros y groserías comunes (güey, cabrón, chingón, a huevo, no mames, ponte las pilas). Si el vendedor te insulta, regrésale la carrilla con humor y llévalo a sus números.',
+};
+
+// Cómo se le dice a cada contacto de tipo Equipo (por los últimos 4 dígitos de su teléfono).
+// Quien no esté en la lista y sea Equipo recibe "supervisor".
+const TRATO_EQUIPO = { '1493': 'jefe', '8737': 'supervisor' };
+const tratoDe = (c) => TRATO_EQUIPO[String(c?.telefono || '').slice(-4)] || 'supervisor';
+
+const tonoEquipo = (titulo) => [
+  `Le hablas a tu ${titulo.toUpperCase()}. Trátalo con mucho respeto y disposición, como un asistente leal.`,
+  `Empieza SIEMPRE con "Sí, ${titulo}." o "A la orden, ${titulo}." y dile "${titulo}" (nunca por su nombre de pila ni "güey/compa").`,
+  'CERO groserías, cero albures y cero carrilla hacia él. Español mexicano formal pero cálido.',
+].join(' ');
+
+async function contextoDatos(c) {
+  const hoy = fechaMX();
+  if (c.tipo === 'equipo') {
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    if (!fecha) return { sin_datos: true };
+    const filas = await filasDeFecha(fecha);
+    const cfg = await configBot();
+    const todos = await listaContactos(cfg);
+    const v = varsEquipo(calcularEquipo(filas, todos));
+    const d = varsEquipoDia(calcularEquipoDia(filas, todos));
+    const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
+    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
+      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, en_ritmo: rk.rutas_ok },
+      indicadores_por_ruta: await indicadoresParaIA(fecha, cfg, { filas, todos, equipo: true }) };
+  }
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return { sin_datos: true };
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsDia(fila, m, companeras, c);
+  const cfgV = await configBot();
+  const inds = await indicadoresParaIA(fila.fecha, cfgV, { filas: companeras, todos: await listaContactos(cfgV), equipo: false });
   return {
-    avanceDia: hoyEnVigencia ? otcEnRango(data, rally, nombreRuta, hoy, hoy) : 0,
-    objetivoDia: obj.dia || 0,
-    avanceTotal: otcEnRango(data, rally, nombreRuta, rally.fechaInicio, rally.fechaFin),
-    objetivoFinal: obj.final || 0,
+    rol: 'vendedor', ruta: v.ruta, corte: fila.fecha, datos_de_hoy: fila.fecha === hoy,
+    indicadores_hoy: inds[v.ruta] || {},
+    mes: { avance: v.pct_mes, ritmo_esperado: v.esperado, vendido: v.venta_mes, objetivo: v.objetivo_mes, necesita_por_dia: v.necesita, dias_restantes: v.dias_restantes, lugar: v.lugar, de_rutas: v.total_rutas },
+    dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
+    marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
   };
 }
 
-// Progreso de UN vendedor dentro del rally (vista del propio vendedor). Si
-// ya cubrió su objetivo final, se oculta el número exacto y solo se marca
-// en verde como cubierto (para no mostrar "cuánto se pasó").
-function ProgresoRallyRuta({ nombreRuta, rally, data }) {
-  if (!(rally.rutasParticipantes || []).includes(nombreRuta)) {
-    return <div className="card" style={{ padding: 24, textAlign: "center", color: "#9AA7BD" }}>Tu ruta no participa en este rally.</div>;
+async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
+  const key = process.env.OPENAI_API_KEY;
+  const fallback = 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.';
+  if (!key) return fallback;
+  try {
+    const [datos, retroPrev] = await Promise.all([contextoDatos(c), grupo ? leerEstado('retro_grupo') : null]);
+    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX() ? String(retroPrev.texto) : '';
+    const esJefe = c.tipo === 'equipo';
+    const titulo = tratoDe(c);
+    // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
+    const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+    const sistema = [
+      'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
+      tono,
+      'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
+      'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
+      'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      esJefe
+        ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
+        : 'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
+      'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
+      'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
+      `Te habla: ${c.nombre || 'un vendedor'} (${esJefe ? `tu ${titulo}` : 'ruta ' + claveRuta(c.ruta)}).`,
+      'Conversación: los mensajes previos (si hay) son de los últimos 15 minutos con esta misma persona. Úsalos para entender respuestas cortas como "sí", "dale", "¿y la J206?" o "¿por qué?". Si contesta que sí a algo que ofreciste, cúmplelo de inmediato con los datos.',
+      'Al final puedes ofrecer UNA sola opción de seguimiento, solo si suma información nueva que no diste (p. ej. detalle por ruta, qué clientes le faltan, qué marca empujar). Nunca ofrezcas repetir lo que ya dijiste ni preguntes por preguntar; si ya diste todo lo útil, no ofrezcas nada.',
+      ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
+      `Datos (JSON): ${JSON.stringify(datos)}`,
+    ].join('\n');
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.8,
+        max_tokens: 300,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(texto || '').slice(0, 800) }],
+      }),
+    });
+    if (!r.ok) return fallback;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || fallback;
+  } catch {
+    return fallback;
   }
-  const fmtRally = rally.unidad === "piezas" ? unidades : money;
-  const { avanceDia, objetivoDia, avanceTotal, objetivoFinal } = calcularAvanceRallyRuta(data, rally, nombreRuta);
-  const cumplioDia = objetivoDia > 0 && avanceDia >= objetivoDia;
-  const cumplioFinal = objetivoFinal > 0 && avanceTotal >= objetivoFinal;
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-      <KpiCard
-        icon={<Calendar size={14} />}
-        label="Avance del día"
-        value={cumplioDia ? "¡Objetivo del día cubierto!" : `${fmtRally(avanceDia)} / ${fmtRally(objetivoDia)}`}
-        accent={cumplioDia ? "#3DDC97" : metaColor(avanceDia, objetivoDia)}
-      />
-      <KpiCard
-        icon={<Target size={14} />}
-        label="Avance total del rally"
-        value={cumplioFinal ? "¡YA CUBRISTE TU OBJETIVO!" : `${fmtRally(avanceTotal)} / ${fmtRally(objetivoFinal)}`}
-        accent={cumplioFinal ? "#3DDC97" : metaColor(avanceTotal, objetivoFinal)}
-      />
-    </div>
-  );
 }
 
-// Progreso agregado (suma de todas las rutas participantes) — para
-// supervisor1/gerente (con objetivo) y supervisor2 (solo informativo, sin
-// objetivo). Cada ruta que ya cubrió su objetivo final se marca "CUBIERTO"
-// en la tabla, sin mostrar el excedente.
-function ProgresoRallyAgregado({ rutas, data, rally, mostrarObjetivo }) {
-  const fmtRally = rally.unidad === "piezas" ? unidades : money;
-  let sumaAvanceDia = 0, sumaObjDia = 0, sumaAvanceTotal = 0, sumaObjFinal = 0;
-  const filas = (rutas || []).map((r) => {
-    const a = calcularAvanceRallyRuta(data, rally, r);
-    sumaAvanceDia += a.avanceDia; sumaObjDia += a.objetivoDia;
-    sumaAvanceTotal += a.avanceTotal; sumaObjFinal += a.objetivoFinal;
-    return { ruta: r, ...a };
+// ------------------------------------------------------------------ 🔥 RETRO AL GRUPO (cada hora, 9 am – 8 pm)
+//   GET /api/wa-resumen?modo=retro_grupo            → solo manda si hay avance nuevo desde la última retro
+//   GET /api/wa-resumen?modo=retro_grupo&forzar=1   → manda aunque no haya avance nuevo (pruebas)
+// Señala a los más bajos en venta del día, Sin Vuala y reto del día como candidatos a
+// "La Tercera Mano del Pachuco", y a los que siguen en 0 desde que salieron del CLO.
+const GRUPO_RETRO = process.env.WA_GRUPO_RETRO || '5213221821493-1614005509@g.us';
+const RETRO_DESDE = 9, RETRO_HASTA = 20;          // 9 am a 8 pm (hora de México)
+const MIN_EN_CERO = Number(process.env.RETRO_MIN_EN_CERO || 45); // minutos desde la salida del CLO
+
+const n = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const mencion = (tel) => (tel ? `521${String(tel).replace(/\D/g, '').slice(-10)}` : null);
+
+function horaActualMX() {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(new Date());
+  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
+  return { h: g('hour') % 24, min: g('minute') };
+}
+
+// ⏱️ Hora de salida del CLO por ruta → { J201: 1760710000000, ... }
+// Sale del panel de Tiempos (su propio Supabase): tabla panel_kv, key "board-activo",
+// value = { fecha: 'YYYY-MM-DD', rutas: { J201: { areas: { salida_ruta: { ts } } } } }.
+// Si no hay dato, a los que van en 0 se les señala solo a partir de las 11 am.
+const TIEMPOS_URL = (process.env.TIEMPOS_SUPABASE_URL || 'https://nzbsmkscvzttekkwgkqz.supabase.co').replace(/\/+$/, '');
+const TIEMPOS_KEY = process.env.TIEMPOS_SUPABASE_KEY || 'sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU';
+
+async function salidasCLO(fecha) {
+  try {
+    const r = await fetch(`${TIEMPOS_URL}/rest/v1/panel_kv?key=eq.board-activo&select=value`, {
+      headers: { apikey: TIEMPOS_KEY },
+    });
+    if (!r.ok) return {};
+    const board = (await r.json())[0]?.value;
+    if (!board || board.fecha !== fecha) return {};
+    const out = {};
+    for (const [ruta, datos] of Object.entries(board.rutas || {})) {
+      const ts = datos?.areas?.salida_ruta?.ts;
+      if (ts) out[claveRuta(ruta)] = ts;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// ------------------------------------------------------------------ 📊 INDICADORES DE ROBOTINA
+// Se prenden / apagan desde SMART-TRACK (pestaña WhatsApp → data.whatsappBot.indicadores):
+//   { venta_dia: { retro, ia, tercera }, sin_vuala: {...}, 'rally_<id>': {...}, ... }
+//   retro   → aparece en la retro de cada hora al grupo
+//   ia      → Robotina lo conoce cuando le preguntan
+//   tercera → cuenta para elegir a los candidatos a La Tercera Mano del Pachuco
+// Lo que no esté configurado usa los valores por defecto de abajo.
+const INDICADORES_BASE = {
+  venta_dia:   { nombre: 'Venta del día',          unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  sin_vuala:   { nombre: 'OTC Sin Vuala',          unidad: 'pz',  def: { retro: true,  ia: true, tercera: true } },
+  reto:        { nombre: 'Reto del día',           unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  otc_dia:     { nombre: 'OTC del día',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  otc_semana:  { nombre: 'OTC semanal',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: false } },
+  // Del periodo (mes): se comparan contra el ritmo esperado a la fecha, no contra la meta completa
+  mes_max:       { nombre: 'MAX del periodo',       unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_open:      { nombre: 'OPEN del periodo',      unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_champions: { nombre: 'CHAMPIONS del periodo', unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+};
+// Por marca (se arman solas con las marcas que trae el snapshot):
+//   open_<clave>  → marca OPEN del periodo    champ_<clave> → marca CHAMPIONS del periodo
+//   dia_<clave>   → marca del avance del día
+const DEF_MARCA = { retro: false, ia: true, tercera: false };
+const nomChamp = (t) => String(t || '').replace(/^CHAM[_ ]/i, '').replace(/^CH /, '');
+const DEF_RALLY = { retro: true, ia: true, tercera: true };
+
+// Rallies OTC activos que vienen en el snapshot (extra.rallies), sin repetir.
+function ralliesDe(filas) {
+  const vistos = {};
+  for (const f of filas) {
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (r?.id && !vistos[r.id]) vistos[r.id] = r;
+    }
+  }
+  return Object.values(vistos);
+}
+
+// Lista de indicadores con su configuración final.
+function indicadoresConfig(cfg, filas) {
+  const conf = cfg?.indicadores || {};
+  const lista = Object.entries(INDICADORES_BASE).map(([clave, b]) => ({
+    clave, nombre: b.nombre, unidad: b.unidad, exclusivo: false, ...b.def, ...(conf[clave] || {}),
+  }));
+  // Marcas: OPEN, CHAMPIONS y del día
+  const marcas = { open: {}, champ: {}, dia: {} };
+  for (const f of filas) {
+    for (const x of (f.extra?.marcas || [])) if (x?.clave) marcas.open[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_champions || [])) if (x?.clave) marcas.champ[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_dia || [])) if (x?.clave) marcas.dia[x.clave] = x.nombre || x.clave;
+  }
+  const prefijo = { open: 'OPEN · ', champ: 'CHAMPIONS · ', dia: 'Hoy · ' };
+  for (const tipo of ['open', 'champ', 'dia']) {
+    for (const [k, nom] of Object.entries(marcas[tipo])) {
+      const clave = `${tipo}_${k}`;
+      lista.push({ clave, nombre: prefijo[tipo] + (tipo === 'champ' ? nomChamp(nom) : nom), unidad: 'paq', exclusivo: false, ...DEF_MARCA, ...(conf[clave] || {}) });
+    }
+  }
+  for (const r of ralliesDe(filas)) {
+    const clave = `rally_${r.id}`;
+    lista.push({
+      clave, nombre: `Rally ${r.nombre || 'OTC'}`, unidad: r.unidad === 'piezas' ? 'pz' : '$', exclusivo: !!r.exclusivo,
+      ...DEF_RALLY, ...(conf[clave] || {}),
+    });
+  }
+  return lista;
+}
+
+const r0 = (v) => (v === null || v === undefined ? null : Math.round(v * 100) / 100);
+const medida = (avance, meta, extra = {}) => {
+  const a = n(avance), o = n(meta);
+  if (a === null && !o) return null;
+  return { avance: r0(a || 0), meta: o ? r0(o) : null, falta: o ? r0(Math.max(0, o - (a || 0))) : null, pct: o ? Math.round(((a || 0) / o) * 100) : null, ...extra };
+};
+
+// Indicador del periodo: además del % de la meta trae "ritmo" (% contra lo esperado a la fecha).
+// "comp" es el número con el que se compara entre rutas (ritmo en el periodo, % en el día).
+const medidaPeriodo = (avance, meta, porDia, esperado) => {
+  const x = medida(avance, meta);
+  if (!x || x.pct === null) return x;
+  const ritmo = esperado ? Math.round((x.pct / esperado) * 100) : null;
+  return { ...x, ritmo, comp: ritmo ?? x.pct, necesita_por_dia: n(porDia) === null ? null : r0(n(porDia)) };
+};
+
+// Valor de cada indicador para una ruta.
+function valorIndicador(clave, f, m, rt) {
+  const ex = f.extra || {};
+  const t = ex.tabs || {};
+  if (clave === 'mes_max') return medidaPeriodo(t.max?.avance ?? f.venta_mes, t.max?.objetivo ?? f.objetivo_mes, t.max?.por_dia ?? ex.necesita_diario, m.esperado);
+  if (clave === 'mes_open') return medidaPeriodo(t.open?.avance, t.open?.objetivo, t.open?.por_dia, m.esperado);
+  if (clave === 'mes_champions') return medidaPeriodo(t.champions?.avance, t.champions?.objetivo, t.champions?.por_dia, m.esperado);
+  if (clave.startsWith('open_')) {
+    const x = (ex.marcas || []).find((y) => `open_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, x.por_dia, m.esperado) : null;
+  }
+  if (clave.startsWith('champ_')) {
+    const x = (ex.marcas_champions || []).find((y) => `champ_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, null, m.esperado) : null;
+  }
+  if (clave.startsWith('dia_')) {
+    const x = (ex.marcas_dia || []).find((y) => `dia_${y.clave}` === clave);
+    return x ? medida(x.vendido, x.objetivo) : null;
+  }
+  if (clave === 'venta_dia') return medida(m.ventaDia, m.objDia);
+  if (clave === 'sin_vuala') { const sv = sinVualaDe(f); return sv ? medida(sv.piezas, sv.minimo) : null; }
+  if (clave === 'reto') return rt ? medida(rt.v, rt.meta, { lugar: rt.lugar }) : null;
+  if (clave === 'otc_dia') return medida(ex.otc_dia, ex.otc_dia_objetivo);
+  if (clave === 'otc_semana') return medida(ex.otc_semana?.vendido, ex.otc_semana?.objetivo);
+  if (clave === 'efectividad') return m.efectividad === null ? null : { avance: Math.round(m.efectividad), meta: 100, falta: null, pct: Math.round(m.efectividad) };
+  if (clave.startsWith('rally_')) {
+    const r = (ex.rallies || []).find((x) => `rally_${x.id}` === clave);
+    if (!r) return null; // la ruta no participa
+    const dia = medida(r.avanceDia, r.objetivoDia);
+    const total = medida(r.avanceTotal, r.objetivoFinal);
+    // Para comparar se usa el objetivo del día; si el rally no tiene, el total.
+    const base = dia?.meta ? dia : total;
+    return base ? { ...base, dia, total, cubierto_total: !!(total?.meta && total.avance >= total.meta) } : null;
+  }
+  return null;
+}
+
+// Indicadores por ruta para una fecha (lo usan la retro y la IA).
+async function tablaIndicadores(fecha, cfg, { filas = null, todos = null } = {}) {
+  filas = filas || await filasDeFecha(fecha);
+  todos = todos || await listaContactos(cfg);
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const retoPorRuta = Object.fromEntries((av?.tabla || []).map((r, i) => [r.ruta, { ...r, lugar: i + 1 }]));
+  const inds = indicadoresConfig(cfg, filas);
+  const rutas = filas.map((f) => {
+    const ruta = claveRuta(f.ruta);
+    const m = calcular(f, filas);
+    const valores = {};
+    for (const i of inds) {
+      const v = valorIndicador(i.clave, f, m, retoPorRuta[ruta]);
+      if (v) valores[i.clave] = v;
+    }
+    return { ruta, f, m, valores };
   });
-  const cumplioDiaTotal = mostrarObjetivo && sumaObjDia > 0 && sumaAvanceDia >= sumaObjDia;
-  const cumplioFinalTotal = mostrarObjetivo && sumaObjFinal > 0 && sumaAvanceTotal >= sumaObjFinal;
-  return (
-    <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-        <KpiCard
-          icon={<Calendar size={14} />}
-          label="Avance del día (equipo)"
-          value={mostrarObjetivo ? (cumplioDiaTotal ? "¡Objetivo del día cubierto!" : `${fmtRally(sumaAvanceDia)} / ${fmtRally(sumaObjDia)}`) : fmtRally(sumaAvanceDia)}
-          accent={mostrarObjetivo ? (cumplioDiaTotal ? "#3DDC97" : metaColor(sumaAvanceDia, sumaObjDia)) : undefined}
-        />
-        <KpiCard
-          icon={<Target size={14} />}
-          label="Avance total (equipo)"
-          value={mostrarObjetivo ? (cumplioFinalTotal ? "¡YA CUBRIERON EL OBJETIVO!" : `${fmtRally(sumaAvanceTotal)} / ${fmtRally(sumaObjFinal)}`) : fmtRally(sumaAvanceTotal)}
-          accent={mostrarObjetivo ? (cumplioFinalTotal ? "#3DDC97" : metaColor(sumaAvanceTotal, sumaObjFinal)) : undefined}
-        />
-      </div>
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-              <th style={{ padding: "8px 16px" }}>Ruta</th>
-              <th>Avance día</th>
-              {mostrarObjetivo && <th>Obj. día</th>}
-              <th>Avance total</th>
-              {mostrarObjetivo && <th>Obj. final</th>}
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filas.map((f) => {
-              const cumplio = mostrarObjetivo && f.objetivoFinal > 0 && f.avanceTotal >= f.objetivoFinal;
-              return (
-                <tr key={f.ruta} style={{ borderTop: "1px solid #1E2A42" }}>
-                  <td style={{ padding: "10px 16px" }}>{f.ruta}{NOMBRES[f.ruta] ? ` · ${NOMBRES[f.ruta]}` : ""}</td>
-                  <td>{fmtRally(f.avanceDia)}</td>
-                  {mostrarObjetivo && <td>{fmtRally(f.objetivoDia)}</td>}
-                  <td>{fmtRally(f.avanceTotal)}</td>
-                  {mostrarObjetivo && <td>{fmtRally(f.objetivoFinal)}</td>}
-                  <td>
-                    {cumplio && (
-                      <span style={{ background: "#0f2a20", border: "1px solid #3DDC97", color: "#3DDC97", fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 8px" }}>
-                        CUBIERTO
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  return { filas, todos, av, inds, rutas };
 }
 
-// Una tarjeta completa por rally (imagen + progreso + botón de guardar
-// imagen). Va en su propio componente porque useCapturaImagen es un hook:
-// para tener una "captura" independiente por cada rally que se muestre a
-// la vez, cada tarjeta necesita ser su propia instancia de componente.
-function TarjetaRally({ rally, rol, vendedorActual, data, puesto, esGerente }) {
-  const captura = useCapturaImagen();
-  return (
-    <div>
-      <div ref={captura.capturaRef}>
-        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-          {rally.imagen && <img src={rally.imagen} alt={rally.nombre} style={{ width: "100%", borderRadius: 10, marginBottom: 12, display: "block" }} />}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div className="display" style={{ fontSize: 18, color: "#E8EDF5" }}>{rally.nombre || "Rally OTC"}</div>
-            {rally.exclusivoSupervisor1 && puesto === "supervisor" && (
-              <span style={{ fontSize: 10, fontWeight: 800, color: "#0B1220", background: "#5AA9E6", borderRadius: 6, padding: "2px 10px" }}>
-                EXCLUSIVO PARA TI
-              </span>
-            )}
-            {rally.exclusivoSupervisor1 && puesto === "gerente" && (
-              <span style={{ fontSize: 10, fontWeight: 800, color: "#5AA9E6", border: "1px solid #5AA9E6", borderRadius: 6, padding: "2px 10px" }}>
-                EXCLUSIVO DE SUPERVISOR-1
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>
-            Vigencia: {rally.fechaInicio || "—"} → {rally.fechaFin || "—"}
-          </div>
-        </div>
-        {rol === "vendedor" ? (
-          <ProgresoRallyRuta nombreRuta={vendedorActual} rally={rally} data={data} />
-        ) : (
-          <ProgresoRallyAgregado
-            rutas={rally.rutasParticipantes}
-            data={data}
-            rally={rally}
-            mostrarObjetivo={puesto !== "supervisor2"}
-          />
-        )}
-      </div>
-      {esGerente && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
-          <BotonGuardarImagen
-            captura={captura}
-            nombreArchivo={`rally_otc_${(rally.nombre || "rally").replace(/\s+/g, "_")}_${fechaHoyISO()}.png`}
-            etiqueta="Guardar / descargar"
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function rallyVacio() {
-  return { activo: false, nombre: "", fechaInicio: null, fechaFin: null, rutasParticipantes: [], imagen: null, objetivos: {}, codigosParticipantes: [], unidad: "dinero", exclusivoSupervisor1: false };
-}
-function generarIdRally() {
-  return "rally_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-}
-
-/**
- * Pestaña RALLY OTC — visible para todos los roles. Soporta VARIOS rallies
- * corriendo al mismo tiempo (antes solo dejaba tener uno).
- * - Gerente: puede crear cuantos rallies quiera, editar cada uno, activarlo
- * o desactivarlo por separado, y borrarlo. También puede guardar/descargar
- * una imagen del avance de cada rally.
- * - Vendedor: ve una tarjeta de progreso por cada rally ACTIVO en el que su
- * ruta participa (puede ser ninguno, uno, o varios a la vez).
- * - Supervisor-1 / Gerente: ven el avance agregado del equipo de cada rally
- * activo, contra la suma de los objetivos de sus rutas participantes.
- * - Supervisor-2: ve el avance agregado de cada rally activo, sin objetivo
- * (solo informativo).
- */
-export default function RallyOtcView({ data, persist, persistFresco, puesto, rol, vendedorActual, revisorNombre }) {
-  // Compatibilidad con la versión vieja (un solo rally guardado en
-  // data.rallyOtc): si todavía no existe la lista nueva pero sí había un
-  // rally viejo configurado, se usa como punto de partida.
-  const rallies = data.rallyOtcs || (data.rallyOtc?.nombre ? [{ ...data.rallyOtc, id: "legacy" }] : []);
-  // Solo Gerente crea y administra rallies. Puede marcar uno como
-  // "exclusivo de Supervisor-1" — en ese caso, ese rally específico no
-  // aparece en la vista agregada de Gerente ni de Supervisor-2 (Supervisor-2
-  // de plano no participa en estos concursos, ni siquiera ve la pestaña).
-  // Las rutas participantes sí ven su propio avance individual normal, sea
-  // exclusivo o no.
-  const esGerente = rol === "staff" && puesto === "gerente";
-  const puedeAdministrarRallies = esGerente;
-  const ralliesVisiblesParaAdministrar = rallies;
-  const [form, setForm] = useState(null); // null = sin editar; objeto con id (o id:null si es nuevo) = editando
-  const [subiendoImagen, setSubiendoImagen] = useState(false);
-  const [nuevoCodigoTexto, setNuevoCodigoTexto] = useState("");
-  const fileRef = useRef(null);
-  // Solo de referencia (no se usan para armar botones): códigos que ya
-  // aparecieron en archivos de OTC del día subidos, por si al gerente le
-  // sirve de guía al capturar los suyos a mano.
-  const codigosVistosEnOtc = [...new Set((data.otcDia || []).map((r) => r.codigoArticulo).filter(Boolean))].sort();
-
-  function iniciarNuevoRally() {
-    setForm({ ...rallyVacio(), id: null });
-    setNuevoCodigoTexto("");
-  }
-  function iniciarEdicion(rally) {
-    setForm({
-      id: rally.id,
-      nombre: rally.nombre || "",
-      fechaInicio: rally.fechaInicio || "",
-      fechaFin: rally.fechaFin || "",
-      rutasParticipantes: [...(rally.rutasParticipantes || [])],
-      imagen: rally.imagen || null,
-      objetivos: { ...(rally.objetivos || {}) },
-      codigosParticipantes: [...(rally.codigosParticipantes || [])],
-      unidad: rally.unidad || "dinero",
-      exclusivoSupervisor1: rally.exclusivoSupervisor1 || false,
-    });
-    setNuevoCodigoTexto("");
-  }
-  function toggleRuta(nombreRuta) {
-    setForm((f) => {
-      const yaEsta = f.rutasParticipantes.includes(nombreRuta);
-      const rutasParticipantes = yaEsta ? f.rutasParticipantes.filter((r) => r !== nombreRuta) : [...f.rutasParticipantes, nombreRuta];
-      const objetivos = { ...f.objetivos };
-      if (!yaEsta && !objetivos[nombreRuta]) objetivos[nombreRuta] = { dia: 0, final: 0 };
-      return { ...f, rutasParticipantes, objetivos };
-    });
-  }
-  function agregarCodigoManual() {
-    const codigo = nuevoCodigoTexto.trim();
-    if (!codigo) return;
-    setForm((f) => (f.codigosParticipantes.includes(codigo) ? f : { ...f, codigosParticipantes: [...f.codigosParticipantes, codigo] }));
-    setNuevoCodigoTexto("");
-  }
-  function quitarCodigoManual(codigo) {
-    setForm((f) => ({ ...f, codigosParticipantes: f.codigosParticipantes.filter((c) => c !== codigo) }));
-  }
-  function actualizarObjetivo(nombreRuta, campo, valor) {
-    setForm((f) => ({ ...f, objetivos: { ...f.objetivos, [nombreRuta]: { ...(f.objetivos[nombreRuta] || {}), [campo]: Number(valor) || 0 } } }));
-  }
-  async function subirImagenRally(e) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    if (file.size > 3 * 1024 * 1024) {
-      alert("La imagen pesa más de 3MB. Usa una más ligera.");
-      return;
-    }
-    setSubiendoImagen(true);
-    try {
-      const extension = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const nombreArchivo = `rally_${Date.now()}.${extension}`;
-      const { error } = await supabase.storage.from("promociones").upload(nombreArchivo, file, { cacheControl: "3600", upsert: false });
-      if (error) {
-        alert(`No se pudo subir la imagen: ${error.message}`);
-        return;
+// Indicadores que Robotina conoce para contestar ({ J201: { 'Venta del día': {...}, ... } }).
+// A vendedores nunca se les dan los rallies exclusivos de Supervisor-1.
+async function indicadoresParaIA(fecha, cfg, { filas, todos, equipo }) {
+  try {
+    const t = await tablaIndicadores(fecha, cfg, { filas, todos });
+    const usar = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+    const out = {};
+    for (const r of t.rutas) {
+      const x = {};
+      for (const i of usar) {
+        if (r.valores[i.clave]) x[i.nombre + (i.exclusivo ? ' (exclusivo Supervisor-1)' : '')] = { ...r.valores[i.clave], unidad: i.unidad };
       }
-      const { data: urlData } = supabase.storage.from("promociones").getPublicUrl(nombreArchivo);
-      setForm((f) => ({ ...f, imagen: urlData.publicUrl }));
-    } finally {
-      setSubiendoImagen(false);
+      out[r.ruta] = x;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function datosRetro(fecha, cfg) {
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const salidas = await salidasCLO(fecha);
+  const ahora = Date.now();
+  // En el grupo nunca se exponen los rallies exclusivos de Supervisor-1
+  const enRetro = t.inds.filter((i) => i.retro && !i.exclusivo);
+  const enTercera = t.inds.filter((i) => i.tercera && !i.exclusivo);
+
+  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, m, valores }) => {
+    const c = vend[ruta];
+    const salida = salidas[ruta] ? new Date(salidas[ruta]) : null;
+    const minSalida = salida && !Number.isNaN(salida.getTime()) ? Math.round((ahora - salida.getTime()) / 60000) : null;
+    const cmp = (v) => (v ? (v.comp ?? v.pct) : null);
+    const partes = enTercera.map((i) => cmp(valores[i.clave])).filter((p) => p !== null && p !== undefined).map((p) => Math.min(100, p));
+    const indicadores = {};
+    for (const i of enRetro) if (valores[i.clave]) indicadores[i.nombre] = { ...valores[i.clave], unidad: i.unidad };
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      venta_dia: n(m.ventaDia) || 0,
+      pct_dia: m.pctDia === null ? null : Math.round(m.pctDia),
+      indicadores,
+      salida_clo: salida ? horaMXCorta(salida) : null,
+      min_desde_salida: minSalida,
+      indice: partes.length ? Math.round(partes.reduce((s, x) => s + x, 0) / partes.length) : null,
+    };
+  });
+
+  const { h } = horaActualMX();
+  const conDia = rutas.filter((r) => r.pct_dia !== null).sort((a, b) => a.pct_dia - b.pct_dia);
+  // En cero: ya salió del CLO hace ≥ 45 min y no ha vendido; sin dato de salida, solo desde las 11 am.
+  const enCero = rutas.filter((r) => r.venta_dia === 0 && (
+    r.min_desde_salida !== null ? r.min_desde_salida >= MIN_EN_CERO : (r.salida_clo === null && h >= 11)
+  ));
+  // Los 3 más bajos de cada indicador de la retro (solo los que no lo han cumplido)
+  const abajo_por_indicador = {};
+  for (const i of enRetro) {
+    const cv = (r) => { const v = r.indicadores[i.nombre]; return v ? (v.comp ?? v.pct) : null; };
+    const lista = rutas
+      .filter((r) => cv(r) !== null && cv(r) !== undefined && cv(r) < 100)
+      .sort((a, b) => cv(a) - cv(b))
+      .slice(0, 3)
+      .map((r) => ({ ruta: r.ruta, nombre: r.nombre, mencion: r.mencion, ...r.indicadores[i.nombre] }));
+    if (lista.length) abajo_por_indicador[i.nombre] = lista;
+  }
+  const quita = ({ min_desde_salida, ...r }) => r;
+  return {
+    fecha,
+    hora: `${h}:00`,
+    indicadores_activos: enRetro.map((i) => `${i.nombre} (${i.unidad})`),
+    reto: t.av ? { marca: t.av.nombre, equipo: t.av.total, meta_equipo: t.av.metaTotal } : null,
+    lider_dia: conDia.length ? quita(conDia[conDia.length - 1]) : null,
+    tercera_mano: rutas.filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice).slice(0, 3).map(quita),
+    abajo_por_indicador,
+    en_cero: enCero.map(quita),
+    rutas,
+  };
+}
+
+function horaMXCorta(d) {
+  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+}
+
+const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${Math.round(v).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${r0(v)} ${u}`);
+
+// Texto sin IA (respaldo si OpenAI falla)
+function textoRetroFijo(d) {
+  const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
+  const L = [`🔥 *RETRO ${d.hora}* · ¿Quién se lleva La Tercera Mano del Pachuco? 🖐️`];
+  if (d.lider_dia) L.push(`🥇 Manda ${d.lider_dia.ruta} ${d.lider_dia.nombre} con ${d.lider_dia.pct_dia}% del día.`);
+  if (d.en_cero.length) {
+    L.push('', '🥶 *Siguen en CERO:*');
+    for (const r of d.en_cero) L.push(`• ${tag(r)}${r.salida_clo ? ` salió del CLO a las ${r.salida_clo}` : ''} y no ha vendido nada. ¡Primer cliente YA!`);
+  }
+  if (d.tercera_mano.length) {
+    L.push('', '🖐️ *Candidatos a la Tercera Mano:*');
+    for (const r of d.tercera_mano) {
+      const det = Object.entries(r.indicadores)
+        .filter(([, v]) => (v.comp ?? v.pct) !== null && (v.comp ?? v.pct) < 100)
+        .map(([nom, v]) => `${nom} ${fmtU(v.avance, v.unidad)}/${fmtU(v.meta, v.unidad)}`)
+        .join(' · ');
+      L.push(`• ${tag(r)}${det ? ` – ${det}` : ''}`);
     }
   }
-  // Guarda la lista completa de rallies, siempre partiendo de la más
-  // reciente en Supabase (por si otro gerente estaba editando al mismo
-  // tiempo). "calcularNuevaLista" recibe la lista actual y regresa la nueva.
-  function guardarListaRallies(calcularNuevaLista) {
-    persistFresco((fresca) => {
-      const listaActual = fresca.rallyOtcs || (fresca.rallyOtc?.nombre ? [{ ...fresca.rallyOtc, id: "legacy" }] : []);
-      return { rallyOtcs: calcularNuevaLista(listaActual), rallyOtc: null };
-    });
-  }
-  function guardarRally(activo) {
-    const rallyGuardado = {
-      id: form.id || generarIdRally(),
-      activo,
-      nombre: form.nombre.trim(),
-      fechaInicio: form.fechaInicio || null,
-      fechaFin: form.fechaFin || null,
-      rutasParticipantes: form.rutasParticipantes,
-      imagen: form.imagen,
-      objetivos: form.objetivos,
-      codigosParticipantes: form.codigosParticipantes,
-      unidad: form.unidad,
-      exclusivoSupervisor1: !!form.exclusivoSupervisor1,
-    };
-    guardarListaRallies((lista) => {
-      const existe = lista.some((r) => r.id === rallyGuardado.id);
-      return existe ? lista.map((r) => (r.id === rallyGuardado.id ? rallyGuardado : r)) : [...lista, rallyGuardado];
-    });
-    setForm(null);
-  }
-  function toggleActivoRally(rallyId, nuevoActivo) {
-    guardarListaRallies((lista) => lista.map((r) => (r.id === rallyId ? { ...r, activo: nuevoActivo } : r)));
-  }
-  function eliminarRally(rallyId) {
-    const ok = window.confirm("¿Borrar este rally? Esta acción no se puede deshacer.");
-    if (!ok) return;
-    guardarListaRallies((lista) => lista.filter((r) => r.id !== rallyId));
-  }
-  const ralliesActivos = rallies.filter((r) => r.activo);
-  // Vendedor: NUNCA ve los rallies marcados "exclusivo de Supervisor-1" —
-  // ni siquiera su propio avance individual. Son de seguimiento interno
-  // entre Gerente y Supervisor-1, no se le exponen a las rutas.
-  // Gerente: ve TODO (incluidos los exclusivos) — necesita darles
-  // seguimiento aunque los haya marcado como "de Supervisor-1".
-  // Supervisor-1: ve TODO igual que Gerente.
-  // Supervisor-2: no participa en nada de esto (además ya no tiene la
-  // pestaña visible, esto es un respaldo extra).
-  const ralliesParaMostrar = rol === "vendedor"
-    ? ralliesActivos.filter((r) => !r.exclusivoSupervisor1 && (r.rutasParticipantes || []).includes(vendedorActual))
-    : puesto === "supervisor2"
-    ? []
-    : ralliesActivos;
+  return L.join('\n');
+}
 
-  return (
-    <div>
-      <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 14 }}>RALLY OTC</div>
-      {puedeAdministrarRallies && (
-        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-              RALLIES CONFIGURADOS ({ralliesVisiblesParaAdministrar.length})
-            </div>
-            {!form && (
-              <button className="btn" onClick={iniciarNuevoRally}>
-                <Plus size={14} style={{ verticalAlign: "-2px" }} /> Nuevo rally
-              </button>
-            )}
-          </div>
-          {!form && ralliesVisiblesParaAdministrar.length === 0 && (
-            <div style={{ fontSize: 12, color: "#9AA7BD" }}>Todavía no has configurado ningún rally.</div>
-          )}
-          {!form && ralliesVisiblesParaAdministrar.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {ralliesVisiblesParaAdministrar.map((r) => (
-                <div key={r.id} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ flex: "1 1 160px" }}>
-                    <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700 }}>{r.nombre || "(sin nombre)"}</div>
-                    <div style={{ fontSize: 11, color: "#9AA7BD" }}>{r.fechaInicio || "—"} → {r.fechaFin || "—"} · {(r.rutasParticipantes || []).length} ruta{(r.rutasParticipantes || []).length === 1 ? "" : "s"}</div>
-                  </div>
-                  {r.exclusivoSupervisor1 && (
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 6, color: "#5AA9E6", border: "1px solid #5AA9E6" }}>
-                      SOLO SUPERVISOR-1
-                    </span>
-                  )}
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 6, color: r.activo ? "#3DDC97" : "#9AA7BD", border: `1px solid ${r.activo ? "#3DDC97" : "#9AA7BD"}` }}>
-                    {r.activo ? "ACTIVO" : "INACTIVO"}
-                  </span>
-                  <button className="btn-ghost" onClick={() => iniciarEdicion(r)}>Editar</button>
-                  <button className="btn-ghost" onClick={() => toggleActivoRally(r.id, !r.activo)}>
-                    {r.activo ? "Desactivar" : "Activar"}
-                  </button>
-                  <button className="btn-ghost" onClick={() => eliminarRally(r.id)}>
-                    <Trash2 size={13} color="#FF6B6B" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {form && (
-            <div>
-              <input
-                type="text" value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))}
-                placeholder="Nombre del rally"
-                style={{ width: "100%", boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "10px 12px", marginBottom: 10 }}
-              />
-              {esGerente && (
-                <button
-                  className={form.exclusivoSupervisor1 ? "btn" : "btn-ghost"}
-                  style={{ fontSize: 12, marginBottom: 10, background: form.exclusivoSupervisor1 ? "#5AA9E6" : undefined, borderColor: "#5AA9E6", color: form.exclusivoSupervisor1 ? "#0B1220" : "#5AA9E6" }}
-                  onClick={() => setForm((f) => ({ ...f, exclusivoSupervisor1: !f.exclusivoSupervisor1 }))}
-                >
-                  {form.exclusivoSupervisor1 ? "✓ Rally exclusivo de Supervisor-1 (tú sí lo sigues viendo; no aparece a vendedores ni a Supervisor-2)" : "Marcar como rally exclusivo de Supervisor-1"}
-                </button>
-              )}
-              <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 140 }}>
-                  <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 4 }}>Fecha de inicio</div>
-                  <input type="date" value={form.fechaInicio || ""} onChange={(e) => setForm((f) => ({ ...f, fechaInicio: e.target.value }))} style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px" }} />
-                </div>
-                <div style={{ flex: 1, minWidth: 140 }}>
-                  <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 4 }}>Fecha de fin (vigencia)</div>
-                  <input type="date" value={form.fechaFin || ""} onChange={(e) => setForm((f) => ({ ...f, fechaFin: e.target.value }))} style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px" }} />
-                </div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>RUTAS PARTICIPANTES</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {(data.vendedores || []).map((v) => (
-                    <button key={v.id} className={form.rutasParticipantes.includes(v.name) ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => toggleRuta(v.name)}>
-                      {v.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>UNIDAD DEL RALLY</div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button className={form.unidad === "dinero" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setForm((f) => ({ ...f, unidad: "dinero" }))}>
-                    Dinero ($)
-                  </button>
-                  <button className={form.unidad === "piezas" ? "btn" : "btn-ghost"} style={{ fontSize: 12 }} onClick={() => setForm((f) => ({ ...f, unidad: "piezas" }))}>
-                    Piezas (pz)
-                  </button>
-                </div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>
-                  CÓDIGOS DE ARTÍCULO QUE SE SUMAN (OTC)
-                </div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <input
-                    type="text"
-                    value={nuevoCodigoTexto}
-                    onChange={(e) => setNuevoCodigoTexto(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarCodigoManual(); } }}
-                    placeholder="Escribe el código y agrégalo (ej. 304)"
-                    style={{ flex: 1, boxSizing: "border-box", fontSize: 13, color: "#000", background: "#FFFFFF", borderRadius: 8, border: "none", padding: "8px 10px" }}
-                  />
-                  <button className="btn" onClick={agregarCodigoManual}>
-                    <Plus size={14} style={{ verticalAlign: "-2px" }} /> Agregar
-                  </button>
-                </div>
-                {form.codigosParticipantes.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "#9AA7BD" }}>
-                    No has agregado ningún código todavía — si no agregas ninguno, se suma TODO el OTC sin filtrar.
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {form.codigosParticipantes.map((codigo) => (
-                      <div key={codigo} style={{ display: "flex", alignItems: "center", gap: 6, background: "#131C30", border: "1px solid #1E2A42", borderRadius: 8, padding: "6px 8px 6px 12px" }}>
-                        <span style={{ fontSize: 12, color: "#E8EDF5" }}>{codigo}</span>
-                        <button className="btn-ghost" style={{ padding: "2px 4px" }} onClick={() => quitarCodigoManual(codigo)}>
-                          <Trash2 size={12} color="#FF6B6B" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {codigosVistosEnOtc.length > 0 && (
-                  <div style={{ fontSize: 11, color: "#5b6478", marginTop: 8 }}>
-                    Códigos vistos en tus archivos de OTC ya subidos (por si sirve de referencia): {codigosVistosEnOtc.join(", ")}
-                  </div>
-                )}
-              </div>
-              {form.rutasParticipantes.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>OBJETIVOS POR RUTA ({form.unidad === "piezas" ? "PZ" : "$"})</div>
-                  {form.rutasParticipantes.map((nombreRuta) => (
-                    <div key={nombreRuta} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-                      <span style={{ width: 110, fontSize: 12, color: "#E8EDF5" }}>{nombreRuta}</span>
-                      <input
-                        type="number" placeholder={`Objetivo día (${form.unidad === "piezas" ? "pz" : "$"})`} value={form.objetivos[nombreRuta]?.dia || 0}
-                        onChange={(e) => actualizarObjetivo(nombreRuta, "dia", e.target.value)}
-                        style={{ width: 130, padding: "6px 8px" }}
-                      />
-                      <input
-                        type="number" placeholder={`Objetivo final (${form.unidad === "piezas" ? "pz" : "$"})`} value={form.objetivos[nombreRuta]?.final || 0}
-                        onChange={(e) => actualizarObjetivo(nombreRuta, "final", e.target.value)}
-                        style={{ width: 130, padding: "6px 8px" }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ marginBottom: 10 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 6 }}>IMAGEN ALUSIVA AL RALLY</div>
-                <button className="btn" onClick={() => fileRef.current?.click()} disabled={subiendoImagen}>
-                  {subiendoImagen ? "Subiendo..." : form.imagen ? "Cambiar imagen" : "Elegir imagen"}
-                </button>
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={subirImagenRally} />
-                {form.imagen && <img src={form.imagen} alt="Rally" style={{ maxWidth: 200, display: "block", marginTop: 8, borderRadius: 8 }} />}
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button className="btn-ghost" onClick={() => setForm(null)}>Cancelar</button>
-                <button className="btn-ghost" onClick={() => guardarRally(false)}>Guardar sin activar</button>
-                <button className="btn" onClick={() => guardarRally(true)}>Guardar y activar</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-      {ralliesParaMostrar.length === 0 ? (
-        <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-          {rol === "vendedor" ? "Tu ruta no participa en ningún rally activo por el momento." : "No hay ningún Rally OTC activo en este momento."}
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          {ralliesParaMostrar.map((rally) => (
-            <TarjetaRally
-              key={rally.id}
-              rally={rally}
-              rol={rol}
-              vendedorActual={vendedorActual}
-              data={data}
-              puesto={puesto}
-              esGerente={esGerente}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+async function textoRetroIA(d, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK, y escribes en el GRUPO de WhatsApp de los vendedores de ruta de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Cada hora das retro del AVANCE DEL DÍA. La "Tercera Mano del Pachuco" es el castigo/burla para los 3 más bajos del día; los de "tercera_mano" son los candidatos.',
+    `Indicadores que se siguen hoy: ${d.indicadores_activos.join(', ') || 'venta del día'}. Solo habla de esos.`,
+    'Estructura (formato WhatsApp, *negritas*, máximo 16 líneas):',
+    '1) Una línea de arranque con la hora y el reconocimiento al líder del día.',
+    '2) Si hay "en_cero": señálalos primero, di a qué hora salieron del CLO si viene el dato, y exígeles su primera venta ya.',
+    '3) Los candidatos a la Tercera Mano: a cada uno dile en una línea qué le falta en cada indicador donde va abajo (usa el nombre del indicador y los números exactos con su unidad) y un consejo concreto y corto.',
+    '4) Si hay un Rally activo, una línea con quién va más abajo en el rally (de "abajo_por_indicador").',
+    '5) Cierra con una frase corta que prenda al equipo.',
+    'Para mencionar a alguien escribe EXACTAMENTE su campo "mencion" precedido de @ (ej. @5213221234567). Si no tiene mencion, usa ruta y nombre.',
+    'Usa SOLO los números del JSON; nunca inventes cifras, premios ni castigos distintos. Unidades: paq = paquetes, pz = piezas, $ = pesos.',
+    'Indicadores del periodo (MAX/OPEN/CHAMPIONS y sus marcas): "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = va en ritmo) y "necesita_por_dia" lo que debe vender diario para llegar; úsalos en vez del % de la meta completa.',
+    'Límites: la carrilla es sobre los números y el trabajo, nunca sobre físico, familia, género, orientación, religión u origen; nada sexual; nada de amenazas.',
+    `Datos (JSON): ${JSON.stringify({ ...d, rutas: undefined })}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.9,
+        max_tokens: 700,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro de esta hora para el grupo.' }],
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function modoRetroGrupo(req) {
+  const url = new URL(req.url);
+  const forzar = url.searchParams.get('forzar') === '1';
+  const cfg = await configBot();
+  if (cfg?.retroGrupoActivo === false) return json({ total: 0, mensajes: [], nota: 'retro del grupo desactivada' });
+  const { h } = horaActualMX();
+  if (!forzar && (h < RETRO_DESDE || h > RETRO_HASTA)) return json({ total: 0, mensajes: [], nota: `fuera de horario (${h} h)` });
+
+  const hoy = fechaMX();
+  const filasHoy = await filasDeFecha(hoy);
+  if (!filasHoy.length) return json({ total: 0, mensajes: [], nota: 'sin avance de hoy todavía' });
+
+  // Solo una retro por cada avance nuevo
+  const ultimo = filasHoy.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || '';
+  const previo = await leerEstado('retro_grupo');
+  if (!forzar && previo?.fecha === hoy && previo?.actualizado === ultimo) {
+    return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
+  }
+
+  const d = await datosRetro(hoy, cfg);
+  if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
+  const texto = (await textoRetroIA(d, cfg)) || textoRetroFijo(d);
+  // Solo se mencionan los números que de verdad aparecen en el texto
+  const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
+
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
+  return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
+}
+
+// ------------------------------------------------------------------ diagnóstico
+async function modoDiag() {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const [lista, resumen, previos] = await Promise.all([
+    listaContactos(cfg),
+    sb('resumen_vendedores?select=ruta,fecha&order=fecha.desc&limit=30'),
+    ultimosPorRuta({ antesDe: hoy }),
+  ]);
+  const llave = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return json({
+    version: 'diag-3',
+    hoy,
+    origen_contactos: Array.isArray(cfg?.contactos) ? 'SMART-TRACK (pestaña WhatsApp)' : 'tabla vendedores_whatsapp',
+    plantillas_editadas: Object.keys(cfg?.plantillas || {}),
+    supabase_url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/^https:\/\/([a-z0-9]{6}).*/, '$1…'),
+    tipo_llave: llave.startsWith('sb_secret') ? 'sb_secret' : llave.startsWith('eyJ') ? 'jwt' : llave ? 'otra' : 'VACÍA',
+    contactos: lista.map((c) => ({ ruta: c.ruta, clave: claveRuta(c.ruta), tipo: c.tipo, activo: c.activo, matutino: c.matutino, alerta: c.alerta, tel: '…' + c.telefono.slice(-4) })),
+    resumen_ultimas: resumen.slice(0, 10),
+    claves_antes_de_hoy: Object.keys(previos),
+  });
+}
+
+// ------------------------------------------------------------------ handler
+export default async function handler(req) {
+  if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
+  const modo = new URL(req.url).searchParams.get('modo');
+  try {
+    if (modo === 'matutino') return await modoMatutino(req);
+    if (modo === 'alerta') return await modoAlerta(req);
+    if (modo === 'dia') return await modoDia(req);
+    if (modo === 'diag') return await modoDiag();
+    if (modo === 'riesgo') {
+      const cfg = await configBot();
+      const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+      if (!fecha) return json({ texto: 'sin datos' });
+      const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
+      return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
+    }
+    if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
+    if (modo === 'retro_grupo') return await modoRetroGrupo(req);
+    return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
+  } catch (e) {
+    return json({ error: String(e.message || e) }, 500);
+  }
 }
