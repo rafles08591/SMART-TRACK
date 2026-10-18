@@ -62,6 +62,19 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
     return g && typeof g[campo] === "boolean" ? g[campo] : f.def[campo];
   };
 
+  const retroActiva = data?.whatsappBot?.retroGrupoActivo !== false;
+  async function cambiarRetro() {
+    if (!puedeEditar || guardando) return;
+    setGuardando(true);
+    try {
+      await persistFresco((fresca) => ({
+        whatsappBot: { ...(fresca.whatsappBot || {}), retroGrupoActivo: !(fresca.whatsappBot?.retroGrupoActivo !== false) },
+      }));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   async function cambiar(f, campo) {
     if (!puedeEditar || guardando) return;
     setGuardando(true);
@@ -89,6 +102,18 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
         Prende o apaga qué sigue Robotina. Los cambios aplican desde la siguiente retro o pregunta.
         Los rallies activos aparecen solos aquí.
       </div>
+      <button
+        disabled={!puedeEditar || guardando}
+        onClick={cambiarRetro}
+        style={{ display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "1px solid #1E2A42", borderRadius: 10, padding: "10px 12px", marginBottom: 14, cursor: puedeEditar ? "pointer" : "not-allowed", width: "100%", textAlign: "left" }}
+      >
+        <span style={{ width: 46, height: 24, borderRadius: 12, position: "relative", background: retroActiva ? "#3DDC97" : "#2A3550", flexShrink: 0 }}>
+          <span style={{ position: "absolute", top: 3, left: retroActiva ? 25 : 3, width: 18, height: 18, borderRadius: 9, background: "#0B1220", transition: "left .15s" }} />
+        </span>
+        <span style={{ fontSize: 13, color: retroActiva ? "#E8EDF5" : "#9AA7BD" }}>
+          🔥 Retro al grupo cada hora (9 am – 8 pm, lun–sáb) {retroActiva ? "· ACTIVA" : "· APAGADA"}
+        </span>
+      </button>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
