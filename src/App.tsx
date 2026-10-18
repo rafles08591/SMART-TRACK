@@ -41,6 +41,7 @@ import Login from "./components/Login";
 import VendorView from "./components/VendorView";
 import StaffView from "./components/StaffView";
 import { useSnapshotWhatsApp, dispararAvanceDia } from "./resumenWhatsApp";
+import { calcularAvanceRallyRuta } from "./components/RallyOtcView";
 
 /* ---------------------------------------------------------------
    PARCHE DEFENSIVO — "NotFoundError: Failed to execute 'removeChild'
@@ -1411,6 +1412,15 @@ export default function App() {
   // Mismos números que se ven en pantalla: MAX del periodo + avance del día
   // (paquetes). Solo lo escriben Gerente / Supervisores, que son quienes
   // cargan datos. El bot (api/wa-resumen.js) lee esta tabla.
+  // Rallies OTC activos y vigentes hoy → Robotina les da seguimiento (extra.rallies)
+  const ralliesVigentes = useMemo(() => {
+    const hoyISO = new Date().toLocaleDateString("en-CA");
+    const lista = data?.rallyOtcs || (data?.rallyOtc?.nombre ? [{ ...data.rallyOtc, id: "legacy" }] : []);
+    return lista.filter((r) => r.activo
+      && (!r.fechaInicio || hoyISO >= r.fechaInicio)
+      && (!r.fechaFin || hoyISO <= r.fechaFin));
+  }, [data?.rallyOtcs, data?.rallyOtc]);
+
   const filasWhatsApp = useMemo(() => (stats?.porVendedor || []).map((v) => {
     const tieneObjetivoDia = (v.hoy?.volumen?.objetivo || 0) > 0;
     return {
@@ -1473,9 +1483,27 @@ export default function App() {
           vendido: v.hoy?.marcas?.[m.key]?.vendido ?? null,
           objetivo: v.hoy?.marcas?.[m.key]?.objetivo ?? null,
         })),
+        // Rallies OTC en los que participa esta ruta (mismo cálculo que la pestaña RALLY OTC)
+        rallies: ralliesVigentes
+          .filter((r) => (r.rutasParticipantes || []).includes(v.name))
+          .map((r) => {
+            const a = calcularAvanceRallyRuta(data, r, v.name);
+            return {
+              id: r.id,
+              nombre: r.nombre || "Rally OTC",
+              unidad: r.unidad === "piezas" ? "piezas" : "dinero",
+              exclusivo: !!r.exclusivoSupervisor1,
+              fechaInicio: r.fechaInicio || null,
+              fechaFin: r.fechaFin || null,
+              avanceDia: a.avanceDia,
+              objetivoDia: a.objetivoDia,
+              avanceTotal: a.avanceTotal,
+              objetivoFinal: a.objetivoFinal,
+            };
+          }),
       },
     };
-  }), [stats]);
+  }), [stats, ralliesVigentes, data?.otcDia]);
 
   // Cuando se carga un Avance del día, se marca este pendiente. En cuanto el
   // snapshot con los números nuevos queda guardado, se avisa al bot para que
