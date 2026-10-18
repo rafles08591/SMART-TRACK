@@ -49,7 +49,8 @@ function otcEnRango(data, rally, nombreRuta, desde, hasta) {
     }, 0);
 }
 
-function calcularAvanceRallyRuta(data, rally, nombreRuta) {
+// Exportada: App.tsx la usa para mandar el avance del rally a Robotina (WhatsApp).
+export function calcularAvanceRallyRuta(data, rally, nombreRuta) {
   const obj = rally.objetivos?.[nombreRuta] || { dia: 0, final: 0 };
   const hoy = fechaHoyISO();
   // El "avance del día" solo debe contar si HOY cae dentro de la vigencia
