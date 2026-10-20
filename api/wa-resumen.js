@@ -387,12 +387,17 @@ async function modoBot(req) {
     if (extra.tipo !== 'ninguno' && body.texto) {
       await recordar(numero, historial, body.texto, extra.texto || extra.caption || '');
     }
-    if (!grupo || extra.tipo === 'ninguno') return json({ numero, ...extra });
+    if (!grupo || extra.tipo === 'ninguno') {
+      const { mencionados: _m, ...resto } = extra;
+      // En privado no hay menciones: @521… se cambia por el nombre que viene entre paréntesis
+      const limpiar = (t) => (typeof t === 'string' ? t.replace(/@521\d{10}\s*/g, '') : t);
+      return json({ numero, ...resto, ...(resto.texto ? { texto: limpiar(resto.texto) } : {}) });
+    }
     const pre = `@${tag} `;
     return json({
       ...extra,
       numero: grupo,
-      mencionados: [tag],
+      mencionados: [...new Set([tag, ...(extra.mencionados || [])])],
       ...(extra.texto ? { texto: pre + extra.texto } : {}),
       ...(extra.caption ? { caption: pre + extra.caption } : {}),
     });
@@ -410,6 +415,11 @@ async function modoBot(req) {
   }
 
   const cmd = comando(body.texto);
+  // 🖐️ "¿Quiénes son candidatos a la Tercera Mano del Pachuco?"
+  if (pideTerceraMano(body.texto)) {
+    const r = await respuestaTerceraMano(c, cfg, { historial, pregunta: body.texto });
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: grupo ? r.mencionados : [] });
+  }
   // 🔄 "Robotina actualiza": solo jefe / supervisores. n8n reinicia el robot de PowerStreet al ver tipo 'actualizar'.
   if (cmd === 'actualizar') {
     if (c.tipo !== 'equipo') {
@@ -574,6 +584,113 @@ async function contextoDatos(c) {
     dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
     marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
   };
+}
+
+// ------------------------------------------------------------------ 🖐️ TERCERA MANO (bajo pedido)
+// Se calcula con TODOS los indicadores que Robotina conoce (columna "Robotina lo conoce" del panel):
+// del día contra su meta y los del periodo contra el ritmo esperado. Los 3 con el índice más bajo
+// son los candidatos. A vendedores nunca se les muestran rallies exclusivos de Supervisor-1.
+function pideTerceraMano(texto) {
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /tercera\s*mano|pachuco|candidat/.test(t);
+}
+
+async function candidatosTercera(cfg, equipo) {
+  const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+  if (!fecha) return null;
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const inds = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, valores }) => {
+    const c = vend[ruta];
+    const lista = inds
+      .map((i) => {
+        const v = valores[i.clave];
+        if (!v) return null;
+        const comp = v.comp ?? v.pct;
+        if (comp === null || comp === undefined) return null;
+        return { indicador: i.nombre, unidad: i.unidad, avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
+      })
+      .filter(Boolean);
+    const indice = lista.length ? Math.round(lista.reduce((s, x) => s + Math.min(100, x.comp), 0) / lista.length) : null;
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      indice,
+      indicadores_medidos: lista.length,
+      cumplidos: lista.filter((x) => x.comp >= 100).length,
+      // Donde más le falta (lo que lo hace candidato)
+      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => a.comp - b.comp).slice(0, 6),
+    };
+  }).filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice);
+  const candidatos = rutas.slice(0, 3);
+  const corte = rutas[3] || null; // el 4° lugar desde abajo: a ese nivel hay que llegar para salir
+  return {
+    fecha,
+    regla: 'índice = promedio del cumplimiento de cada indicador (tope 100%); del día contra su meta, del periodo contra el ritmo esperado',
+    candidatos,
+    para_salir_superar_a: corte ? { ruta: corte.ruta, nombre: corte.nombre, indice: corte.indice } : null,
+    ranking_desde_abajo: rutas.map((r) => ({ ruta: r.ruta, nombre: r.nombre, indice: r.indice })),
+  };
+}
+
+function textoTerceraFijo(d, saludo) {
+  const fmtU2 = (v, u) => (u === '$' ? `$${Math.round(v || 0).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v || 0)} ${u}`);
+  const L = [saludo ? `${saludo}\n` : '', `🖐️ *Candidatos a La Tercera Mano del Pachuco* · corte ${fechaCorta(d.fecha)}`].filter(Boolean);
+  d.candidatos.forEach((c, i) => {
+    L.push('', `${i + 1}. @${c.mencion} (${c.ruta} ${c.nombre}) · rendimiento *${c.indice}%* · cumple ${c.cumplidos} de ${c.indicadores_medidos} indicadores`);
+    for (const x of c.debajo.slice(0, 4)) {
+      L.push(`   • ${x.indicador}: ${fmtU2(x.avance, x.unidad)} de ${fmtU2(x.meta, x.unidad)}${x.falta ? ` (le faltan ${fmtU2(x.falta, x.unidad)})` : ''}`);
+    }
+  });
+  if (d.para_salir_superar_a) L.push('', `👉 Para salir tienen que subir de *${d.para_salir_superar_a.indice}%* (${d.para_salir_superar_a.ruta} ${d.para_salir_superar_a.nombre}), cerrando lo que les falta arriba.`);
+  return L.join('\n');
+}
+
+async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = {}) {
+  const esJefe = c.tipo === 'equipo';
+  const titulo = tratoDe(c);
+  const d = await candidatosTercera(cfg, esJefe);
+  if (!d || !d.candidatos.length) return { texto: 'Todavía no hay datos cargados para calcular candidatos.', mencionados: [] };
+  const mencionados = d.candidatos.map((x) => x.mencion).filter(Boolean);
+  const saludo = esJefe ? `A la orden, ${titulo} 🫡` : '';
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { texto: textoTerceraFijo(d, saludo), mencionados };
+  const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Te piden los candidatos a "La Tercera Mano del Pachuco": las 3 rutas con el rendimiento más bajo considerando TODOS los indicadores (ver "regla").',
+    'Para CADA uno de los 3 candidatos, en este orden:',
+    '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento (índice %).',
+    '  b) POR QUÉ es candidato: sus 2 a 4 indicadores más débiles de "debajo", con números exactos (avance de meta, lo que falta, unidad). En los del periodo usa "ritmo" y "necesita_por_dia".',
+    '  c) CÓMO DEJAR DE SERLO: acciones concretas y medibles (cuánto vender de qué, cubrir Sin Vuala, qué marca empujar) para superar el índice de "para_salir_superar_a".',
+    'Formato WhatsApp, *negritas*, sin tablas, máximo 22 líneas en total. Al final una línea corta que motive.',
+    'Usa SOLO los números del JSON; no inventes cifras ni premios. paq = paquetes, pz = piezas, $ = pesos. No felicites a nadie.',
+    'Límites: nada humillante ni sobre físico, familia, género, orientación, religión u origen.',
+    `Datos (JSON): ${JSON.stringify(d)}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.6,
+        max_tokens: 900,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(pregunta || 'Dame los candidatos a la Tercera Mano').slice(0, 500) }],
+      }),
+    });
+    if (!r.ok) throw new Error('openai');
+    const j = await r.json();
+    const texto = (j.choices?.[0]?.message?.content || '').trim();
+    if (!texto) throw new Error('vacío');
+    return { texto, mencionados: mencionados.filter((m) => texto.includes(`@${m}`)) };
+  } catch {
+    return { texto: textoTerceraFijo(d, saludo), mencionados };
+  }
 }
 
 async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
