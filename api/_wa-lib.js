@@ -287,7 +287,8 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '{rutas_riesgo}',
     '',
-    '✅ En ritmo: {rutas_ok}',
+    '🟡 Buen avance, pero aún no llegan al 100%: {rutas_cerca}',
+    '✅ Cierran en meta (100% o más): {rutas_ok}',
   ].join('\n'),
   riesgo_tarde: [
     '🚨 *3 PM · RUTAS QUE NECESITAN APOYO*',
@@ -295,7 +296,8 @@ export const PLANTILLAS_DEFAULT = {
     '',
     '{rutas_riesgo}',
     '',
-    '✅ Bien hoy: {rutas_ok}',
+    '🟡 Sin alerta, pero aún sin su meta del día: {rutas_cerca}',
+    '✅ Ya cubrieron su meta del día: {rutas_ok}',
   ].join('\n'),
   dia: [
     '📦 *Avance del día* · corte {hora}',
@@ -833,7 +835,7 @@ export function varsGrupoDia(g) {
 
 // ---------------------------------------------------------------- RUTAS EN RIESGO (para Supervisor / Gerente)
 // Proyección del mes: lo que lleva + (su promedio diario × días que faltan).
-// nivel: 'ok' (proyecta ≥ umbral) · 'riesgo' (umbral-10 a umbral) · 'critico' (< umbral-10)
+// nivel: 'ok' (proyecta ≥ 100%) · 'cerca' (umbral a 99%: buen avance, pero aún no) · 'riesgo' (umbral-10 a umbral) · 'critico' (< umbral-10)
 const nomR = (r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}`;
 
 function accionSugerida(x) {
@@ -864,7 +866,7 @@ export function calcularRiesgo(filas, contactosLista = [], umbral = 95) {
       const d = r.m.esperado ? (o * r.m.esperado) / 100 - v : 0;
       if (o > 0 && d / o > 0.05 && (!marcaPeor || d > marcaPeor.d)) marcaPeor = { nombre: mk.nombre, d };
     }
-    const nivel = pctProy === null ? null : pctProy >= umbral ? 'ok' : pctProy >= umbral - 10 ? 'riesgo' : 'critico';
+    const nivel = pctProy === null ? null : pctProy >= 100 ? 'ok' : pctProy >= umbral ? 'cerca' : pctProy >= umbral - 10 ? 'riesgo' : 'critico';
     const x = { ...r, trans, rest, promedio, proy, pctProy, faltaProy, necesita, brecha, marcaPeor, nivel, efectividad: r.m.efectividad };
     // Señales extra
     const senales = [];
@@ -881,7 +883,7 @@ export function calcularRiesgo(filas, contactosLista = [], umbral = 95) {
   const sum = (fn) => rutas.reduce((s, r) => s + (fn(r) || 0), 0);
   const proyEq = sum((r) => r.proy), objEq = sum((r) => r.maxO);
   return {
-    fecha: g.fecha, umbral, rutas, enRiesgo, ok: rutas.filter((r) => r.nivel === 'ok'),
+    fecha: g.fecha, umbral, rutas, enRiesgo, ok: rutas.filter((r) => r.nivel === 'ok'), cerca: rutas.filter((r) => r.nivel === 'cerca'),
     proyEquipo: proyEq, objEquipo: objEq, pctProyEquipo: objEq ? (proyEq / objEq) * 100 : null,
   };
 }
@@ -903,6 +905,7 @@ export function varsRiesgo(rk) {
     falta_equipo: `${miles(Math.max(0, rk.objEquipo - rk.proyEquipo))} paq`,
     rutas_riesgo: det,
     rutas_ok: rk.ok.map((r) => `${r.ruta} (${pct(r.pctProy)})`).join(', '),
+    rutas_cerca: (rk.cerca || []).map((r) => `${r.ruta} (${pct(r.pctProy)}, faltarían ${miles(r.faltaProy)} paq)`).join(', '),
     criticas: rk.enRiesgo.filter((r) => r.nivel === 'critico').map(nomR).join(', '),
   };
 }
@@ -918,7 +921,10 @@ export function calcularRiesgoTarde(filasHoy, contactosLista = [], umbralDia = 7
     const sinSv = r.sv && !r.sv.cumple;
     return { ...r, pctDia, mes: mesPor[r.ruta] || null, enRiesgo: malDia || sinSv, critico: pctDia !== null && pctDia < umbralDia - 25 };
   }).sort((a, b) => (a.pctDia ?? 999) - (b.pctDia ?? 999));
-  return { fecha: gd.fecha, nombres: gd.nombres, rutas, enRiesgo: rutas.filter((r) => r.enRiesgo), ok: rutas.filter((r) => !r.enRiesgo) };
+  // "Bien" solo si ya cubrió su meta del día (100%+) y su Sin Vuala; el resto sin alerta es "cerca".
+  const sinAlerta = rutas.filter((r) => !r.enRiesgo);
+  const cumplio = (r) => r.pctDia !== null && r.pctDia >= 100 && !(r.sv && !r.sv.cumple);
+  return { fecha: gd.fecha, nombres: gd.nombres, rutas, enRiesgo: rutas.filter((r) => r.enRiesgo), ok: sinAlerta.filter(cumplio), cerca: sinAlerta.filter((r) => !cumplio(r)) };
 }
 
 export function varsRiesgoTarde(rt) {
@@ -945,6 +951,7 @@ export function varsRiesgoTarde(rt) {
     total_rutas: String(rt.rutas.length),
     rutas_riesgo: det,
     rutas_ok: rt.ok.map((r) => `${r.ruta} (${pct(r.pctDia)})`).join(', '),
+    rutas_cerca: (rt.cerca || []).map((r) => `${r.ruta} (${pct(r.pctDia)})`).join(', '),
   };
 }
 
