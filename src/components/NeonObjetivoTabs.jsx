@@ -1,4 +1,4 @@
-import { useState, memo } from "react";
+import { useState, memo, useMemo, useRef, useEffect } from "react";
 
 const SW = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
 
@@ -65,6 +65,8 @@ function TileIcon({ name, ...props }) {
         <path d="M12 2 12.6 3.4 14.1 3.55 13 4.5 13.3 6 12 5.2 10.7 6 11 4.5 9.9 3.55 11.4 3.4Z" fill="currentColor" stroke="none" />
       </svg>
     );
+    case "warehouse": return (<svg {...p}><path d="M3 9.5 12 4l9 5.5V20H3V9.5Z"/><path d="M7 20v-7h10v7"/><path d="M7 16h10"/></svg>);
+    case "search": return (<svg {...p}><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>);
     case "whatsapp": return (
       <svg {...p}>
         <path d="M12 3.2a8.8 8.8 0 0 0-7.6 13.2L3.2 20.8l4.5-1.2A8.8 8.8 0 1 0 12 3.2Z" />
@@ -114,6 +116,7 @@ const META = {
   actividades_mes:   { icon: "checklist",color: "#a78bfa", fam: "📋 Operación" },
   cotizador:         { icon: "calc",     color: "#fbbf24", fam: "📋 Operación" },
   pwst:              { icon: "box",      color: "#94a3b8", fam: "📋 Operación" },
+  almacen:           { icon: "warehouse",color: "#f59e0b", fam: "📋 Operación" },
 
   avisos:            { icon: "bell",     color: "#f87171", fam: "🔔 Avisos" },
 
@@ -214,14 +217,72 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
   );
 });
 
+// Sin acentos y en minúsculas, para buscar "almacen" y encontrar "ALMACÉN"
+const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
 export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
+  const [busqueda, setBusqueda] = useState("");
+  const inputRef = useRef(null);
+  const q = norm(busqueda);
+
+  // Atajo: "/" enfoca el buscador (si no estás escribiendo en otro campo)
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (e.key === "/" && !["input", "textarea", "select"].includes(tag)) { e.preventDefault(); inputRef.current?.focus(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const visibles = useMemo(() => {
+    if (!q) return tabs || [];
+    const palabras = q.split(/\s+/).filter(Boolean);
+    return (tabs || []).filter((t) => {
+      const texto = norm(`${t.label} ${t.key.replace(/_/g, " ")} ${META[t.key]?.fam || ""}`);
+      return palabras.every((p) => texto.includes(p));
+    });
+  }, [tabs, q]);
+
   const grouped = FAMILY_ORDER.map((fam) => ({
     fam,
-    items: (tabs || []).filter((t) => (META[t.key]?.fam || "📋 Operación") === fam),
+    items: visibles.filter((t) => (META[t.key]?.fam || "📋 Operación") === fam),
   })).filter((g) => g.items.length > 0);
+
+  const elegir = (key) => { setTab(key); setBusqueda(""); };
 
   return (
     <div style={{ marginBottom: 6 }}>
+      <div style={{ position: "relative", marginBottom: 16 }}>
+        <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#64748b", display: "flex" }}>
+          <TileIcon name="search" width={18} height={18} />
+        </span>
+        <input
+          ref={inputRef}
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && visibles.length) elegir(visibles[0].key);
+            if (e.key === "Escape") setBusqueda("");
+          }}
+          placeholder="Buscar módulo… (ej. almacén, facturas, rally)"
+          style={{
+            width: "100%", boxSizing: "border-box", padding: "11px 38px 11px 38px", borderRadius: 12,
+            border: "1px solid #1e2a42", background: "#0b1220", color: "#e2e8f0", fontSize: 14, outline: "none",
+          }}
+        />
+        {busqueda && (
+          <button type="button" onClick={() => setBusqueda("")} aria-label="Limpiar"
+            style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 18, padding: 4 }}>
+            ×
+          </button>
+        )}
+      </div>
+      {q && visibles.length === 0 && (
+        <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 13, padding: "14px 0 20px" }}>
+          No hay ningún módulo que coincida con “{busqueda}”.
+        </div>
+      )}
       {grouped.map((g) => (
         <div key={g.fam} style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "#cbd5e1", marginBottom: 8 }}>
@@ -245,7 +306,7 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
                   pulse={!!status?.pulse || !!meta.alwaysPulse}
                   badge={!!status?.badge}
                   intense={!!meta.alwaysPulse}
-                  onSelect={setTab}
+                  onSelect={elegir}
                 />
               );
             })}
