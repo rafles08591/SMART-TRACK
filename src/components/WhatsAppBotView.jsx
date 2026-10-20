@@ -96,7 +96,8 @@ const PLANTILLAS_DEFAULT = {
     "",
     "{rutas_riesgo}",
     "",
-    "✅ En ritmo: {rutas_ok}",
+    "🟡 Buen avance, pero aún no llegan al 100%: {rutas_cerca}",
+    "✅ Cierran en meta (100% o más): {rutas_ok}",
   ].join("\n"),
   riesgo_tarde: [
     "🚨 *3 PM · RUTAS QUE NECESITAN APOYO*",
@@ -104,7 +105,8 @@ const PLANTILLAS_DEFAULT = {
     "",
     "{rutas_riesgo}",
     "",
-    "✅ Bien hoy: {rutas_ok}",
+    "🟡 Sin alerta, pero aún sin su meta del día: {rutas_cerca}",
+    "✅ Ya cubrieron su meta del día: {rutas_ok}",
   ].join("\n"),
   equipo_dia: [
     "📦 *Avance del día · Equipo* · corte {hora}",
@@ -170,24 +172,26 @@ VARIABLES.equipo_dia = [
 VARIABLES.riesgo = [
   ["nombre", "Nombre de quien recibe"], ["fecha", "Fecha del corte"], ["proyeccion_equipo", "% al que cierra el equipo"],
   ["falta_equipo", "Paquetes que faltarían"], ["total_riesgo", "Rutas en riesgo"], ["total_rutas", "Total rutas"],
-  ["umbral", "Umbral de riesgo"], ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Rutas en ritmo"],
+  ["umbral", "Umbral de riesgo"], ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Rutas que cierran en 100%+"], ["rutas_cerca", "Buen avance, aún sin 100%"],
   ["criticas", "Solo las críticas (nombres)"],
 ];
 VARIABLES.riesgo_tarde = [
   ["nombre", "Nombre de quien recibe"], ["fecha", "Fecha"], ["total_riesgo", "Rutas mal hoy"], ["total_rutas", "Total rutas"],
-  ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Rutas bien hoy"],
+  ["rutas_riesgo", "Detalle + acción por ruta"], ["rutas_ok", "Ya cubrieron su meta"], ["rutas_cerca", "Sin alerta, aún sin meta"],
 ];
 
 const EJEMPLO_RIESGO = {
   nombre: "Christian", fecha: "mar 06/10", proyeccion_equipo: "86%", falta_equipo: "1,960 paq", total_riesgo: "3",
   total_rutas: "7", umbral: "95%", criticas: "J205 Alejandro",
   rutas_riesgo: "🔴 *J205 Alejandro* · cierra en *72%* (faltarían 560 paq)\n   Lleva 54 paq/día, necesita 79 (+25)\n   ⚠️ FARONET 180 paq abajo · Sin Vuala 1/2 · efectividad 64%\n   👉 Revisar con él los clientes que no compraron y acompañarlo a los de más volumen.\n\n🟠 *J201 Francisco* · cierra en *89%* (faltarían 220 paq)\n   Lleva 67 paq/día, necesita 77 (+10)\n   ⚠️ ICE MIX 90 paq abajo\n   👉 Empujar ICE MIX con sus clientes top (va 90 paq abajo).",
-  rutas_ok: "J202 (98%), J206 (130%), J203 (101%), J204 (97%)",
+  rutas_ok: "J206 (130%), J203 (101%)",
+  rutas_cerca: "J202 (98%, faltarían 40 paq), J204 (97%, faltarían 55 paq)",
 };
 const EJEMPLO_RIESGO_TARDE = {
   ...EJEMPLO_RIESGO,
   rutas_riesgo: "🔴 *J203 Ana* · 35 de 100 paq (35%) · mes cierra en 81%\n   Le falta: 2 pz Sin Vuala, 65 paq de volumen, 30 paq FARONET\n   👉 Llámale y que empuje FARONET (le faltan 30 paq) en lo que le queda de ruta.\n\n🟠 *J204 Noema* · 61 de 100 paq (61%)\n   Le falta: 39 paq de volumen\n   👉 Llámale ya, todavía da tiempo de recuperar.",
-  rutas_ok: "J207 (72%), J201 (80%), J206 (109%), J202 (110%)",
+  rutas_ok: "J206 (109%), J202 (110%)",
+  rutas_cerca: "J207 (72%), J201 (80%)",
 };
 
 const EJEMPLO = {
