@@ -65,7 +65,15 @@ function TileIcon({ name, ...props }) {
         <path d="M12 2 12.6 3.4 14.1 3.55 13 4.5 13.3 6 12 5.2 10.7 6 11 4.5 9.9 3.55 11.4 3.4Z" fill="currentColor" stroke="none" />
       </svg>
     );
-    case "warehouse": return (<svg {...p}><path d="M3 9.5 12 4l9 5.5V20H3V9.5Z"/><path d="M7 20v-7h10v7"/><path d="M7 16h10"/></svg>);
+    case "warehouse": return (
+      <svg {...p}>
+        <path d="M2.5 9.3 12 3.6l9.5 5.7" />
+        <path d="M4.8 8.4v12.1h14.4V8.4" />
+        <path d="M8 20.5v-8.6h8v8.6" />
+        <path d="M8 14.8h8M8 17.7h8" />
+        <circle cx="12" cy="8.4" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
     case "search": return (<svg {...p}><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>);
     case "whatsapp": return (
       <svg {...p}>
