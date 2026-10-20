@@ -199,7 +199,10 @@ const umbralRiesgo = (cfg) => (Number(cfg?.umbralRiesgo) > 0 ? Math.min(100, Num
 function textoRiesgo(cfg, rk, c) {
   const v = { ...varsRiesgo(rk), nombre: primerNombre(c?.nombre, '') || 'Equipo' };
   if (!rk.enRiesgo.length) {
-    return `✅ *RUTAS EN RIESGO* · corte ${v.fecha || ''}\nNinguna 🙌 Las ${v.total_rutas} rutas proyectan cerrar arriba del ${v.umbral}.\nEquipo cierra en *${v.proyeccion_equipo || '—'}*.`;
+    const lineas = [`🚨 *RUTAS EN RIESGO* · corte ${v.fecha || ''}`, `Ninguna abajo del ${v.umbral}. Equipo cierra en *${v.proyeccion_equipo || '—'}*.`];
+    if (v.rutas_cerca) lineas.push(`🟡 Buen avance, pero aún no llegan al 100%: ${v.rutas_cerca}`);
+    if (v.rutas_ok) lineas.push(`✅ Cierran en meta (100% o más): ${v.rutas_ok}`);
+    return lineas.join('\n');
   }
   return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
 }
@@ -553,7 +556,7 @@ async function contextoDatos(c) {
     const d = varsEquipoDia(calcularEquipoDia(filas, todos));
     const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
     return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
-      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, en_ritmo: rk.rutas_ok },
+      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, cierran_en_meta_100: rk.rutas_ok || 'ninguna', buen_avance_pero_sin_100: rk.rutas_cerca, nota: 'Solo 100% o más se considera bien; abajo de 100 es buen avance pero no cumple.' },
       indicadores_por_ruta: await indicadoresParaIA(fecha, cfg, { filas, todos, equipo: true }) };
   }
   const ultimos = await ultimosPorRuta({ hasta: hoy });
