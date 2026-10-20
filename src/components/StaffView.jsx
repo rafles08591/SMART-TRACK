@@ -7,7 +7,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import * as XLSX from "xlsx";
 import {
-  OBJETIVO_TABS, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA, RUTAS,
+  OBJETIVO_TABS as OBJETIVO_TABS_BASE, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA, RUTAS,
 } from "../constants";
 import {
   fmt, money, unidades, metaColor, analizarMesaControl, calcularResumenPedidos,
@@ -54,6 +54,13 @@ import CarreraMes from "./CarreraMes";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 import MuralCampeonesView from "./MuralCampeonesView";
+import AlmacenView from "./AlmacenView";
+
+// Módulo ALMACÉN: se agrega aquí si todavía no viene en OBJETIVO_TABS
+// (constants). Si después se agrega allá, no se duplica.
+const OBJETIVO_TABS = OBJETIVO_TABS_BASE.some((t) => t.key === "almacen")
+  ? OBJETIVO_TABS_BASE
+  : [...OBJETIVO_TABS_BASE, { key: "almacen", label: "ALMACÉN", unit: "" }];
 
 // Formatea un número de paquetes conservando 1 decimal (el resumen de
 // arriba redondea con fmt()/unidades(), pero el detalle expandible por
@@ -453,7 +460,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
                   ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
                   : esSupervisor2
-                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones"].includes(t.key))
+                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones", "almacen"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
@@ -726,6 +733,13 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                 Abrir cotizador
               </a>
             </div>
+          ) : objTab === "almacen" ? (
+            <AlmacenView
+              data={data}
+              persistFresco={persistFresco}
+              puedeEditar={puesto === "gerente" || esSupervisor1 || esSupervisor2}
+              quien={revisorNombre}
+            />
           ) : objTab === "rally_otc" ? (
             <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
