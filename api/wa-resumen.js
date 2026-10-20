@@ -873,15 +873,23 @@ async function datosRetro(fecha, cfg) {
     if (lista.length) abajo_por_indicador[i.nombre] = lista;
   }
   const quita = ({ min_desde_salida, ...r }) => r;
+  // Agrega si ya cubrió su meta del día y cuánto le falta
+  const conMeta = (r) => {
+    const v = r?.indicadores?.['Venta del día'];
+    const falta = v?.falta ?? null;
+    return { ...r, cumple_meta_dia: r.pct_dia !== null && r.pct_dia >= 100, falta_meta_dia: falta };
+  };
   return {
     fecha,
     hora: `${h}:00`,
     indicadores_activos: enRetro.map((i) => `${i.nombre} (${i.unidad})`),
     reto: t.av ? { marca: t.av.nombre, equipo: t.av.total, meta_equipo: t.av.metaTotal } : null,
     // Líder = quien más paquetes lleva hoy (como la tabla "POR RUTA · VENDIDO HOY" de la app)
-    lider_dia: rutas.length ? quita([...rutas].sort((a, b) => b.venta_dia - a.venta_dia)[0]) : null,
+    lider_dia: rutas.length ? conMeta(quita([...rutas].sort((a, b) => b.venta_dia - a.venta_dia)[0])) : null,
     // Quien va más alto contra SU meta del día (puede ser otra ruta)
-    mejor_pct_dia: conDia.length ? quita(conDia[conDia.length - 1]) : null,
+    mejor_pct_dia: conDia.length ? conMeta(quita(conDia[conDia.length - 1])) : null,
+    // Los únicos a los que se puede felicitar: ya cubrieron su meta de venta del día
+    cumplieron_meta_dia: rutas.filter((r) => r.pct_dia !== null && r.pct_dia >= 100).map((r) => ({ ruta: r.ruta, nombre: r.nombre, mencion: r.mencion, venta_dia: r.venta_dia, pct_dia: r.pct_dia })),
     tercera_mano: rutas.filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice).slice(0, 3).map(quita),
     abajo_por_indicador,
     en_cero: enCero.map(quita),
@@ -900,8 +908,13 @@ const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${
 function textoRetroFijo(d) {
   const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
   const L = [`🔥 *RETRO ${d.hora}* · ¿Quién se lleva La Tercera Mano del Pachuco? 🖐️`];
-  if (d.lider_dia) L.push(`🥇 Manda ${d.lider_dia.ruta} ${d.lider_dia.nombre} con ${Math.round(d.lider_dia.venta_dia)} paq hoy.`);
-  if (d.mejor_pct_dia && d.mejor_pct_dia.ruta !== d.lider_dia?.ruta) L.push(`🎯 Mejor contra su meta: ${d.mejor_pct_dia.ruta} ${d.mejor_pct_dia.nombre} con ${d.mejor_pct_dia.pct_dia}%.`);
+  if (d.lider_dia) {
+    const l = d.lider_dia;
+    L.push(l.cumple_meta_dia
+      ? `🏆 ${l.ruta} ${l.nombre} va al frente con ${Math.round(l.venta_dia)} paq y ya cubrió su meta del día. ¡Felicidades!`
+      : `🥇 ${l.ruta} ${l.nombre} va al frente con ${Math.round(l.venta_dia)} paq, pero todavía le faltan ${l.falta_meta_dia ?? '—'} paq para su meta.`);
+  }
+  if (d.mejor_pct_dia && d.mejor_pct_dia.ruta !== d.lider_dia?.ruta) L.push(`🎯 Más cerca de su meta: ${d.mejor_pct_dia.ruta} ${d.mejor_pct_dia.nombre} (${d.mejor_pct_dia.pct_dia}%)${d.mejor_pct_dia.cumple_meta_dia ? ' ✅' : `, le faltan ${d.mejor_pct_dia.falta_meta_dia ?? '—'} paq`}.`);
   if (d.en_cero.length) {
     L.push('', '🥶 *Siguen en CERO:*');
     for (const r of d.en_cero) L.push(`• ${tag(r)}${r.salida_clo ? ` salió del CLO a las ${r.salida_clo}` : ''} y no ha vendido nada. ¡Primer cliente YA!`);
@@ -929,7 +942,8 @@ async function textoRetroIA(d, cfg) {
     'Cada hora das retro del AVANCE DEL DÍA. La "Tercera Mano del Pachuco" es el castigo/burla para los 3 más bajos del día; los de "tercera_mano" son los candidatos.',
     `Indicadores que se siguen hoy: ${d.indicadores_activos.join(', ') || 'venta del día'}. Solo habla de esos.`,
     'Estructura (formato WhatsApp, *negritas*, máximo 16 líneas):',
-    '1) Una línea de arranque con la hora y el reconocimiento a "lider_dia" (quien más paquetes lleva hoy; di sus paquetes). Si "mejor_pct_dia" es otra ruta, reconócela también en la misma línea como la que va mejor contra su meta (con su %).',
+    '1) Una línea de arranque con la hora y quién va al frente: "lider_dia" (más paquetes hoy, di sus paquetes) y, si es otra ruta, "mejor_pct_dia" (la más cerca de su meta, con su %).',
+    'REGLA DE RECONOCIMIENTO: solo puedes FELICITAR (felicidades, bien hecho, aplauso, chingón, crack, etc.) a quien aparece en "cumplieron_meta_dia", porque ya cubrió su meta. A quien va al frente pero NO ha cubierto su meta ("cumple_meta_dia": false) solo reconoce que va adelante y recuérdale cuánto le falta ("falta_meta_dia"): acercarse no es suficiente. Nunca digas "ritmo" para el % del día; es el % de su meta de hoy.',
     '2) Si hay "en_cero": señálalos primero, di a qué hora salieron del CLO si viene el dato, y exígeles su primera venta ya.',
     '3) Los candidatos a la Tercera Mano: a cada uno dile en una línea qué le falta en cada indicador donde va abajo (usa el nombre del indicador y los números exactos con su unidad) y un consejo concreto y corto.',
     '4) Si hay un Rally activo, una línea con quién va más abajo en el rally (de "abajo_por_indicador").',
