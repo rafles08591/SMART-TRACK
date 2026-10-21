@@ -435,8 +435,14 @@ async function modoBot(req) {
         ? `⚠️ ${tratoDe(c)}, no pude actualizar PowerStreet; te paso lo último que tengo cargado:`
         : `🔄 Listo, ${tratoDe(c)}: información actualizada a las ${hora}.`;
     } else if (pideAvance(body.texto, cmd)) {
-      const ult = await leerEstado('refresco_hecho');
-      const reciente = ult?.t && Date.now() - ult.t < MIN_FRESCO * 60000;
+      // Fresco si el robot avisó hace poco o si el avance se cargó hace poco (por el ciclo de cada hora)
+      const [ult, snap] = await Promise.all([
+        leerEstado('refresco_hecho'),
+        sb('resumen_vendedores?select=actualizado_en&order=actualizado_en.desc.nullslast&limit=1').catch(() => []),
+      ]);
+      const tSnap = snap?.[0]?.actualizado_en ? Date.parse(snap[0].actualizado_en) : 0;
+      const tUlt = Math.max(ult?.t || 0, tSnap || 0);
+      const reciente = tUlt && Date.now() - tUlt < MIN_FRESCO * 60000;
       if (!reciente) {
         return responder({
           tipo: 'refrescar',
