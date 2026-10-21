@@ -869,8 +869,27 @@ function productosPorApodo(texto, apodos) {
   };
 }
 
+// Apodos de base (los mismos ejemplos del panel); se suman a los que se guarden en la app
+const APODOS_BASE = [
+  { codigo: '0309', articulo: 'VLACHOCO_26', apodos: 'VUALA CHOCOLATE' },
+  { codigo: '0310', articulo: 'VLAVAINILLA_26', apodos: 'VUALA VAINILLA' },
+  { codigo: '0360', articulo: 'CP11D24+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0390', articulo: 'CP11D20+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0300', articulo: 'CPLCP11_26', apodos: 'CLIPPER' },
+  { codigo: '0316', articulo: 'SWICHC/10_26', apodos: 'SWITCH, SWICH, SIWCH' },
+  { codigo: '0372', articulo: 'CARCOOFRE_26_B', apodos: 'CARIBE, CARIBE FRESA' },
+  { codigo: '0374', articulo: 'CARCOOMANG_26_B', apodos: 'CARIBE, CARIBE MANGO' },
+  { codigo: '0375', articulo: 'CARCOOMANZ_26_B', apodos: 'CARIBE, CARIBE MANZANA' },
+  { codigo: '0371', articulo: 'CARCOODZN_26_B', apodos: 'CARIBE' },
+  { codigo: '0354', articulo: 'CARCOOTIN_26.6', apodos: 'CARIBE' },
+  { codigo: '0304', articulo: 'PAPELCP_26', apodos: 'PAPEL CLIPPER' },
+  { codigo: '0307', articulo: 'EXIS_26', apodos: 'ECONOMICO' },
+  { codigo: '0305', articulo: 'CPGAS16ML_26', apodos: 'GAS' },
+  { codigo: '0293', articulo: 'HIDRA FRESA', apodos: 'HIDRA' },
+];
+
 async function ventasPorProducto(texto, cfg) {
-  const porApodo = productosPorApodo(texto, cfg?.apodos);
+  const porApodo = productosPorApodo(texto, [...(Array.isArray(cfg?.apodos) ? cfg.apodos : []), ...APODOS_BASE]);
   const palabras = palabrasProducto(texto);
   if (!palabras.length && !porApodo) return null;
   let av = [], otc = [];
@@ -879,6 +898,16 @@ async function ventasPorProducto(texto, cfg) {
     av = Array.isArray(r?.[0]?.av) ? r[0].av : [];
     otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
   } catch { return null; }
+  // El reporte de OTC trae todas las rutas del país: solo se cuentan las del equipo
+  // (las rutas dadas de alta en Contactos de WhatsApp y las que salen en el resumen del día).
+  const misRutas = new Set();
+  try {
+    for (const c of await listaContactos(cfg)) if (c.tipo === 'vendedor' && c.ruta) misRutas.add(claveRuta(c.ruta));
+    for (const f of await sb('resumen_vendedores?select=ruta&order=fecha.desc&limit=40')) if (f.ruta) misRutas.add(claveRuta(f.ruta));
+  } catch { /* sin filtro si no se pudo leer */ }
+  const esMia = (vendedor) => !misRutas.size || misRutas.has(claveRuta(vendedor));
+  av = av.filter((x) => esMia(x.vendedor));
+  otc = otc.filter((x) => esMia(x.vendedor));
   const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
   const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
@@ -888,7 +917,11 @@ async function ventasPorProducto(texto, cfg) {
       return (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) ? 1 : 0;
     }
     const h = norm(campos.join(' '));
-    return palabras.filter((w) => h.includes(w)).length;
+    const tokens = h.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
+    // Coincide si la palabra está dentro del nombre, o si se parece a un pedazo del nombre
+    // (una letra de diferencia, o el pedazo empieza con la palabra: "swich" ~ "swichc")
+    return palabras.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
+      || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2))).length;
   };
   const productos = {};
   const sumar = (clave, nombre, tipo, ruta, cant, monto, puntos) => {
@@ -922,8 +955,8 @@ async function ventasPorProducto(texto, cfg) {
     encontrado: lista.length > 0,
     productos: lista,
     nota: lista.length
-      ? 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC). Las rutas que no aparecen no vendieron ese producto.'
-      : 'En el detalle de ventas del día NO hay ninguna venta de un producto con esas palabras.',
+      ? `Venta real por artículo del detalle del día, SOLO de las rutas del equipo (${[...misRutas].sort().join(', ')}). Paquetes en avance, piezas en OTC. Las rutas que no aparecen no vendieron ese producto.`
+      : `En el detalle de ventas del día NO hay ninguna venta de ese producto en las rutas del equipo (${[...misRutas].sort().join(', ')}).`,
   };
 }
 
