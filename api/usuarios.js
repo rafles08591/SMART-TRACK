@@ -48,6 +48,11 @@ async function llamar(path, opciones = {}) {
 // "Almacén 1" → "ALMACEN-1"; correo "almacen-1@smarttrack.local"
 const limpiarUsuario = (u) => String(u || '').trim().toUpperCase()
   .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+// Supabase pide contraseñas de mínimo 6 caracteres y el PIN es de 4: a los usuarios creados
+// desde la app se les guarda el PIN con un sufijo fijo. Login.jsx agrega el mismo sufijo.
+// (Debe coincidir con SUFIJO_PIN de src/components/Login.jsx)
+const SUFIJO_PIN = '#ST';
+const claveDe = (pin) => `${pin}${SUFIJO_PIN}`;
 const correoDe = (username) => `${username.toLowerCase()}@smarttrack.local`;
 const slugPuesto = (p) => String(p || '').trim().toLowerCase()
   .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -148,7 +153,7 @@ export default async function handler(req) {
         method: 'POST',
         body: JSON.stringify({
           email: correoDe(username),
-          password: pin,
+          password: claveDe(pin),
           email_confirm: true,
           user_metadata: {
             app_usuario: true, username, nombre, grupo: tipo, clo: tipo === 'merch' ? body.clo : null,
@@ -180,7 +185,7 @@ export default async function handler(req) {
     if (accion === 'pin') {
       const pin = String(body.pin || '').replace(/\D/g, '');
       if (pin.length !== 4) return json({ error: 'El PIN debe ser de 4 dígitos' }, 400);
-      await llamar(`/auth/v1/admin/users/${u.id}`, { method: 'PUT', body: JSON.stringify({ password: pin }) });
+      await llamar(`/auth/v1/admin/users/${u.id}`, { method: 'PUT', body: JSON.stringify({ password: claveDe(pin) }) });
       return json({ ok: true });
     }
     if (accion === 'activar') {
