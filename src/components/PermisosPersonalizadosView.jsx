@@ -1,7 +1,11 @@
 // @ts-nocheck
 import React, { useState, useEffect } from "react";
 import { Search, Sliders, CheckCircle2 } from "lucide-react";
-import { OBJETIVO_TABS, USUARIOS_APP } from "../constants";
+import { OBJETIVO_TABS as OBJETIVO_TABS_BASE, USUARIOS_APP } from "../constants";
+
+// Módulos que se agregan desde StaffView y quizá aún no están en constants
+const EXTRA_TABS = [{ key: "almacen", label: "ALMACÉN" }, { key: "usuarios", label: "USUARIOS" }];
+const OBJETIVO_TABS = [...OBJETIVO_TABS_BASE, ...EXTRA_TABS.filter((e) => !OBJETIVO_TABS_BASE.some((t) => t.key === e.key))];
 
 // Permisos personalizados por usuario — panel exclusivo de Gerente.
 //
@@ -64,7 +68,14 @@ export default function PermisosPersonalizadosView({ data, persistFresco }) {
   const [guardando, setGuardando] = useState(false);
   const [exito, setExito] = useState(false);
 
-  const opciones = USUARIOS_APP.filter((u) => USUARIOS_CON_PERMISOS_EDITABLES.has(u.username));
+  // Usuarios nuevos creados por el Gerente (módulo Usuarios): también se les dan permisos aquí
+  const [extras, setExtras] = useState([]);
+  useEffect(() => {
+    fetch("/api/usuarios?accion=login").then((r) => (r.ok ? r.json() : null)).then((j) => {
+      if (j?.usuarios) setExtras(j.usuarios.map((u) => ({ username: u.username, label: `${u.nombre} · ${u.puesto_label || u.username}`, nuevo: true, puesto_label: u.puesto_label })));
+    }).catch(() => {});
+  }, []);
+  const opciones = [...USUARIOS_APP.filter((u) => USUARIOS_CON_PERMISOS_EDITABLES.has(u.username)), ...extras];
   const filtrados = opciones.filter((u) =>
     u.label.toLowerCase().includes(busqueda.toLowerCase()) || u.username.toLowerCase().includes(busqueda.toLowerCase())
   );
@@ -75,6 +86,10 @@ export default function PermisosPersonalizadosView({ data, persistFresco }) {
     if (existente) {
       setPersonalizarActivo(true);
       setTabsSeleccionadas(existente);
+    } else if (seleccionado.nuevo) {
+      // Los usuarios nuevos siempre usan lista propia (no tienen reglas por rol)
+      setPersonalizarActivo(true);
+      setTabsSeleccionadas(/almac/i.test(seleccionado.puesto_label || "") ? ["almacen"] : []);
     } else {
       setPersonalizarActivo(false);
       setTabsSeleccionadas(defaultTabsFor(seleccionado.username));
@@ -114,7 +129,7 @@ export default function PermisosPersonalizadosView({ data, persistFresco }) {
         <span className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>PERMISOS POR USUARIO</span>
       </div>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 16 }}>
-        Por ahora aplica a rutas de vendedor y Supervisor-1/Supervisor-2. Suplente-1/2 se manejan aparte, desde Unidades → Permisos de Suplente.
+        Aplica a rutas de vendedor, Supervisor-1/Supervisor-2 y a los usuarios nuevos creados en Usuarios. Suplente-1/2 se manejan aparte, desde Unidades → Permisos de Suplente.
       </div>
 
       <div style={{ position: "relative", marginBottom: 12 }}>
@@ -150,7 +165,7 @@ export default function PermisosPersonalizadosView({ data, persistFresco }) {
                 {personalizarActivo ? "Activado — usando la lista de abajo" : "Desactivado — usando el comportamiento normal de su rol"}
               </div>
             </div>
-            <button className={personalizarActivo ? "btn" : "btn-ghost"} onClick={() => setPersonalizarActivo((v) => !v)}>
+            <button className={personalizarActivo ? "btn" : "btn-ghost"} disabled={seleccionado.nuevo} onClick={() => setPersonalizarActivo((v) => !v)}>
               {personalizarActivo ? "Activado" : "Desactivado"}
             </button>
           </div>
