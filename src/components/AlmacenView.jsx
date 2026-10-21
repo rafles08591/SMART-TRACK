@@ -1,18 +1,21 @@
 // @ts-nocheck
 // AlmacenView.jsx — Módulo ALMACÉN de SMART-TRACK.
-//   • Base de mínimos: catálogo fijo de productos con su mínimo (en cajas). Se carga
+//   • Base de mínimos: catálogo fijo de productos con su mínimo (en PAQUETES) y cuántos
+//     paquetes trae su cartón (columna Unidades). Se carga
 //     desde Excel/CSV o se captura a mano y queda guardado; es la base de todo cálculo.
 //   • Calcular pedido: se carga el reporte de existencias (Deposito, Codigo, Articulo,
 //     Unidades, Saldo…) y se compara contra la base → pedido, menos el sugerido.
 //   • Inventario: (siguiente fase).
 //
-// Saldo viene en formato CAJAS.PAQUETES: 406.03 = 406 cajas y 3 paquetes.
-// "Unidades" = paquetes por caja (10 u 8).
+// Existencias: la parte entera del Saldo son PAQUETES (406.03 → 406 paq; el decimal son
+// sueltos y cuentan como fracción según las Unidades del reporte).
+// Pedido: se pide en múltiplos de MEDIO cartón (Unidades de la base / 2), al más cercano:
+//   cartón 60 → faltan 40 → 30, faltan 70 → 60. Si el mínimo es menor a medio cartón, lo que falte.
 //
 // Se guarda en data.almacen:
-//   base: { FA01001: { articulo, unidades, minimo (cajas) }, … }
+//   base: { FA01001: { articulo, unidades (paq por cartón), minimo (paq) }, … }
 //   baseActualizada: { fecha, quien }
-//   sugeridos: { FA01001: cajas }      ← se descuentan del pedido
+//   sugeridos: { FA01001: paquetes }   ← se descuentan antes de redondear al cartón
 //   ultimaCarga: { fecha, quien, filas: [...] }   ← último reporte de existencias
 //   unidadPedido: "cajas" | "paquetes", umbralOcultar: número
 //
@@ -94,7 +97,8 @@ function parsearBase(filas) {
     out.push({
       codigo,
       articulo: c.art >= 0 ? String(f[c.art] ?? "").trim() : "",
-      unidades: c.uni >= 0 ? num(f[c.uni]) : null,
+      // En el reporte de existencias "Unidades" no es el cartón: solo se toma del archivo de mínimos
+      unidades: c.uni >= 0 && c.sal < 0 ? num(f[c.uni]) : null,
       minimo: c.min >= 0 ? num(f[c.min]) : null,
     });
   }
@@ -126,13 +130,27 @@ function bajarExcel(filas, anchos, hoja, nombre) {
   XLSX.writeFile(wb, nombre);
 }
 
-const fmtExist = (p) => (p.enReporte ? `${p.cajas} cj${p.paquetes ? ` ${p.paquetes} pq` : ""}` : "0 cj");
+// Paquetes en existencia (406.03 → 406.3 si el reporte trae 10 unidades)
+const existPaq = (p) => (p.enReporte ? (p.cajas || 0) + (p.paquetes || 0) / (p.unidades || 10) : 0);
+const fmtExist = (p) => (p.enReporte ? `${p.cajas} paq${p.paquetes ? ` +${p.paquetes}` : ""}` : "0 paq");
+const fmtN = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("es-MX", { maximumFractionDigits: 1 }));
+
+// Redondea lo que falta al MEDIO cartón MÁS CERCANO (cartón de 60 → de 30 en 30; de 50 → de 25 en 25):
+//   faltan 40 (cartón 60) → 30 · faltan 70 → 60 · faltan 95 (cartón 50) → 100.
+// Si el mínimo es menor a medio cartón, se pide justo lo que falte.
+function aCarton(falta, minimo, carton) {
+  if (falta === null) return null;
+  if (falta <= 0) return 0;
+  const paso = carton ? carton / 2 : 0;
+  if (!paso || minimo < paso) return Math.ceil(falta - 1e-9);
+  return Math.round(falta / paso + 1e-9) * paso;
+}
 
 // La primera vez arma la base con lo que ya existía (mínimos + último reporte)
 function baseInicial(alm) {
   if (alm.base) return alm.base;
   const base = {};
-  for (const p of alm.ultimaCarga?.filas || []) base[p.codigo] = { articulo: p.articulo, unidades: p.unidades };
+  for (const p of alm.ultimaCarga?.filas || []) base[p.codigo] = { articulo: p.articulo };
   for (const [cod, m] of Object.entries(alm.minimos || {})) {
     if (m === null || m === "" || !Number.isFinite(Number(m))) continue;
     base[cod] = { ...(base[cod] || {}), minimo: Number(m) };
@@ -240,6 +258,7 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
     setEstado(r.traeMinimos
       ? `✅ ${r.filas.length} productos leídos (${mins} con mínimo, ${nuevos} nuevos). Da clic en Guardar.`
       : `✅ ${r.filas.length} productos leídos (${nuevos} nuevos) — el archivo no traía columna "Minimo", captúralos abajo. Da clic en Guardar.`);
+
   }
 
   function setMinimo(codigo, valor) {
@@ -287,7 +306,8 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
         <div style={S.card}>
           <div style={S.cardTitulo}>Cargar mínimos</div>
           <div style={S.nota}>
-            Sube un Excel con las columnas <b>Codigo, Articulo, Unidades, Minimo</b> (mínimo en <b>cajas</b>).
+            Sube un Excel con las columnas <b>Codigo, Articulo, Unidades, Minimo</b>: el mínimo va en <b>paquetes</b> y
+            Unidades es cuántos paquetes trae el <b>cartón</b> (50, 60, 70…).
             Lo más fácil: descarga la plantilla, llena la columna Minimo y vuélvela a subir.
             Solo se actualizan los productos que vengan en el archivo; los demás se quedan igual.
             También puedes subir el reporte de existencias para dar de alta productos nuevos.
@@ -332,8 +352,8 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
               <tr>
                 <th style={S.th}>FA</th>
                 <th style={S.th}>Descripción</th>
-                <th style={S.thR}>Paq/caja</th>
-                <th style={S.thR}>Mínimo (cajas)</th>
+                <th style={S.thR}>Paq/cartón</th>
+                <th style={S.thR}>Mínimo (paq)</th>
                 {puedeEditar && <th style={S.th}></th>}
               </tr>
             </thead>
@@ -342,7 +362,7 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
                 <tr key={p.codigo} style={S.tr}>
                   <td style={S.td}>{p.codigo}</td>
                   <td style={S.td}>{p.articulo || <span style={{ color: "#64748b" }}>—</span>}</td>
-                  <td style={S.tdR}>{p.unidades || 10}</td>
+                  <td style={{ ...S.tdR, color: p.unidades ? "#cbd5e1" : "#f59e0b" }}>{p.unidades || "¿?"}</td>
                   <td style={S.tdR}>
                     <input style={S.inputCelda} type="number" min={0} disabled={!puedeEditar} placeholder="—"
                       value={p.minimo ?? ""} onChange={(e) => setMinimo(p.codigo, e.target.value)} />
@@ -384,7 +404,6 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
   const [fechaCarga, setFechaCarga] = useState(alm.ultimaCarga?.fecha || null);
   const [sugeridos, setSugeridos] = useState(alm.sugeridos || {});
   const [sugTodos, setSugTodos] = useState("");
-  const [unidad, setUnidad] = useState(alm.unidadPedido || "cajas");
   const [umbral, setUmbral] = useState(alm.umbralOcultar ?? 3);
   const [soloPedir, setSoloPedir] = useState(true);
   const [buscar, setBuscar] = useState("");
@@ -396,7 +415,6 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     if (sucio) return;
     if (alm.ultimaCarga?.filas) { setProductos(alm.ultimaCarga.filas); setFechaCarga(alm.ultimaCarga.fecha || null); }
     setSugeridos(alm.sugeridos || {});
-    setUnidad(alm.unidadPedido || "cajas");
     setUmbral(alm.umbralOcultar ?? 3);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alm]);
@@ -415,24 +433,23 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     const porCodigo = new Map(productos.map((p) => [p.codigo, { ...p, enReporte: true }]));
     for (const [codigo, b] of Object.entries(base)) {
       if (!porCodigo.has(codigo) && b.minimo !== null && b.minimo !== undefined) {
-        porCodigo.set(codigo, { codigo, articulo: b.articulo || "", unidades: b.unidades || 10, cajas: 0, paquetes: 0, totalPaq: 0, enReporte: false });
+        porCodigo.set(codigo, { codigo, articulo: b.articulo || "", unidades: 10, cajas: 0, paquetes: 0, totalPaq: 0, enReporte: false });
       }
     }
     return [...porCodigo.values()].map((p) => {
       const b = base[p.codigo] || {};
       const articulo = p.articulo || b.articulo || "";
-      const uds = p.unidades || b.unidades || 10;
-      const minCj = b.minimo ?? null;
-      const minPaq = minCj === null ? null : Math.round(minCj * uds);
-      const faltaPaq = minPaq === null ? null : Math.max(0, minPaq - p.totalPaq);
-      const calc = faltaPaq === null ? null : unidad === "cajas" ? Math.ceil(faltaPaq / uds) : faltaPaq;
-      const sugCj = sugeridos[p.codigo] ?? null;
-      const sug = sugCj === null ? 0 : unidad === "cajas" ? sugCj : Math.round(sugCj * uds);
-      const pedir = calc === null ? null : Math.max(0, calc - sug);
-      const minMostrar = minCj === null ? null : unidad === "cajas" ? minCj : minPaq;
-      return { ...p, articulo, unidades: uds, minCj, minMostrar, calc, sugCj, sug, pedir };
+      const carton = b.unidades || null;              // paquetes por cartón (de la base)
+      const minimo = b.minimo ?? null;                 // en paquetes
+      const exist = existPaq(p);
+      const falta = minimo === null ? null : Math.max(0, minimo - exist);
+      const sugCj = sugeridos[p.codigo] ?? null;       // (nombre histórico) sugerido en paquetes
+      const sug = sugCj === null ? 0 : sugCj;
+      const calc = aCarton(falta, minimo, carton);                                     // sin sugerido
+      const pedir = falta === null ? null : aCarton(Math.max(0, falta - sug), minimo, carton); // con sugerido
+      return { ...p, articulo, carton, minCj: minimo, minMostrar: minimo, exist, falta, calc, sugCj, sug, pedir };
     }).sort((a, b) => a.codigo.localeCompare(b.codigo));
-  }, [productos, base, sugeridos, unidad]);
+  }, [productos, base, sugeridos]);
 
   const u = Number(umbral) || 0;
   const vaAPedir = (p) => p.pedir !== null && p.pedir > 0 && p.pedir >= u;
@@ -446,7 +463,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
   const sinMinimo = calculados.filter((p) => p.minCj === null).length;
   const totalBase = Object.keys(base).length;
 
-  const aCajas = (v, uds) => (unidad === "cajas" ? v : Math.round((v / uds) * 100) / 100);
+  const aCajas = (v) => v; // todo va en paquetes
 
   function setSugerido(codigo, valor, uds) {
     const v = num(valor);
@@ -469,7 +486,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
       return n;
     });
     setSucio(true);
-    setEstado(`Sugerido de ${v} ${unidad} aplicado a ${lista.length} productos.`);
+    setEstado(`Sugerido de ${v} paq aplicado a ${lista.length} productos.`);
   }
 
   async function guardar() {
@@ -480,7 +497,6 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
         almacen: {
           ...(fresca.almacen || {}),
           sugeridos,
-          unidadPedido: unidad,
           umbralOcultar: Number(umbral) || 0,
           ultimaCarga: { fecha: fechaCarga || new Date().toISOString(), quien, filas: productos },
         },
@@ -498,7 +514,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     if (!aPedir.length) { setEstado("No queda nada que pedir después de descontar el sugerido."); return; }
     bajarExcel(
       aPedir.map((p) => ({ "Código FA": p.codigo, "Cantidad": p.pedir, "Descripción": p.articulo })),
-      [12, 10, 28], "Pedido", `pedido_modificado_${unidad}_${hoyISO()}.xlsx`
+      [12, 10, 28], "Pedido", `pedido_modificado_${hoyISO()}.xlsx`
     );
   }
   function excelCalculado() {
@@ -506,7 +522,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     if (!lista.length) { setEstado("No hay nada que pedir con los mínimos actuales."); return; }
     bajarExcel(
       lista.map((p) => ({ "Código FA": p.codigo, "Cantidad": p.calc, "Descripción": p.articulo })),
-      [12, 10, 28], "Pedido", `pedido_calculado_${unidad}_${hoyISO()}.xlsx`
+      [12, 10, 28], "Pedido", `pedido_calculado_${hoyISO()}.xlsx`
     );
   }
 
@@ -531,7 +547,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
           onFilas={cargar}
           placeholder={"Pega aquí el reporte (con la fila de encabezados):\nDeposito,Codigo,Articulo,Unidades,Saldo,…\n2385 - ALMACEN CENTRAL VALLARTA,FA01001,MlbRed20CD,10,406.03,…"}
         />
-        <div style={S.nota}>El saldo se lee como <b>cajas.paquetes</b>: 406.03 = 406 cajas y 3 paquetes.</div>
+        <div style={S.nota}>La existencia se toma en <b>paquetes</b> (parte entera del Saldo).</div>
       </div>
 
       {/* 2. Pedido */}
@@ -540,18 +556,11 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
           <div style={S.cardTitulo}>2 · Pedido</div>
           <div style={S.filtros}>
             <label style={S.campo}>
-              <span style={S.lbl}>Pedir en</span>
-              <select style={S.input} value={unidad} onChange={(e) => { setUnidad(e.target.value); setSucio(true); }}>
-                <option value="cajas">Cajas</option>
-                <option value="paquetes">Paquetes</option>
-              </select>
-            </label>
-            <label style={S.campo}>
               <span style={S.lbl}>No pedir si son menos de</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <input style={{ ...S.input, width: 70 }} type="number" min={0} value={umbral}
                   onChange={(e) => { setUmbral(e.target.value); setSucio(true); }} />
-                <span style={S.sub}>{unidad}</span>
+                <span style={S.sub}>paq</span>
               </div>
             </label>
             {puedeEditar && (
@@ -582,7 +591,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
 
           <div style={S.resumen}>
             <span>🛒 <b>{aPedir.length}</b> productos a pedir</span>
-            {ocultosChicos > 0 && <span>🙈 {ocultosChicos} ocultos (menos de {u} {unidad})</span>}
+            {ocultosChicos > 0 && <span>🙈 {ocultosChicos} ocultos (menos de {u} paq)</span>}
             {sinMinimo > 0 && (
               <span style={{ color: "#f59e0b" }}>
                 ⚠️ {sinMinimo} sin mínimo en la base{" "}
@@ -599,7 +608,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
                   <th style={S.th}>Descripción</th>
                   <th style={S.thR}>Existencia</th>
                   <th style={S.thR}>Mínimo</th>
-                  <th style={S.thR}>Calculado</th>
+                  <th style={S.thR}>Faltan</th>
                   <th style={S.thR}>Sugerido</th>
                   <th style={S.thR}>Pedido</th>
                 </tr>
@@ -612,17 +621,24 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
                       <td style={S.td}>{p.codigo}</td>
                       <td style={S.td}>
                         {p.articulo}
-                        <div style={{ fontSize: 11, color: "#64748b" }}>{p.unidades} paq/caja{!p.enReporte ? " · no viene en el reporte" : ""}</div>
+                        <div style={{ fontSize: 11, color: p.carton ? "#64748b" : "#f59e0b" }}>
+                          {p.carton ? `cartón de ${p.carton}` : "sin cartón en la base"}{!p.enReporte ? " · no viene en el reporte" : ""}
+                        </div>
                       </td>
                       <td style={{ ...S.tdR, whiteSpace: "nowrap" }}>{fmtExist(p)}</td>
                       <td style={{ ...S.tdR, color: p.minMostrar === null ? "#f59e0b" : "#cbd5e1" }}>{p.minMostrar === null ? "sin mín." : p.minMostrar}</td>
-                      <td style={{ ...S.tdR, color: "#94a3b8" }}>{p.calc === null ? "—" : p.calc}</td>
+                      <td style={{ ...S.tdR, color: "#94a3b8" }}>{fmtN(p.falta)}</td>
                       <td style={S.tdR}>
                         <input style={S.inputCelda} type="number" min={0} disabled={!puedeEditar} placeholder="0"
                           value={p.sugCj === null ? "" : p.sug} onChange={(e) => setSugerido(p.codigo, e.target.value, p.unidades)} />
                       </td>
                       <td style={{ ...S.tdR, fontWeight: 800, fontSize: 15, color: p.pedir > 0 ? "#fbbf24" : "#64748b" }}>
                         {p.pedir === null ? "—" : p.pedir}
+                        {p.pedir > 0 && p.carton && p.pedir % (p.carton / 2) === 0 && (
+                          <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 400 }}>
+                            {(p.pedir / p.carton).toLocaleString("es-MX", { maximumFractionDigits: 1 })} cartón{p.pedir / p.carton > 1 ? "es" : ""}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -635,7 +651,10 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
               </tbody>
             </table>
           </div>
-          <div style={S.nota}>Cantidades en <b>{unidad}</b>. Pedido = (mínimo − existencia) − sugerido.</div>
+          <div style={S.nota}>
+            Todo en <b>paquetes</b>. Pedido = (mínimo − existencia − sugerido), redondeado al <b>medio cartón más cercano</b>
+            (cartón de 60 → de 30 en 30: faltan 40 → 30, faltan 70 → 60; cartón de 50: faltan 95 → 100). Si el mínimo es menor a medio cartón, se pide justo lo que falta.
+          </div>
 
           <div style={S.barra}>
             {puedeEditar && (
