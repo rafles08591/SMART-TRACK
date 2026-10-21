@@ -125,6 +125,7 @@ const META = {
   cotizador:         { icon: "calc",     color: "#fbbf24", fam: "📋 Operación" },
   pwst:              { icon: "box",      color: "#94a3b8", fam: "📋 Operación" },
   almacen:           { icon: "warehouse",color: "#f59e0b", fam: "📋 Operación" },
+  usuarios:          { icon: "userplus", color: "#38bdf8", fam: "⚙️ Configuración" },
 
   avisos:            { icon: "bell",     color: "#f87171", fam: "🔔 Avisos" },
 
