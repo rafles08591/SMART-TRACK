@@ -34,6 +34,11 @@ const num = (v) => {
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 };
+// Al tocar una casilla se selecciona todo su contenido, para escribir encima sin borrar
+const selTodo = (e) => {
+  const t = e.target;
+  setTimeout(() => { try { t.select(); } catch { /* algunos navegadores no dejan */ } }, 0);
+};
 const fmtFecha = (iso) => new Date(iso).toLocaleString("es-MX", { timeZone: "America/Mexico_City", dateStyle: "short", timeStyle: "short" });
 
 // "406.03" con 10 paq/caja → { cajas: 406, paquetes: 3, totalPaq: 4063 }
@@ -365,7 +370,7 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
                   <td style={S.td}>{p.articulo || <span style={{ color: "#64748b" }}>—</span>}</td>
                   <td style={{ ...S.tdR, color: p.unidades ? "#cbd5e1" : "#f59e0b" }}>{p.unidades || "¿?"}</td>
                   <td style={S.tdR}>
-                    <input style={S.inputCelda} type="number" min={0} disabled={!puedeEditar} placeholder="—"
+                    <input style={S.inputCelda} type="number" onFocus={selTodo} min={0} disabled={!puedeEditar} placeholder="—"
                       value={p.minimo ?? ""} onChange={(e) => setMinimo(p.codigo, e.target.value)} />
                   </td>
                   {puedeEditar && (
@@ -559,7 +564,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
             <label style={S.campo}>
               <span style={S.lbl}>No pedir si son menos de</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <input style={{ ...S.input, width: 70 }} type="number" min={0} value={umbral}
+                <input style={{ ...S.input, width: 70 }} type="number" onFocus={selTodo} min={0} value={umbral}
                   onChange={(e) => { setUmbral(e.target.value); setSucio(true); }} />
                 <span style={S.sub}>paq</span>
               </div>
@@ -568,7 +573,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
               <label style={S.campo}>
                 <span style={S.lbl}>Sugerido del sistema</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input style={{ ...S.input, width: 70 }} type="number" min={0} value={sugTodos}
+                  <input style={{ ...S.input, width: 70 }} type="number" onFocus={selTodo} min={0} value={sugTodos}
                     onChange={(e) => setSugTodos(e.target.value)} placeholder="0" />
                   <button type="button" style={S.btnMini} onClick={() => aplicarSugerido(false)}>Aplicar a todas</button>
                   {buscar && <button type="button" style={S.btnMini} onClick={() => aplicarSugerido(true)}>Solo a las filtradas ({visibles.length})</button>}
@@ -630,7 +635,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
                       <td style={{ ...S.tdR, color: p.minMostrar === null ? "#f59e0b" : "#cbd5e1" }}>{p.minMostrar === null ? "sin mín." : p.minMostrar}</td>
                       <td style={{ ...S.tdR, color: "#94a3b8" }}>{fmtN(p.falta)}</td>
                       <td style={S.tdR}>
-                        <input style={S.inputCelda} type="number" min={0} disabled={!puedeEditar} placeholder="0"
+                        <input style={S.inputCelda} type="number" onFocus={selTodo} min={0} disabled={!puedeEditar} placeholder="0"
                           value={p.sugCj === null ? "" : p.sug} onChange={(e) => setSugerido(p.codigo, e.target.value, p.unidades)} />
                       </td>
                       <td style={{ ...S.tdR, fontWeight: 800, fontSize: 15, color: p.pedir > 0 ? "#fbbf24" : "#64748b" }}>
@@ -723,6 +728,7 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
   const [estado, setEstado] = useState("");
   const [confirmarNuevo, setConfirmarNuevo] = useState(false);
   const [bajando, setBajando] = useState(false);
+  const [ciegoLleno, setCiegoLleno] = useState(false); // switch discreto: false = conteo (en blanco), true = chuki (lleno)
 
   useEffect(() => {
     if (sucio) return;
@@ -880,6 +886,18 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
     }
   }
 
+  async function descargarCiego() {
+    setBajando(true);
+    try {
+      await excelConteoCiego({ filas, lleno: ciegoLleno, clo, fecha: fechaConteo });
+      setEstado("⬇️ Hoja de conteo ciego descargada.");
+    } catch (err) {
+      setEstado("❌ No se pudo generar la hoja: " + (err?.message || err));
+    } finally {
+      setBajando(false);
+    }
+  }
+
   const num0 = (v) => (v === "" || v === null || v === undefined || Number(v) === 0 ? "" : v);
   const enCedula = vista === "cedula";
 
@@ -943,7 +961,7 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
           </label>
           <label style={S.campo}>
             <span style={S.lbl}>Capacidad (paq)</span>
-            <input style={{ ...S.input, width: 100 }} type="number" min={0} value={capacidad} disabled={!puedeEditar} onChange={(e) => { setCapacidad(e.target.value); setSucio(true); }} />
+            <input style={{ ...S.input, width: 100 }} type="number" onFocus={selTodo} min={0} value={capacidad} disabled={!puedeEditar} onChange={(e) => { setCapacidad(e.target.value); setSucio(true); }} />
           </label>
           <label style={{ ...S.campo, flex: 1, minWidth: 160 }}>
             <span style={S.lbl}>Buscar</span>
@@ -990,7 +1008,7 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
                     {["cajas", "paquetes", "cajetillas", "picking"].map((k) => (
                       <td key={k} style={S.tdR}>
                         {enCedula ? (
-                          <input style={{ ...S.inputCelda, width: 58 }} type="number" inputMode="numeric" min={0}
+                          <input style={{ ...S.inputCelda, width: 58 }} type="number" onFocus={selTodo} inputMode="numeric" min={0}
                             disabled={!puedeEditar || (k === "cajas" && !f.ppc)} value={x[k]} placeholder="0"
                             onChange={(e) => setCampo(f.codigo, k, e.target.value)} />
                         ) : (
@@ -1029,6 +1047,18 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
           <button style={S.btnExcel} disabled={bajando || !filas.length} onClick={() => descargar(vista)}>
             {bajando ? "Generando…" : `⬇️ Excel ${enCedula ? "Cédula de conteo" : "Chuki"}`}
           </button>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <button style={{ ...S.btnSec, borderStyle: "solid" }} disabled={bajando || !filas.length} onClick={descargarCiego}>
+              📝 Hoja de conteo ciego
+            </button>
+            {/* Switch discreto: apagado = en blanco (conteo), prendido = lleno (chuki) */}
+            <button type="button" onClick={() => setCiegoLleno((v) => !v)} title={ciegoLleno ? "c" : "b"} aria-label="modo"
+              style={{ width: 22, height: 12, borderRadius: 6, border: "none", padding: 0, position: "relative", cursor: "pointer",
+                background: ciegoLleno ? "#334155" : "#1e293b", opacity: 0.55 }}>
+              <span style={{ position: "absolute", top: 2, left: ciegoLleno ? 12 : 2, width: 8, height: 8, borderRadius: 4,
+                background: ciegoLleno ? "#94a3b8" : "#475569", transition: "left .15s" }} />
+            </button>
+          </span>
           {enCedula && puedeEditar && (
             <button style={{ ...S.btnMini, borderColor: "#f87171", color: "#f87171" }} onClick={nuevoConteo}>
               {confirmarNuevo ? "¿Seguro? toca otra vez" : "🧹 Nuevo conteo"}
@@ -1040,6 +1070,79 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
       </div>
     </div>
   );
+}
+
+// Hoja de conteo ciego: #, SKU, MARCA, TOTAL CAJAS, TOTAL PAQUETES, TOTAL CAJETILLAS.
+// lleno = true → con el desglose de la chuki; false → en blanco para contar a mano.
+async function excelConteoCiego({ filas, lleno, clo, fecha }) {
+  const archivo = `HOJA_DE_CONTEO_${fechaPuntos(fecha)}.xlsx`;
+  const val = (v) => (v === "" || v === null || v === undefined || Number(v) === 0 ? null : Number(v));
+  let ExcelJS;
+  try { ExcelJS = await cargarExcelJS(); } catch { ExcelJS = null; }
+  if (!ExcelJS) {
+    bajarExcel(filas.map((f, i) => ({
+      "#": i + 1, SKU: f.codigo, MARCA: f.articulo,
+      "TOTAL CAJAS": lleno ? val(f.chuki.cajas) : null, "TOTAL PAQUETES": lleno ? val(f.chuki.paquetes) : null, "TOTAL CAJETILLAS": lleno ? val(f.chuki.cajetillas) : null,
+    })), [5, 12, 18, 15, 15, 15], "Hoja de conteo", archivo);
+    return;
+  }
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "SMART-TRACK";
+  const ws = wb.addWorksheet("Hoja de conteo", {
+    views: [{ showGridLines: false, state: "frozen", ySplit: 4 }],
+    pageSetup: { paperSize: 1, orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
+  });
+  ws.pageSetup.printTitlesRow = "4:4";
+  const fino = { style: "thin", color: { argb: "FF000000" } };
+  const borde = { top: fino, left: fino, bottom: fino, right: fino };
+  const NUM1 = '0.0';
+  const grisClaro = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+  const gris = { type: "pattern", pattern: "solid", fgColor: { argb: "FFBFBFBF" } };
+  [5.5, 12.5, 18, 17, 17, 17].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+
+  ws.mergeCells("A1:F1");
+  ws.getCell("A1").value = "HOJA DE CONTEO";
+  ws.getCell("A1").font = { name: "Calibri", bold: true, size: 16 };
+  ws.getCell("A1").alignment = { horizontal: "center" };
+  ws.mergeCells("A2:C2"); ws.mergeCells("D2:F2");
+  ws.getCell("A2").value = `CLO: ${clo || ""}`;
+  ws.getCell("D2").value = `Fecha: ${fechaPuntos(fecha)}`;
+  ws.getCell("A2").font = ws.getCell("D2").font = { name: "Calibri", bold: true, size: 11 };
+  ws.getCell("D2").alignment = { horizontal: "right" };
+  ws.mergeCells("A3:F3");
+  ws.getCell("A3").value = "Contó: ______________________________     Firma: ____________________";
+  ws.getCell("A3").font = { name: "Calibri", size: 10, color: { argb: "FF595959" } };
+
+  const enc = ["#", "SKU", "MARCA", "TOTAL CAJAS", "TOTAL PAQUETES", "TOTAL CAJETILLAS"];
+  const fe = ws.getRow(4);
+  fe.height = 42;
+  enc.forEach((t, i) => {
+    const c = fe.getCell(i + 1);
+    c.value = t; c.border = borde; c.fill = i <= 1 ? grisClaro : gris;
+    c.font = { name: "Calibri", size: 12 };
+    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+  filas.forEach((f, i) => {
+    const r = ws.getRow(5 + i);
+    r.height = lleno ? 18 : 22; // en blanco, más alto para escribir a mano
+    const datos = [i + 1, f.codigo, f.articulo,
+      lleno ? val(f.chuki.cajas) : null, lleno ? val(f.chuki.paquetes) : null, lleno ? val(f.chuki.cajetillas) : null];
+    datos.forEach((v, j) => {
+      const c = r.getCell(j + 1);
+      c.value = v; c.border = borde;
+      c.font = { name: "Calibri", size: 11, color: j === 0 ? { argb: "FF7F7F7F" } : undefined };
+      c.alignment = { horizontal: j === 0 ? "center" : j >= 3 ? "right" : "left", vertical: "middle" };
+      if (j >= 3) c.numFmt = NUM1;
+    });
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = archivo;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 // Excel igual al de la cédula: hoja principal con fórmulas + PICKING + INVENTARIO PWST + Tabla de Conversiones
