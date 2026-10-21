@@ -55,12 +55,19 @@ import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 import MuralCampeonesView from "./MuralCampeonesView";
 import AlmacenView from "./AlmacenView";
+import UsuariosView from "./UsuariosView";
 
 // Módulo ALMACÉN: se agrega aquí si todavía no viene en OBJETIVO_TABS
 // (constants). Si después se agrega allá, no se duplica.
-const OBJETIVO_TABS = OBJETIVO_TABS_BASE.some((t) => t.key === "almacen")
-  ? OBJETIVO_TABS_BASE
-  : [...OBJETIVO_TABS_BASE, { key: "almacen", label: "ALMACÉN", unit: "" }];
+const TABS_NUEVAS = [
+  { key: "almacen", label: "ALMACÉN", unit: "" },
+  { key: "usuarios", label: "USUARIOS", unit: "" }, // alta/baja/PIN de usuarios (solo Gerente)
+];
+const OBJETIVO_TABS = [...OBJETIVO_TABS_BASE, ...TABS_NUEVAS.filter((n) => !OBJETIVO_TABS_BASE.some((t) => t.key === n.key))];
+
+// Puestos que ya existían en el código. Cualquier otro (p. ej. "almacen") es un usuario
+// creado desde el módulo Usuarios: solo ve lo que el Gerente le active en Permisos.
+const PUESTOS_FIJOS = ["gerente", "supervisor", "supervisor2", "suplente1", "suplente2"];
 
 // Formatea un número de paquetes conservando 1 decimal (el resumen de
 // arriba redondea con fmt()/unidades(), pero el detalle expandible por
@@ -180,6 +187,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
   const esSupervisor2 = puesto === "supervisor2";
   const esSupervisor1 = puesto === "supervisor";
   const esSuplente1 = puesto === "suplente1";
+  const esUsuarioApp = !!puesto && !PUESTOS_FIJOS.includes(puesto);
 
   // Texto chiquito de "última actualización" para cada sección de Cargar
   // datos — lee data.ultimaCarga (se reemplaza cada vez, no acumula).
@@ -430,7 +438,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
       <FondoDeFondo url={fondoUrl} />
       <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} onRefresh={onRefresh} refrescando={refrescando} />
 
-      {!pantallaAbierta && (
+      {!pantallaAbierta && !esUsuarioApp && (
         <ScorecardMiniResumen
           data={data}
           porVendedor={stats.porVendedor}
@@ -442,7 +450,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
 
 
       <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
-        {(esSupervisor2 ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
+        {(esSupervisor2 || esUsuarioApp ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
           <button key={k} onClick={() => setTab(k)}
             className={tab===k ? "btn" : "btn-ghost"} style={{ fontSize: 13 }}>{l}</button>
         ))}
@@ -455,14 +463,16 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               tab={objTab}
               setTab={(k) => { setObjTab(k); setPantallaAbierta(true); }}
               tabs={
-                (esSuplente1 || esSuplente2)
+                esUsuarioApp
+                  ? OBJETIVO_TABS.filter((t) => t.key !== "usuarios" && (data.permisosPersonalizados?.[staffUsername] || (puesto === "almacen" ? ["almacen"] : [])).includes(t.key))
+                  : (esSuplente1 || esSuplente2)
                   ? OBJETIVO_TABS.filter((t) => (data.permisosSuplentes?.[puesto] || []).includes(t.key))
                   : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
                   ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
                   : esSupervisor2
                   ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones", "almacen"].includes(t.key))
                   : esSupervisor1
-                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot")
+                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot" && t.key !== "usuarios")
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
               }
               estadoTabs={estadoTabsActividades}
@@ -737,9 +747,15 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
             <AlmacenView
               data={data}
               persistFresco={persistFresco}
-              puedeEditar={puesto === "gerente" || esSupervisor1 || esSupervisor2}
+              puedeEditar={puesto === "gerente" || esSupervisor1 || esSupervisor2 || esUsuarioApp}
               quien={revisorNombre}
             />
+          ) : objTab === "usuarios" ? (
+            puesto === "gerente" ? (
+              <UsuariosView onIrPermisos={() => setObjTab("permisos")} />
+            ) : (
+              <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>Solo el Gerente administra usuarios.</div>
+            )
           ) : objTab === "rally_otc" ? (
             <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
           ) : objTab === "avisos" ? (
