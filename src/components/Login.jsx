@@ -52,6 +52,9 @@ const PIN_LENGTH = 4;
 // Usuarios creados desde la app (módulo Usuarios del Gerente). Se leen de /api/usuarios y se
 // guardan en el teléfono para que el login funcione aunque la señal tarde.
 const USUARIOS_APP_KEY = "smarttrack_usuarios_app";
+// Supabase pide mínimo 6 caracteres: los usuarios nuevos guardan su PIN con este sufijo
+// (debe coincidir con SUFIJO_PIN de api/usuarios.js). Los usuarios de siempre no cambian.
+const SUFIJO_PIN = "#ST";
 function leerUsuariosAppCache() {
   try { return JSON.parse(localStorage.getItem(USUARIOS_APP_KEY) || "[]"); } catch { return []; }
 }
@@ -149,7 +152,7 @@ export default function Login({ onLogin }) {
     try {
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
-        password: pinValue,
+        password: extras.some((u) => u.username === objetivo.username) ? `${pinValue}${SUFIJO_PIN}` : pinValue,
       });
 
       if (authError) {
