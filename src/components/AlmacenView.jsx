@@ -5,8 +5,9 @@
 //     desde Excel/CSV o se captura a mano y queda guardado; es la base de todo cálculo.
 //   • Calcular pedido: se carga el reporte de existencias (Deposito, Codigo, Articulo,
 //     Unidades, Saldo…) y se compara contra la base → pedido, menos el sugerido.
-//   • Inventario: Chuki (se llena sola para que cuadre con PWST) y Cédula de conteo (manual),
-//     con descarga en Excel igual a la cédula de conteo.
+//   • Inventario: Cédula de conteo (manual, con switch discreto de chuki) y hoja de conteo ciego.
+//   • Picking: se pega el picking por vendedor y llena solo la columna Picking de la cédula.
+//   • Pestaña "." (abajo): fecha de los Excel que se descargan.
 //
 // Existencias: la parte entera del Saldo son PAQUETES (406.03 → 406 paq; el decimal son
 // sueltos y cuentan como fracción según las Unidades del reporte).
@@ -130,12 +131,41 @@ async function archivoAFilas(file) {
   return textoAFilas(await file.text());
 }
 
-function bajarExcel(filas, anchos, hoja, nombre) {
-  const ws = XLSX.utils.json_to_sheet(filas);
-  ws["!cols"] = anchos.map((wch) => ({ wch }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, hoja);
-  XLSX.writeFile(wb, nombre);
+// Excel sencillo (una tabla). Con ExcelJS lleva encabezado con fecha que solo se ve al imprimir;
+// si no carga (sin internet), sale igual pero sin formato.
+async function bajarExcel(filas, anchos, hoja, nombre, { titulo, fecha } = {}) {
+  let ExcelJS = null;
+  try { ExcelJS = await cargarExcelJS(); } catch { /* sin internet */ }
+  if (!ExcelJS) {
+    const ws = XLSX.utils.json_to_sheet(filas);
+    ws["!cols"] = anchos.map((wch) => ({ wch }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, hoja);
+    XLSX.writeFile(wb, nombre);
+    return;
+  }
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(hoja, {
+    views: [{ state: "frozen", ySplit: 1 }],
+    pageSetup: { paperSize: 1, fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.7, bottom: 0.6, header: 0.3, footer: 0.3 } },
+  });
+  ws.pageSetup.printTitlesRow = "1:1";
+  encabezadoImpresion(ws, titulo || hoja.toUpperCase(), fecha || hoyISO());
+  const cols = Object.keys(filas[0] || {});
+  ws.columns = cols.map((c, i) => ({ header: c, key: c, width: anchos[i] || 12 }));
+  filas.forEach((f) => ws.addRow(f));
+  const fino = { style: "thin", color: { argb: "FF000000" } };
+  ws.eachRow((row, i) => {
+    row.eachCell({ includeEmpty: true }, (c) => {
+      c.border = { top: fino, left: fino, bottom: fino, right: fino };
+      if (i === 1) {
+        c.font = { bold: true };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      }
+    });
+  });
+  await guardarWb(wb, nombre);
 }
 
 // Paquetes en existencia (406.03 → 406.3 si el reporte trae 10 unidades)
@@ -169,6 +199,8 @@ function baseInicial(alm) {
 export default function AlmacenView({ data, persistFresco, puedeEditar = true, quien = "" }) {
   const alm = data?.almacen || {};
   const [pestana, setPestana] = useState("pedido");
+  // Fecha de los Excel (pestaña "." escondida abajo). Si no se mueve, es la del día.
+  const [fechaDoc, setFechaDoc] = useState(hoyISO());
 
   return (
     <div style={S.wrap}>
@@ -179,17 +211,36 @@ export default function AlmacenView({ data, persistFresco, puedeEditar = true, q
         </div>
       </div>
       <div style={S.tabs}>
-        {[["base", "📋 Base de mínimos"], ["pedido", "🧮 Calcular pedido"], ["inventario", "📦 Inventario"]].map(([k, l]) => (
+        {[["base", "📋 Base de mínimos"], ["pedido", "🧮 Calcular pedido"], ["inventario", "📦 Inventario"], ["picking", "🚚 Picking"]].map(([k, l]) => (
           <button key={k} onClick={() => setPestana(k)} style={pestana === k ? S.tabOn : S.tab}>{l}</button>
         ))}
       </div>
-      {pestana === "base" && <BaseMinimos alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} />}
+      {pestana === "base" && <BaseMinimos alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} fechaDoc={fechaDoc} />}
       {pestana === "pedido" && (
-        <CalcularPedido alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} irABase={() => setPestana("base")} />
+        <CalcularPedido alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} irABase={() => setPestana("base")} fechaDoc={fechaDoc} />
       )}
       {pestana === "inventario" && (
-        <Inventario alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} irABase={() => setPestana("base")} />
+        <Inventario alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} fechaDoc={fechaDoc}
+          irABase={() => setPestana("base")} irAPicking={() => setPestana("picking")} />
       )}
+      {pestana === "picking" && (
+        <Picking alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} irAInventario={() => setPestana("inventario")} />
+      )}
+      {pestana === "fecha" && (
+        <div style={{ ...S.card, maxWidth: 320 }}>
+          <div style={S.lbl}>Fecha para los Excel que se descarguen</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input style={S.input} type="date" value={fechaDoc} onChange={(e) => setFechaDoc(e.target.value || hoyISO())} />
+            {fechaDoc !== hoyISO() && <button style={S.btnMini} onClick={() => setFechaDoc(hoyISO())}>Hoy</button>}
+          </div>
+          <div style={S.nota}>Sale en el nombre del archivo, en la hoja y en el encabezado al imprimir.</div>
+        </div>
+      )}
+      {/* Pestaña escondida "." para cambiar la fecha de los Excel */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+        <button onClick={() => setPestana(pestana === "fecha" ? "inventario" : "fecha")} aria-label="."
+          style={{ border: "none", background: "transparent", color: fechaDoc !== hoyISO() ? "#64748b" : "#334155", cursor: "pointer", fontSize: 14, padding: "2px 8px", lineHeight: 1 }}>.</button>
+      </div>
     </div>
   );
 }
@@ -218,7 +269,7 @@ function Cargador({ placeholder, onFilas, setEstado, textoBoton = "Procesar text
 }
 
 // ─────────────────────────── BASE DE MÍNIMOS ───────────────────────────
-function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
+function BaseMinimos({ alm, persistFresco, puedeEditar, quien, fechaDoc }) {
   const [base, setBase] = useState(() => baseInicial(alm));
   const [buscar, setBuscar] = useState("");
   const [soloSinMin, setSoloSinMin] = useState(false);
@@ -287,7 +338,7 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
     const filas = (lista.length ? lista : [{ codigo: "FA01001", articulo: "MlbRed20CD", unidades: 10 }]).map((p) => ({
       "Codigo": p.codigo, "Articulo": p.articulo || "", "Unidades": p.unidades || "", "Minimo": p.minimo ?? "",
     }));
-    bajarExcel(filas, [12, 26, 10, 10], "Minimos", `base_minimos_${hoyISO()}.xlsx`);
+    bajarExcel(filas, [12, 26, 10, 10], "Minimos", `base_minimos_${fechaPuntos(fechaDoc)}.xlsx`, { titulo: "BASE DE MÍNIMOS", fecha: fechaDoc });
   }
 
   async function guardar() {
@@ -404,7 +455,7 @@ function BaseMinimos({ alm, persistFresco, puedeEditar, quien }) {
 }
 
 // ─────────────────────────── CALCULAR PEDIDO ───────────────────────────
-function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
+function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase, fechaDoc }) {
   const base = useMemo(() => baseInicial(alm), [alm]);
   const [productos, setProductos] = useState(alm.ultimaCarga?.filas || []);
   const [fechaCarga, setFechaCarga] = useState(alm.ultimaCarga?.fecha || null);
@@ -520,7 +571,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     if (!aPedir.length) { setEstado("No queda nada que pedir después de descontar el sugerido."); return; }
     bajarExcel(
       aPedir.map((p) => ({ "Código FA": p.codigo, "Cantidad": p.pedir, "Descripción": p.articulo })),
-      [12, 10, 28], "Pedido", `pedido_modificado_${hoyISO()}.xlsx`
+      [12, 10, 28], "Pedido", `pedido_modificado_${fechaPuntos(fechaDoc)}.xlsx`, { titulo: "PEDIDO DE SURTIDO", fecha: fechaDoc }
     );
   }
   function excelCalculado() {
@@ -528,7 +579,7 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
     if (!lista.length) { setEstado("No hay nada que pedir con los mínimos actuales."); return; }
     bajarExcel(
       lista.map((p) => ({ "Código FA": p.codigo, "Cantidad": p.calc, "Descripción": p.articulo })),
-      [12, 10, 28], "Pedido", `pedido_calculado_${hoyISO()}.xlsx`
+      [12, 10, 28], "Pedido", `pedido_calculado_${fechaPuntos(fechaDoc)}.xlsx`, { titulo: "PEDIDO DE SURTIDO (CALCULADO)", fecha: fechaDoc }
     );
   }
 
@@ -679,14 +730,17 @@ function CalcularPedido({ alm, persistFresco, puedeEditar, quien, irABase }) {
   );
 }
 
-// ─────────────────────────── INVENTARIO (Chuki + Cédula de conteo) ───────────────────────────
+// ─────────────────────────── INVENTARIO (Cédula de conteo) + PICKING ───────────────────────────
 // PWST trae el saldo como PAQUETES.CAJETILLAS (2025.07 = 2025 paquetes y 7 cajetillas).
-//   • Chuki: se llena sola desglosando el saldo de PWST en cajas / paquetes / cajetillas,
-//     así el inventario cuadra exacto (diferencia 0).
-//   • Cédula de conteo: la llena a mano el almacenista; se compara contra PWST.
+//   • Cédula de conteo: la llena a mano el almacenista y se compara contra PWST.
+//     Un switch discreto (a la derecha) la llena sola con la "chuki": el saldo de PWST menos
+//     el picking, desglosado en cajas / paquetes / cajetillas, para que cuadre exacto.
+//   • Picking: se pega el reporte de picking por vendedor y su total por SKU (paquetes) llena
+//     solo la columna Picking de la cédula.
 // Se guarda en data.almacen.inventario:
-//   { pwst: { fecha, quien, filas }, conteo: { FA: { cajas, paquetes, cajetillas, picking } },
-//     fechaConteo, clo, capacidad, conteoActualizado: { fecha, quien } }
+//   { pwst: { fecha, quien, filas }, conteo: { FA: { cajas, paquetes, cajetillas } },
+//     picking: { fecha, quien, filas: [{ vendedor, codigo, descripcion, cantidad }] },
+//     clo, capacidad, conteoActualizado: { fecha, quien } }
 
 const EXCELJS_URL = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
 function cargarExcelJS() {
@@ -703,6 +757,54 @@ function cargarExcelJS() {
 const fechaPuntos = (iso) => (iso ? iso.split("-").reverse().join(".") : ""); // 2026-09-30 → 30.09.2026
 const r3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
 
+// Encabezado / pie que SOLO se ven al imprimir (no aparecen en la hoja)
+function encabezadoImpresion(ws, titulo, fecha) {
+  const esc = (t) => String(t || "").replace(/&/g, "&&");
+  ws.headerFooter = {
+    oddHeader: `&L&"Calibri,Bold"&12${esc(titulo)}&R&"Calibri,Bold"&12Fecha: ${fechaPuntos(fecha)}`,
+    oddFooter: `&L&8SMART-TRACK · Almacén&R&8Página &P de &N`,
+  };
+}
+
+async function guardarWb(wb, archivo) {
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = archivo;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// Picking pegado → filas { vendedor, codigo, descripcion, cantidad (paquetes) }
+function parsearPicking(filas) {
+  if (!filas.length) return { filas: [], error: "No hay datos." };
+  const enc = filas[0].map(norm);
+  const col = (...nombres) => enc.findIndex((h) => nombres.some((n) => h === n || h.startsWith(n)));
+  const iVen = col("vendedor", "ruta"), iCod = col("codigo", "sku", "fa"), iDes = col("descripcion", "articulo", "producto");
+  const iCant = col("cantidad", "total", "paquetes");
+  if (iCod < 0 || iCant < 0) return { filas: [], error: "No encontré las columnas Codigo y Cantidad en la primera fila." };
+  const out = [];
+  for (const f of filas.slice(1)) {
+    const codigo = String(f[iCod] ?? "").trim().toUpperCase();
+    const cantidad = num(f[iCant]);
+    if (!codigo || !cantidad) continue;
+    out.push({
+      vendedor: iVen >= 0 ? String(f[iVen] ?? "").replace(/\s+/g, " ").trim() : "",
+      codigo,
+      descripcion: iDes >= 0 ? String(f[iDes] ?? "").trim() : "",
+      cantidad,
+    });
+  }
+  return { filas: out, error: out.length ? null : "No encontré renglones de picking." };
+}
+
+const totalesPicking = (filas) => {
+  const t = {};
+  for (const f of filas || []) t[f.codigo] = (t[f.codigo] || 0) + (Number(f.cantidad) || 0);
+  return t;
+};
+
 // Diferencia en cajetillas → "+1 paq 3 caj"
 function fmtDif(cajetillas, cpp) {
   if (!cajetillas) return "0";
@@ -712,13 +814,56 @@ function fmtDif(cajetillas, cpp) {
   return `${signo}${paq ? `${paq} paq` : ""}${paq && caj ? " " : ""}${caj ? `${caj} caj` : ""}`;
 }
 
-function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
+// Arma las filas del inventario (PWST + base + conteo + picking)
+function filasInventario({ pwst, base, conteo, picking }) {
+  const pick = totalesPicking(picking?.filas);
+  const porCod = new Map();
+  for (const p of pwst?.filas || []) {
+    porCod.set(p.codigo, {
+      codigo: p.codigo, articulo: p.articulo, cpp: p.unidades || 10,
+      saldoNum: Number(String(p.saldoTexto || "").replace(/,/g, "")) || 0,
+      pwPaq: p.cajas || 0, pwCaj: p.paquetes || 0,
+    });
+  }
+  const vacio = (codigo) => ({ codigo, articulo: base[codigo]?.articulo || "", cpp: 10, saldoNum: 0, pwPaq: 0, pwCaj: 0 });
+  for (const codigo of Object.keys(base)) if (!porCod.has(codigo)) porCod.set(codigo, vacio(codigo));
+  for (const codigo of Object.keys(conteo || {})) if (!porCod.has(codigo)) porCod.set(codigo, vacio(codigo));
+  for (const codigo of Object.keys(pick)) if (!porCod.has(codigo) && base[codigo]) porCod.set(codigo, vacio(codigo));
+
+  return [...porCod.values()]
+    .filter((x) => x.saldoNum !== 0 || base[x.codigo] || conteo?.[x.codigo])
+    .map((x) => {
+      const ppc = base[x.codigo]?.unidades || 0; // paquetes por caja
+      const articulo = x.articulo || base[x.codigo]?.articulo || "";
+      const picking = r3(pick[x.codigo] || 0);
+      const pwstCaj = x.pwPaq * x.cpp + x.pwCaj;
+      // Chuki: (saldo − picking) desglosado
+      const resto = Math.max(0, x.pwPaq - Math.floor(picking));
+      const chuki = { cajas: ppc ? Math.floor(resto / ppc) : 0, paquetes: ppc ? resto % ppc : resto, cajetillas: x.pwCaj };
+      const c = conteo?.[x.codigo] || {};
+      const capturado = ["cajas", "paquetes", "cajetillas"].some((k) => c[k] !== undefined && c[k] !== null && c[k] !== "");
+      const cedula = { cajas: c.cajas ?? "", paquetes: c.paquetes ?? "", cajetillas: c.cajetillas ?? "" };
+      return { ...x, articulo, ppc, picking, pwstCaj, chuki, cedula, capturado };
+    })
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+}
+
+// Calcula físico y diferencia de una fila con la captura indicada
+function evaluar(f, cap, contado) {
+  const v = (k) => Number(cap[k]) || 0;
+  const fisCaj = (v("cajas") * f.ppc + v("paquetes") + f.picking) * f.cpp + v("cajetillas");
+  return {
+    contado,
+    fisicoExcel: r3(v("cajas") * f.ppc + v("paquetes") + v("cajetillas") / 100 + f.picking),
+    difCaj: contado ? Math.round(fisCaj - f.pwstCaj) : null,
+  };
+}
+
+function Inventario({ alm, persistFresco, puedeEditar, quien, irABase, irAPicking, fechaDoc }) {
   const inv = alm.inventario || {};
   const base = useMemo(() => baseInicial(alm), [alm]);
-  const [vista, setVista] = useState("cedula");
   const [pwst, setPwst] = useState(inv.pwst || alm.ultimaCarga || null);
   const [conteo, setConteo] = useState(inv.conteo || {});
-  const [fechaConteo, setFechaConteo] = useState(inv.fechaConteo || hoyISO());
   const [clo, setClo] = useState(inv.clo || "VALLARTA");
   const [capacidad, setCapacidad] = useState(inv.capacidad ?? 17280);
   const [buscar, setBuscar] = useState("");
@@ -728,14 +873,13 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
   const [estado, setEstado] = useState("");
   const [confirmarNuevo, setConfirmarNuevo] = useState(false);
   const [bajando, setBajando] = useState(false);
-  const [ciegoLleno, setCiegoLleno] = useState(false); // switch discreto: false = conteo (en blanco), true = chuki (lleno)
+  const [chuki, setChuki] = useState(false); // switch discreto: llena la cédula sola para que cuadre
 
   useEffect(() => {
     if (sucio) return;
     const i = alm.inventario || {};
     setPwst(i.pwst || alm.ultimaCarga || null);
     setConteo(i.conteo || {});
-    setFechaConteo(i.fechaConteo || hoyISO());
     setClo(i.clo || "VALLARTA");
     setCapacidad(i.capacidad ?? 17280);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -745,14 +889,14 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
   const LS = "st_almacen_conteo_borrador";
   useEffect(() => {
     if (!sucio) return;
-    try { localStorage.setItem(LS, JSON.stringify({ conteo, fechaConteo, clo, capacidad, t: Date.now() })); } catch { /* sin storage */ }
-  }, [conteo, fechaConteo, clo, capacidad, sucio]);
+    try { localStorage.setItem(LS, JSON.stringify({ conteo, clo, capacidad, t: Date.now() })); } catch { /* sin storage */ }
+  }, [conteo, clo, capacidad, sucio]);
   useEffect(() => {
     try {
       const b = JSON.parse(localStorage.getItem(LS) || "null");
       const guardado = alm.inventario?.conteoActualizado?.fecha ? Date.parse(alm.inventario.conteoActualizado.fecha) : 0;
       if (b && b.t > guardado && Object.keys(b.conteo || {}).length) {
-        setConteo(b.conteo); setFechaConteo(b.fechaConteo || hoyISO()); setClo(b.clo || "VALLARTA"); setCapacidad(b.capacidad ?? 17280);
+        setConteo(b.conteo); setClo(b.clo || "VALLARTA"); setCapacidad(b.capacidad ?? 17280);
         setSucio(true);
         setEstado("↩️ Recuperé una captura que no se había guardado. Revísala y da Guardar.");
       }
@@ -768,62 +912,24 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
     setEstado(`✅ Inventario PWST cargado: ${r.productos.length} productos. Da Guardar.`);
   }
 
-  // Filas del inventario: productos de PWST con saldo + los de la base
-  const filas = useMemo(() => {
-    const porCod = new Map();
-    for (const p of pwst?.filas || []) {
-      porCod.set(p.codigo, {
-        codigo: p.codigo, articulo: p.articulo, cpp: p.unidades || 10,
-        saldoTexto: p.saldoTexto, saldoNum: Number(String(p.saldoTexto || "").replace(/,/g, "")) || 0,
-        pwPaq: p.cajas || 0, pwCaj: p.paquetes || 0,
-      });
-    }
-    for (const [codigo, b] of Object.entries(base)) {
-      if (!porCod.has(codigo)) porCod.set(codigo, { codigo, articulo: b.articulo || "", cpp: 10, saldoTexto: "0", saldoNum: 0, pwPaq: 0, pwCaj: 0 });
-    }
-    for (const codigo of Object.keys(conteo)) {
-      if (!porCod.has(codigo)) porCod.set(codigo, { codigo, articulo: base[codigo]?.articulo || "", cpp: 10, saldoTexto: "0", saldoNum: 0, pwPaq: 0, pwCaj: 0 });
-    }
-    return [...porCod.values()]
-      .filter((x) => x.saldoNum !== 0 || base[x.codigo] || conteo[x.codigo])
-      .map((x) => {
-        const ppc = base[x.codigo]?.unidades || 0; // paquetes por caja (cartón)
-        const articulo = x.articulo || base[x.codigo]?.articulo || "";
-        const pwstCaj = x.pwPaq * x.cpp + x.pwCaj; // PWST en cajetillas
-        // Chuki: desglose automático del saldo
-        const chuki = {
-          cajas: ppc ? Math.floor(x.pwPaq / ppc) : 0,
-          paquetes: ppc ? x.pwPaq % ppc : x.pwPaq,
-          cajetillas: x.pwCaj,
-          picking: 0,
-        };
-        // Cédula: captura manual
-        const c = conteo[x.codigo] || {};
-        const contado = ["cajas", "paquetes", "cajetillas", "picking"].some((k) => c[k] !== undefined && c[k] !== null && c[k] !== "");
-        const v = (k) => Number(c[k]) || 0;
-        const fisCaj = ((v("cajas") * ppc) + v("paquetes") + v("picking")) * x.cpp + v("cajetillas");
-        return {
-          ...x, articulo, ppc, pwstCaj, chuki, contado,
-          cedula: { cajas: c.cajas ?? "", paquetes: c.paquetes ?? "", cajetillas: c.cajetillas ?? "", picking: c.picking ?? "" },
-          fisCaj, difCaj: contado ? fisCaj - pwstCaj : null,
-          // Mismo cálculo que el Excel (paquetes con cajetillas en centésimas)
-          fisicoExcel: r3(v("cajas") * ppc + v("paquetes") + v("cajetillas") / 100 + v("picking")),
-        };
-      })
-      .sort((a, b) => a.codigo.localeCompare(b.codigo));
-  }, [pwst, base, conteo]);
+  const picking = inv.picking || null;
+  const filas = useMemo(() => filasInventario({ pwst, base, conteo, picking }).map((f) => {
+    const cap = chuki ? f.chuki : f.cedula;
+    return { ...f, cap, ...evaluar(f, cap, chuki || f.capturado) };
+  }), [pwst, base, conteo, picking, chuki]);
 
   const sinCarton = filas.filter((f) => !f.ppc).length;
   const contados = filas.filter((f) => f.contado).length;
   const conDif = filas.filter((f) => f.contado && f.difCaj !== 0);
   const totalPwstPaq = r3(filas.reduce((s, f) => s + f.saldoNum, 0));
+  const totalPicking = r3(filas.reduce((s, f) => s + f.picking, 0));
   const difTotalExcel = r3(filas.reduce((s, f) => s + (f.contado ? f.fisicoExcel - f.saldoNum : 0), 0));
   const capPct = Number(capacidad) ? Math.round((totalPwstPaq / Number(capacidad)) * 100) : null;
 
   const visibles = filas.filter((f) => {
     if (buscar && !norm(`${f.codigo} ${f.articulo}`).includes(norm(buscar))) return false;
-    if (vista === "cedula" && filtro === "diferencia") return f.contado && f.difCaj !== 0;
-    if (vista === "cedula" && filtro === "sin_contar") return !f.contado;
+    if (filtro === "diferencia") return f.contado && f.difCaj !== 0;
+    if (filtro === "sin_contar") return !f.contado;
     return true;
   });
 
@@ -849,7 +955,7 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
           ...(fresca.almacen || {}),
           inventario: {
             ...((fresca.almacen || {}).inventario || {}),
-            pwst, conteo, fechaConteo, clo, capacidad: Number(capacidad) || 0,
+            pwst, conteo, clo, capacidad: Number(capacidad) || 0,
             conteoActualizado: { fecha: new Date().toISOString(), quien },
           },
         },
@@ -867,49 +973,34 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
   function nuevoConteo() {
     if (!confirmarNuevo) { setConfirmarNuevo(true); setTimeout(() => setConfirmarNuevo(false), 4000); return; }
     setConteo({});
-    setFechaConteo(hoyISO());
     setConfirmarNuevo(false);
     setSucio(true);
     setEstado("🧹 Cédula en blanco. Captura el conteo y da Guardar.");
   }
 
-  async function descargar(tipo) {
+  async function bajar(fn, msg) {
     setBajando(true);
-    try {
-      const lista = filas.map((f) => ({ ...f, captura: tipo === "chuki" ? f.chuki : f.cedula }));
-      await excelInventario({ tipo, filas: lista, pwstFilas: pwst?.filas || [], base, clo, fecha: fechaConteo, capacidad: Number(capacidad) || 0 });
-      setEstado(`⬇️ Excel de ${tipo === "chuki" ? "la Chuki" : "la Cédula de conteo"} descargado.`);
-    } catch (err) {
-      setEstado("❌ No se pudo generar el Excel: " + (err?.message || err));
-    } finally {
-      setBajando(false);
-    }
+    try { await fn(); setEstado(msg); }
+    catch (err) { setEstado("❌ No se pudo generar el Excel: " + (err?.message || err)); }
+    finally { setBajando(false); }
   }
-
-  async function descargarCiego() {
-    setBajando(true);
-    try {
-      await excelConteoCiego({ filas, lleno: ciegoLleno, clo, fecha: fechaConteo });
-      setEstado("⬇️ Hoja de conteo ciego descargada.");
-    } catch (err) {
-      setEstado("❌ No se pudo generar la hoja: " + (err?.message || err));
-    } finally {
-      setBajando(false);
-    }
-  }
-
-  const num0 = (v) => (v === "" || v === null || v === undefined || Number(v) === 0 ? "" : v);
-  const enCedula = vista === "cedula";
+  const descargarCedula = () => bajar(
+    () => excelCedula({ filas, pwstFilas: pwst?.filas || [], picking, base, clo, fecha: fechaDoc, capacidad: Number(capacidad) || 0 }),
+    "⬇️ Cédula de conteo descargada."
+  );
+  const descargarCiego = () => bajar(
+    () => excelConteoCiego({ filas, lleno: chuki, clo, fecha: fechaDoc }),
+    "⬇️ Hoja de conteo descargada."
+  );
 
   return (
     <div>
-      {/* Encabezado como el de la cédula */}
       <div style={S.kpis}>
         <div style={S.kpi}><div style={S.kpiLbl}>CAPACIDAD ACTUAL</div><div style={S.kpiVal}>{capPct === null ? "—" : `${capPct}%`}</div></div>
         <div style={S.kpi}><div style={S.kpiLbl}>INVENTARIO TOTAL (PWST)</div><div style={S.kpiVal}>{fmtN(totalPwstPaq)} <span style={S.kpiUni}>paq</span></div></div>
         <div style={S.kpi}>
-          <div style={S.kpiLbl}>DIFERENCIA {enCedula ? "" : "(CHUKI)"}</div>
-          <div style={{ ...S.kpiVal, color: enCedula && difTotalExcel !== 0 ? "#f87171" : "#4ade80" }}>{enCedula ? fmtN(difTotalExcel) : "0"}</div>
+          <div style={S.kpiLbl}>DIFERENCIA</div>
+          <div style={{ ...S.kpiVal, color: difTotalExcel !== 0 ? "#f87171" : "#4ade80" }}>{fmtN(difTotalExcel)}</div>
         </div>
         <div style={S.kpi}><div style={S.kpiLbl}>CONTADOS</div><div style={S.kpiVal}>{contados}<span style={S.kpiUni}> / {filas.length}</span></div></div>
       </div>
@@ -937,27 +1028,27 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
         )}
       </div>
 
-      <div style={S.tabs}>
-        {[["chuki", "🧾 Chuki"], ["cedula", "✍️ Cédula de conteo"]].map(([k, l]) => (
-          <button key={k} onClick={() => setVista(k)} style={vista === k ? S.tabOn : S.tab}>{l}</button>
-        ))}
-      </div>
-
       <div style={S.card}>
-        <div style={S.cardTitulo}>{enCedula ? "✍️ Cédula de conteo" : "🧾 Chuki"}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={S.cardTitulo}>✍️ Cédula de conteo</div>
+          {/* Switch discreto (chuki) */}
+          <button type="button" onClick={() => setChuki((v) => !v)} aria-label="modo"
+            style={{ width: 22, height: 12, borderRadius: 6, border: "none", padding: 0, position: "relative", cursor: "pointer", flexShrink: 0,
+              background: chuki ? "#334155" : "#1e293b", opacity: 0.5 }}>
+            <span style={{ position: "absolute", top: 2, left: chuki ? 12 : 2, width: 8, height: 8, borderRadius: 4,
+              background: chuki ? "#94a3b8" : "#475569", transition: "left .15s" }} />
+          </button>
+        </div>
         <div style={S.nota}>
-          {enCedula
-            ? "La llena el almacenista con lo que cuenta físicamente. Se compara contra PWST: en rojo lo que no cuadra."
-            : "Se llena sola desglosando el saldo de PWST en cajas, paquetes y cajetillas, para que el inventario cuadre exacto."}
+          La llena el almacenista con lo que cuenta físicamente y se compara contra PWST: en rojo lo que no cuadra.
+          El picking se llena solo desde la pestaña{" "}
+          <button style={{ ...S.btnMini, padding: "1px 8px" }} onClick={irAPicking}>🚚 Picking</button>
+          {picking?.fecha ? ` (cargado ${fmtFecha(picking.fecha)} · ${fmtN(totalPicking)} paq).` : " (sin picking cargado)."}
         </div>
         <div style={S.filtros}>
           <label style={S.campo}>
             <span style={S.lbl}>CLO</span>
             <input style={{ ...S.input, width: 130 }} value={clo} disabled={!puedeEditar} onChange={(e) => { setClo(e.target.value.toUpperCase()); setSucio(true); }} />
-          </label>
-          <label style={S.campo}>
-            <span style={S.lbl}>Fecha</span>
-            <input style={S.input} type="date" value={fechaConteo} disabled={!puedeEditar} onChange={(e) => { setFechaConteo(e.target.value); setSucio(true); }} />
           </label>
           <label style={S.campo}>
             <span style={S.lbl}>Capacidad (paq)</span>
@@ -967,22 +1058,21 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
             <span style={S.lbl}>Buscar</span>
             <input style={S.input} value={buscar} onChange={(e) => setBuscar(e.target.value)} placeholder="FA01001 o MlbRed…" />
           </label>
-          {enCedula && (
-            <label style={S.campo}>
-              <span style={S.lbl}>Mostrar</span>
-              <select style={S.input} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
-                <option value="todos">Todos</option>
-                <option value="sin_contar">Sin contar</option>
-                <option value="diferencia">Con diferencia ({conDif.length})</option>
-              </select>
-            </label>
-          )}
+          <label style={S.campo}>
+            <span style={S.lbl}>Mostrar</span>
+            <select style={S.input} value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+              <option value="todos">Todos</option>
+              <option value="sin_contar">Sin contar</option>
+              <option value="diferencia">Con diferencia ({conDif.length})</option>
+            </select>
+          </label>
         </div>
 
         <div style={{ overflowX: "auto" }}>
           <table style={S.tabla}>
             <thead>
               <tr>
+                <th style={{ ...S.th, color: "#64748b" }}>#</th>
                 <th style={S.th}>SKU / Marca</th>
                 <th style={S.thR}>Cajas</th>
                 <th style={S.thR}>Paquetes</th>
@@ -995,38 +1085,35 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
               </tr>
             </thead>
             <tbody>
-              {visibles.map((f) => {
-                const x = enCedula ? f.cedula : f.chuki;
-                const dif = enCedula ? f.difCaj : 0;
-                const fis = enCedula ? (f.contado ? f.fisicoExcel : null) : f.saldoNum;
-                return (
-                  <tr key={f.codigo} style={{ ...S.tr, background: enCedula && dif ? "#f8717112" : "transparent" }}>
-                    <td style={S.td}>
-                      <div style={{ fontWeight: 700 }}>{f.codigo}</div>
-                      <div style={{ fontSize: 11, color: "#94a3b8" }}>{f.articulo || "—"}</div>
+              {visibles.map((f) => (
+                <tr key={f.codigo} style={{ ...S.tr, background: f.difCaj ? "#f8717112" : "transparent" }}>
+                  <td style={{ ...S.td, color: "#64748b", fontSize: 12 }}>{filas.indexOf(f) + 1}</td>
+                  <td style={S.td}>
+                    <div style={{ fontWeight: 700 }}>{f.codigo}</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{f.articulo || "—"}</div>
+                  </td>
+                  {["cajas", "paquetes", "cajetillas"].map((k) => (
+                    <td key={k} style={S.tdR}>
+                      {chuki ? (
+                        <span style={{ color: f.cap[k] ? "#e2e8f0" : "#475569" }}>{f.cap[k] || "–"}</span>
+                      ) : (
+                        <input style={{ ...S.inputCelda, width: 58 }} type="number" onFocus={selTodo} inputMode="numeric" min={0}
+                          disabled={!puedeEditar || (k === "cajas" && !f.ppc)} value={f.cap[k]} placeholder="0"
+                          onChange={(e) => setCampo(f.codigo, k, e.target.value)} />
+                      )}
                     </td>
-                    {["cajas", "paquetes", "cajetillas", "picking"].map((k) => (
-                      <td key={k} style={S.tdR}>
-                        {enCedula ? (
-                          <input style={{ ...S.inputCelda, width: 58 }} type="number" onFocus={selTodo} inputMode="numeric" min={0}
-                            disabled={!puedeEditar || (k === "cajas" && !f.ppc)} value={x[k]} placeholder="0"
-                            onChange={(e) => setCampo(f.codigo, k, e.target.value)} />
-                        ) : (
-                          <span style={{ color: x[k] ? "#e2e8f0" : "#475569" }}>{x[k] || "–"}</span>
-                        )}
-                      </td>
-                    ))}
-                    <td style={{ ...S.tdR, fontSize: 11, color: f.ppc ? "#64748b" : "#f59e0b", whiteSpace: "nowrap" }}>{f.ppc || "¿?"} · {f.cpp}</td>
-                    <td style={{ ...S.tdR, whiteSpace: "nowrap" }}>{fis === null ? "—" : fis.toFixed(2)}</td>
-                    <td style={{ ...S.tdR, whiteSpace: "nowrap", color: "#94a3b8" }}>{f.saldoNum.toFixed(2)}</td>
-                    <td style={{ ...S.tdR, fontWeight: 800, whiteSpace: "nowrap", color: dif === null ? "#475569" : dif ? "#f87171" : "#4ade80" }}>
-                      {dif === null ? "—" : fmtDif(dif, f.cpp)}
-                    </td>
-                  </tr>
-                );
-              })}
+                  ))}
+                  <td style={{ ...S.tdR, color: f.picking ? "#22d3ee" : "#475569" }}>{f.picking || "–"}</td>
+                  <td style={{ ...S.tdR, fontSize: 11, color: f.ppc ? "#64748b" : "#f59e0b", whiteSpace: "nowrap" }}>{f.ppc || "¿?"} · {f.cpp}</td>
+                  <td style={{ ...S.tdR, whiteSpace: "nowrap" }}>{f.contado ? f.fisicoExcel.toFixed(2) : "—"}</td>
+                  <td style={{ ...S.tdR, whiteSpace: "nowrap", color: "#94a3b8" }}>{f.saldoNum.toFixed(2)}</td>
+                  <td style={{ ...S.tdR, fontWeight: 800, whiteSpace: "nowrap", color: f.difCaj === null ? "#475569" : f.difCaj ? "#f87171" : "#4ade80" }}>
+                    {f.difCaj === null ? "—" : fmtDif(f.difCaj, f.cpp)}
+                  </td>
+                </tr>
+              ))}
               {!visibles.length && (
-                <tr><td colSpan={9} style={{ ...S.td, textAlign: "center", color: "#94a3b8", padding: 20 }}>
+                <tr><td colSpan={10} style={{ ...S.td, textAlign: "center", color: "#94a3b8", padding: 20 }}>
                   {filas.length ? "Sin resultados." : "Carga el inventario de PWST para empezar."}
                 </td></tr>
               )}
@@ -1044,22 +1131,13 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
               {guardando ? "Guardando…" : "Guardar"}
             </button>
           )}
-          <button style={S.btnExcel} disabled={bajando || !filas.length} onClick={() => descargar(vista)}>
-            {bajando ? "Generando…" : `⬇️ Excel ${enCedula ? "Cédula de conteo" : "Chuki"}`}
+          <button style={S.btnExcel} disabled={bajando || !filas.length} onClick={descargarCedula}>
+            {bajando ? "Generando…" : "⬇️ Excel Cédula de conteo"}
           </button>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <button style={{ ...S.btnSec, borderStyle: "solid" }} disabled={bajando || !filas.length} onClick={descargarCiego}>
-              📝 Hoja de conteo ciego
-            </button>
-            {/* Switch discreto: apagado = en blanco (conteo), prendido = lleno (chuki) */}
-            <button type="button" onClick={() => setCiegoLleno((v) => !v)} title={ciegoLleno ? "c" : "b"} aria-label="modo"
-              style={{ width: 22, height: 12, borderRadius: 6, border: "none", padding: 0, position: "relative", cursor: "pointer",
-                background: ciegoLleno ? "#334155" : "#1e293b", opacity: 0.55 }}>
-              <span style={{ position: "absolute", top: 2, left: ciegoLleno ? 12 : 2, width: 8, height: 8, borderRadius: 4,
-                background: ciegoLleno ? "#94a3b8" : "#475569", transition: "left .15s" }} />
-            </button>
-          </span>
-          {enCedula && puedeEditar && (
+          <button style={{ ...S.btnSec, borderStyle: "solid" }} disabled={bajando || !filas.length} onClick={descargarCiego}>
+            📝 Hoja de conteo ciego
+          </button>
+          {puedeEditar && (
             <button style={{ ...S.btnMini, borderColor: "#f87171", color: "#f87171" }} onClick={nuevoConteo}>
               {confirmarNuevo ? "¿Seguro? toca otra vez" : "🧹 Nuevo conteo"}
             </button>
@@ -1072,17 +1150,160 @@ function Inventario({ alm, persistFresco, puedeEditar, quien, irABase }) {
   );
 }
 
+// ─────────────────────────── PICKING ───────────────────────────
+function Picking({ alm, persistFresco, puedeEditar, quien, irAInventario }) {
+  const guardado = alm.inventario?.picking || null;
+  const [pick, setPick] = useState(guardado);
+  const [ver, setVer] = useState("sku"); // sku | vendedor
+  const [sucio, setSucio] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [estado, setEstado] = useState("");
+  const [confirmar, setConfirmar] = useState(false);
+
+  useEffect(() => {
+    if (sucio) return;
+    setPick(alm.inventario?.picking || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alm]);
+
+  function cargar(filas) {
+    const r = parsearPicking(filas);
+    if (r.error) { setEstado("⚠️ " + r.error); return; }
+    setPick({ fecha: new Date().toISOString(), quien, filas: r.filas });
+    setSucio(true);
+    setEstado(`✅ ${r.filas.length} renglones de picking leídos. Da Guardar para que llene la cédula.`);
+  }
+
+  async function guardar(nuevo = pick) {
+    setGuardando(true);
+    setEstado("Guardando…");
+    try {
+      await persistFresco((fresca) => ({
+        almacen: { ...(fresca.almacen || {}), inventario: { ...((fresca.almacen || {}).inventario || {}), picking: nuevo } },
+      }));
+      setSucio(false);
+      setEstado(nuevo ? "✅ Picking guardado. Ya aparece en la Cédula de conteo." : "🧹 Picking borrado.");
+    } catch (err) {
+      setEstado("❌ No se pudo guardar: " + (err?.message || err));
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  function borrar() {
+    if (!confirmar) { setConfirmar(true); setTimeout(() => setConfirmar(false), 4000); return; }
+    setConfirmar(false);
+    setPick(null);
+    guardar(null);
+  }
+
+  const filas = pick?.filas || [];
+  const porSku = useMemo(() => {
+    const m = {};
+    for (const f of filas) {
+      const x = m[f.codigo] || (m[f.codigo] = { codigo: f.codigo, descripcion: f.descripcion, total: 0, vendedores: 0 });
+      x.total += Number(f.cantidad) || 0;
+      x.vendedores += 1;
+    }
+    return Object.values(m).sort((a, b) => a.codigo.localeCompare(b.codigo));
+  }, [filas]);
+  const porVendedor = useMemo(() => {
+    const m = {};
+    for (const f of filas) {
+      const k = f.vendedor || "—";
+      const x = m[k] || (m[k] = { vendedor: k, skus: 0, total: 0 });
+      x.skus += 1;
+      x.total += Number(f.cantidad) || 0;
+    }
+    return Object.values(m).sort((a, b) => a.vendedor.localeCompare(b.vendedor));
+  }, [filas]);
+  const total = r3(filas.reduce((s, f) => s + (Number(f.cantidad) || 0), 0));
+
+  return (
+    <div>
+      <div style={S.card}>
+        <div style={S.cardTitulo}>🚚 Picking</div>
+        <div style={S.sub}>
+          {pick?.fecha ? `Cargado: ${fmtFecha(pick.fecha)}${pick.quien ? ` · ${pick.quien}` : ""} · ${porVendedor.length} vendedores · ${porSku.length} SKUs · ${fmtN(total)} paq` : "Todavía no se ha pegado el picking."}
+        </div>
+        {puedeEditar && (
+          <Cargador setEstado={setEstado} onFilas={cargar}
+            placeholder={"Pega el picking (con encabezados):\nVendedor,Codigo,Descripcion,Cantidad,Unidades\nJ201 J201 - FRANCISCO JAVIER MONTES MADERO,FA01001,MARLBORO LS BOX 20,90,900.000"} />
+        )}
+        <div style={S.nota}>Se toma la columna <b>Cantidad</b> (paquetes) y se suma por SKU. Ese total llena solo la columna Picking de la Cédula de conteo.</div>
+      </div>
+
+      {filas.length > 0 && (
+        <div style={S.card}>
+          <div style={S.tabs}>
+            {[["sku", "Por SKU"], ["vendedor", "Por vendedor"]].map(([k, l]) => (
+              <button key={k} onClick={() => setVer(k)} style={ver === k ? S.tabOn : S.tab}>{l}</button>
+            ))}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            {ver === "sku" ? (
+              <table style={S.tabla}>
+                <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Descripción</th><th style={S.thR}>Vendedores</th><th style={S.thR}>Total (paq)</th></tr></thead>
+                <tbody>
+                  {porSku.map((x) => (
+                    <tr key={x.codigo} style={S.tr}>
+                      <td style={S.td}>{x.codigo}</td>
+                      <td style={{ ...S.td, fontSize: 12 }}>{x.descripcion}</td>
+                      <td style={{ ...S.tdR, color: "#94a3b8" }}>{x.vendedores}</td>
+                      <td style={{ ...S.tdR, fontWeight: 800, color: "#22d3ee" }}>{fmtN(x.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table style={S.tabla}>
+                <thead><tr><th style={S.th}>Vendedor</th><th style={S.thR}>SKUs</th><th style={S.thR}>Total (paq)</th></tr></thead>
+                <tbody>
+                  {porVendedor.map((x) => (
+                    <tr key={x.vendedor} style={S.tr}>
+                      <td style={S.td}>{x.vendedor}</td>
+                      <td style={{ ...S.tdR, color: "#94a3b8" }}>{x.skus}</td>
+                      <td style={{ ...S.tdR, fontWeight: 800, color: "#22d3ee" }}>{fmtN(x.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={S.barra}>
+        {puedeEditar && (
+          <button style={{ ...S.btnPrimario, opacity: sucio && !guardando ? 1 : 0.45 }} disabled={!sucio || guardando} onClick={() => guardar()}>
+            {guardando ? "Guardando…" : "Guardar picking"}
+          </button>
+        )}
+        <button style={{ ...S.btnSec, borderStyle: "solid" }} onClick={irAInventario}>✍️ Ir a la Cédula de conteo</button>
+        {puedeEditar && guardado && (
+          <button style={{ ...S.btnMini, borderColor: "#f87171", color: "#f87171" }} onClick={borrar}>
+            {confirmar ? "¿Seguro? toca otra vez" : "🧹 Borrar picking"}
+          </button>
+        )}
+        <span style={{ fontSize: 12, color: sucio ? "#f59e0b" : "#94a3b8" }}>{sucio ? "Tienes cambios sin guardar" : estado}</span>
+      </div>
+      {sucio && estado && <div style={S.nota}>{estado}</div>}
+    </div>
+  );
+}
+
 // Hoja de conteo ciego: #, SKU, MARCA, TOTAL CAJAS, TOTAL PAQUETES, TOTAL CAJETILLAS.
-// lleno = true → con el desglose de la chuki; false → en blanco para contar a mano.
+// lleno = true → con la chuki; false → en blanco para contar a mano.
 async function excelConteoCiego({ filas, lleno, clo, fecha }) {
   const archivo = `HOJA_DE_CONTEO_${fechaPuntos(fecha)}.xlsx`;
   const val = (v) => (v === "" || v === null || v === undefined || Number(v) === 0 ? null : Number(v));
+  const datoDe = (f, k) => (lleno ? val(f.chuki[k]) : null);
   let ExcelJS;
   try { ExcelJS = await cargarExcelJS(); } catch { ExcelJS = null; }
   if (!ExcelJS) {
-    bajarExcel(filas.map((f, i) => ({
+    await bajarExcel(filas.map((f, i) => ({
       "#": i + 1, SKU: f.codigo, MARCA: f.articulo,
-      "TOTAL CAJAS": lleno ? val(f.chuki.cajas) : null, "TOTAL PAQUETES": lleno ? val(f.chuki.paquetes) : null, "TOTAL CAJETILLAS": lleno ? val(f.chuki.cajetillas) : null,
+      "TOTAL CAJAS": datoDe(f, "cajas"), "TOTAL PAQUETES": datoDe(f, "paquetes"), "TOTAL CAJETILLAS": datoDe(f, "cajetillas"),
     })), [5, 12, 18, 15, 15, 15], "Hoja de conteo", archivo);
     return;
   }
@@ -1090,12 +1311,12 @@ async function excelConteoCiego({ filas, lleno, clo, fecha }) {
   wb.creator = "SMART-TRACK";
   const ws = wb.addWorksheet("Hoja de conteo", {
     views: [{ showGridLines: false, state: "frozen", ySplit: 4 }],
-    pageSetup: { paperSize: 1, orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } },
+    pageSetup: { paperSize: 1, orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.7, bottom: 0.6, header: 0.3, footer: 0.3 } },
   });
   ws.pageSetup.printTitlesRow = "4:4";
+  encabezadoImpresion(ws, `HOJA DE CONTEO · CLO ${clo || ""}`, fecha);
   const fino = { style: "thin", color: { argb: "FF000000" } };
   const borde = { top: fino, left: fino, bottom: fino, right: fino };
-  const NUM1 = '0.0';
   const grisClaro = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
   const gris = { type: "pattern", pattern: "solid", fgColor: { argb: "FFBFBFBF" } };
   [5.5, 12.5, 18, 17, 17, 17].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
@@ -1124,50 +1345,44 @@ async function excelConteoCiego({ filas, lleno, clo, fecha }) {
   });
   filas.forEach((f, i) => {
     const r = ws.getRow(5 + i);
-    r.height = lleno ? 18 : 22; // en blanco, más alto para escribir a mano
-    const datos = [i + 1, f.codigo, f.articulo,
-      lleno ? val(f.chuki.cajas) : null, lleno ? val(f.chuki.paquetes) : null, lleno ? val(f.chuki.cajetillas) : null];
-    datos.forEach((v, j) => {
+    r.height = lleno ? 18 : 22;
+    [i + 1, f.codigo, f.articulo, datoDe(f, "cajas"), datoDe(f, "paquetes"), datoDe(f, "cajetillas")].forEach((v, j) => {
       const c = r.getCell(j + 1);
       c.value = v; c.border = borde;
       c.font = { name: "Calibri", size: 11, color: j === 0 ? { argb: "FF7F7F7F" } : undefined };
       c.alignment = { horizontal: j === 0 ? "center" : j >= 3 ? "right" : "left", vertical: "middle" };
-      if (j >= 3) c.numFmt = NUM1;
+      if (j >= 3) c.numFmt = "0.0";
     });
   });
-
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = archivo;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  await guardarWb(wb, archivo);
 }
 
-// Excel igual al de la cédula: hoja principal con fórmulas + PICKING + INVENTARIO PWST + Tabla de Conversiones
-async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capacidad }) {
+// Excel igual al de la cédula original: hoja con fórmulas + PICKING + INVENTARIO PWST + Tabla de Conversiones.
+// Se llama igual que el original (CEDULA_DE_CONTEO_PWST_dd.mm.aaaa) lleve chuki o conteo.
+async function excelCedula({ filas, pwstFilas, picking, base, clo, fecha, capacidad }) {
   let ExcelJS;
   try { ExcelJS = await cargarExcelJS(); } catch { ExcelJS = null; }
-  const nombreHoja = tipo === "chuki" ? "Chuki" : "Cédula de Conteo";
-  const archivo = `${tipo === "chuki" ? "CHUKI" : "CEDULA_DE_CONTEO"}_PWST_${fechaPuntos(fecha)}.xlsx`;
+  const archivo = `CEDULA_DE_CONTEO_PWST_${fechaPuntos(fecha)}.xlsx`;
   const val = (v) => (v === "" || v === null || v === undefined || Number(v) === 0 ? null : Number(v));
 
-  // Sin internet para el generador con formato: Excel sencillo con los mismos datos
   if (!ExcelJS) {
-    const datos = filas.map((f) => ({
-      SKU: f.codigo, MARCA: f.articulo, "TOTAL CAJAS": val(f.captura.cajas), "TOTAL PAQUETES": val(f.captura.paquetes),
-      "TOTAL CAJETILLAS": val(f.captura.cajetillas), Picking: Number(f.captura.picking) || 0, "PAQUETES X CAJA": f.ppc || null,
-      "CAJETILLAS X PAQUETE": f.cpp, "TOTAL INVENTARIO FISICO": tipo === "chuki" ? f.saldoNum : r3((Number(f.captura.cajas) || 0) * f.ppc + (Number(f.captura.paquetes) || 0) + (Number(f.captura.cajetillas) || 0) / 100 + (Number(f.captura.picking) || 0)),
-      "TOTAL PWST": f.saldoNum,
-    }));
-    bajarExcel(datos, [12, 18, 12, 14, 14, 10, 12, 12, 16, 14], nombreHoja.slice(0, 31), archivo);
+    await bajarExcel(filas.map((f) => ({
+      SKU: f.codigo, MARCA: f.articulo, "TOTAL CAJAS": val(f.cap.cajas), "TOTAL PAQUETES": val(f.cap.paquetes),
+      "TOTAL CAJETILLAS": val(f.cap.cajetillas), Picking: f.picking || 0, "PAQUETES X CAJA": f.ppc || null,
+      "CAJETILLAS X PAQUETE": f.cpp, "TOTAL INVENTARIO FISICO": f.fisicoExcel, "TOTAL PWST": f.saldoNum,
+      DIFERENCIAS: r3(f.fisicoExcel - f.saldoNum),
+    })), [12, 18, 12, 14, 14, 10, 12, 12, 16, 14, 14], "Cédula de Conteo", archivo, { titulo: `CÉDULA DE CONTEO · CLO ${clo}`, fecha });
     return;
   }
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "SMART-TRACK";
-  const ws = wb.addWorksheet(nombreHoja, { views: [{ showGridLines: false, state: "frozen", ySplit: 7 }] });
+  const ws = wb.addWorksheet("Cédula de Conteo", {
+    views: [{ showGridLines: false, state: "frozen", ySplit: 7 }],
+    pageSetup: { paperSize: 1, orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.3, right: 0.3, top: 0.7, bottom: 0.6, header: 0.3, footer: 0.3 } },
+  });
+  ws.pageSetup.printTitlesRow = "7:7";
+  encabezadoImpresion(ws, `CÉDULA DE CONTEO PWST · CLO ${clo || ""}`, fecha);
   const fino = { style: "thin", color: { argb: "FF000000" } };
   const borde = { top: fino, left: fino, bottom: fino, right: fino };
   const NUM3 = '_(* #,##0.000_);_(* \\(#,##0.000\\);_(* "-"_);_(@_)';
@@ -1175,14 +1390,12 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
   const gris = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
   const blanco = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
   const negro = { type: "pattern", pattern: "solid", fgColor: { argb: "FF000000" } };
-
   [12.3, 17.4, 17.1, 16, 15.9, 15.9, 12.9, 13.1, 18.3, 17.4, 17.6, 3.9].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
   const n = filas.length;
   const ini = 8, fin = ini + n - 1, tot = fin + 2;
   let sumC = 0, sumD = 0, sumE = 0, sumJ = 0, sumK = 0;
 
-  // Encabezado superior (cuadros)
   ws.mergeCells("A1:A2"); ws.mergeCells("B1:B2"); ws.mergeCells("C1:D4"); ws.mergeCells("E1:F4"); ws.mergeCells("G1:H4"); ws.mergeCells("I1:J4");
   const caja = (ref, v, sz, fmt) => {
     const c = ws.getCell(ref);
@@ -1191,11 +1404,10 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
     if (fmt) c.numFmt = fmt;
   };
 
-  // Filas de productos
   filas.forEach((f, i) => {
     const r = ini + i;
-    const C = val(f.captura.cajas), D = val(f.captura.paquetes), E = val(f.captura.cajetillas);
-    const F = Number(f.captura.picking) || 0, G = f.ppc || 0, H = f.cpp || 10;
+    const C = val(f.cap.cajas), D = val(f.cap.paquetes), E = val(f.cap.cajetillas);
+    const F = f.picking || 0, G = f.ppc || 0, H = f.cpp || 10;
     const I = r3((C || 0) * G + (D || 0) + (E || 0) / 100 + F);
     const J = f.saldoNum, K = r3(I - J);
     sumC += C || 0; sumD += D || 0; sumE += E || 0; sumJ += J; sumK += K;
@@ -1245,7 +1457,6 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
   });
   if (n) ws.autoFilter = { from: { row: 7, column: 1 }, to: { row: fin, column: 11 } };
 
-  // Totales (fila negra)
   const filaTot = ws.getRow(tot);
   const totales = { 3: [`SUM(C${ini}:C${fin + 1})`, sumC], 4: [`SUM(D${ini}:D${fin + 1})`, sumD], 5: [`SUM(E${ini}:E${fin + 1})`, sumE], 10: [`SUM(J${ini}:J${fin + 1})`, r3(sumJ)], 11: [`SUM(K${ini}:K${fin + 1})`, r3(sumK)] };
   for (const [col, [formula, result]] of Object.entries(totales)) {
@@ -1255,18 +1466,24 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
     c.alignment = { horizontal: "center" }; c.numFmt = Number(col) >= 10 ? NUM3 : NUM1;
   }
 
-  // PICKING
+  // PICKING: total por SKU (como el original) y el detalle por vendedor a la derecha
   const wp = wb.addWorksheet("PICKING");
-  wp.getColumn(1).width = 12; wp.getColumn(2).width = 22; wp.getColumn(3).width = 10;
-  const conPick = filas.filter((f) => Number(f.captura.picking) > 0);
-  wp.getCell("C1").value = { formula: "SUM(C3:C5000)", result: conPick.reduce((s, f) => s + Number(f.captura.picking), 0) };
-  wp.getRow(2).values = ["Codigo", "Descripcion", "Total"];
+  [12, 34, 10, 4, 40, 12, 10].forEach((w, i) => { wp.getColumn(i + 1).width = w; });
+  encabezadoImpresion(wp, "PICKING", fecha);
+  const tPick = totalesPicking(picking?.filas);
+  const descPick = {};
+  for (const f of picking?.filas || []) if (!descPick[f.codigo]) descPick[f.codigo] = f.descripcion;
+  const codsPick = Object.keys(tPick).sort();
+  wp.getCell("C1").value = { formula: "SUM(C3:C5000)", result: r3(Object.values(tPick).reduce((s, x) => s + x, 0)) };
+  wp.getRow(2).values = ["Codigo", "Descripcion", "Total", null, "Vendedor", "Codigo", "Cantidad"];
   wp.getRow(2).font = { bold: true };
-  conPick.forEach((f, i) => { wp.getRow(3 + i).values = [f.codigo, f.articulo, Number(f.captura.picking)]; });
+  codsPick.forEach((c, i) => { const r = wp.getRow(3 + i); r.getCell(1).value = c; r.getCell(2).value = descPick[c] || ""; r.getCell(3).value = r3(tPick[c]); });
+  (picking?.filas || []).forEach((f, i) => { const r = wp.getRow(3 + i); r.getCell(5).value = f.vendedor; r.getCell(6).value = f.codigo; r.getCell(7).value = Number(f.cantidad) || 0; });
 
   // INVENTARIO PWST (tal cual el reporte)
   const wi = wb.addWorksheet("INVENTARIO PWST");
   [34, 12, 18, 10, 12].forEach((w, i) => { wi.getColumn(i + 1).width = w; });
+  encabezadoImpresion(wi, "INVENTARIO PWST", fecha);
   wi.getCell("E1").value = { formula: "SUM(E3:E5000)", result: r3(pwstFilas.reduce((s, p) => s + (Number(String(p.saldoTexto).replace(/,/g, "")) || 0), 0)) };
   wi.getRow(2).values = ["Deposito", "Codigo", "Articulo", "Unidades", "Saldo"];
   wi.getRow(2).font = { bold: true };
@@ -1277,6 +1494,7 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
   // Tabla de Conversiones
   const wt = wb.addWorksheet("Tabla de Conversiones");
   [12, 22, 10, 18].forEach((w, i) => { wt.getColumn(i + 1).width = w; });
+  encabezadoImpresion(wt, "TABLA DE CONVERSIONES", fecha);
   wt.mergeCells("A1:D1");
   wt.getCell("A1").value = "Tabla de conversiones ";
   wt.getCell("A1").font = { bold: true, size: 14 };
@@ -1288,13 +1506,7 @@ async function excelInventario({ tipo, filas, pwstFilas, base, clo, fecha, capac
   for (const [cod, b] of Object.entries(base)) if (!conv.has(cod)) conv.set(cod, [cod, b.articulo || "", 10, b.unidades || null]);
   [...conv.values()].sort((a, b) => a[0].localeCompare(b[0])).forEach((v, i) => { wt.getRow(3 + i).values = v; });
 
-  const buf = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = archivo;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  await guardarWb(wb, archivo);
 }
 
 const S = {
