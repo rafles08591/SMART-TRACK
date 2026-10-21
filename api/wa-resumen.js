@@ -383,7 +383,17 @@ async function modoBot(req) {
   const tag = grupo ? mencion(numero) : null;
   // 🧠 Memoria corta: lo que esta persona platicó con Robotina en los últimos 15 min
   const historial = await leerHistorial(numero);
-  const responder = async (extra) => {
+  // Respuesta con datos recién actualizados (la pide el robot al terminar): lleva un aviso arriba
+  let avisoFresco = '';
+  const responder = async (extra0) => {
+    let extra = extra0;
+    if (avisoFresco && extra.tipo !== 'ninguno') {
+      extra = {
+        ...extra,
+        ...(extra.texto ? { texto: `${avisoFresco}\n\n${extra.texto}` } : {}),
+        ...(extra.caption ? { caption: `${avisoFresco}\n\n${extra.caption}` } : {}),
+      };
+    }
     if (extra.tipo !== 'ninguno' && body.texto) {
       await recordar(numero, historial, body.texto, extra.texto || extra.caption || '');
     }
@@ -415,6 +425,28 @@ async function modoBot(req) {
   }
 
   const cmd = comando(body.texto);
+
+  // 🔄 Jefe / supervisores piden un avance → primero se actualiza PowerStreet en silencio
+  //    (sin tarjetas ni mensajes al equipo) y al terminar el robot vuelve a preguntar con fresco=1.
+  if (c.tipo === 'equipo' && cmd !== 'actualizar' && cmd !== 'menu') {
+    if (body.fresco) {
+      const hora = new Date().toLocaleTimeString('es-MX', { timeZone: 'America/Mexico_City', hour: '2-digit', minute: '2-digit' });
+      avisoFresco = body.sin_refresco
+        ? `⚠️ ${tratoDe(c)}, no pude actualizar PowerStreet; te paso lo último que tengo cargado:`
+        : `🔄 Listo, ${tratoDe(c)}: información actualizada a las ${hora}.`;
+    } else if (pideAvance(body.texto, cmd)) {
+      const ult = await leerEstado('refresco_hecho');
+      const reciente = ult?.t && Date.now() - ult.t < MIN_FRESCO * 60000;
+      if (!reciente) {
+        return responder({
+          tipo: 'refrescar',
+          texto: `Ok, ${tratoDe(c)} 🫡 déjame actualizar y en cuanto tenga la información fresca te la paso.`,
+          refrescar: { numero, texto: body.texto, grupo: grupo || null },
+        });
+      }
+    }
+  }
+
   // 🖐️ "¿Quiénes son candidatos a la Tercera Mano del Pachuco?"
   if (pideTerceraMano(body.texto)) {
     const r = await respuestaTerceraMano(c, cfg, { historial, pregunta: body.texto });
@@ -592,6 +624,15 @@ async function contextoDatos(c) {
     dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
     marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
   };
+}
+
+// ------------------------------------------------------------------ 🔄 REFRESCO ANTES DE CONTESTAR
+// Si el robot actualizó hace menos de MIN_FRESCO minutos, se contesta directo sin volver a refrescar.
+const MIN_FRESCO = Number(process.env.REFRESCO_MIN || 10);
+function pideAvance(texto, cmd) {
+  if (['avance', 'hoy', 'marcas', 'ranking', 'reto', 'clientes', 'riesgo'].includes(cmd)) return true;
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(avance|avances|como va|como vamos|como van|como voy|cuanto|cuantos|llevan?|llevamos|venta|ventas|vendid\w*|otc|rally|reto|vuala|marcas?|indicador\w*|ranking|proyecc\w*|meta|metas|objetivo\w*|resultado\w*|numeros|tercera\s*mano|pachuco|candidat\w*|quien va|quienes van|abajo|arriba|lider)\b/.test(t);
 }
 
 // ------------------------------------------------------------------ 🖐️ TERCERA MANO (bajo pedido)
@@ -1245,6 +1286,8 @@ export default async function handler(req) {
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
     if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
+    // El robot de PowerStreet avisa que terminó de cargar datos (para no volver a refrescar enseguida)
+    if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
     if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
   } catch (e) {
