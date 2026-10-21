@@ -228,12 +228,12 @@ export default function AlmacenView({ data, persistFresco, puedeEditar = true, q
       )}
       {pestana === "fecha" && (
         <div style={{ ...S.card, maxWidth: 320 }}>
-          <div style={S.lbl}>Fecha para los Excel que se descarguen</div>
+          <div style={S.lbl}>📅 Fecha de los Excel (si no la cambias, es la de hoy)</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input style={S.input} type="date" value={fechaDoc} onChange={(e) => setFechaDoc(e.target.value || hoyISO())} />
             {fechaDoc !== hoyISO() && <button style={S.btnMini} onClick={() => setFechaDoc(hoyISO())}>Hoy</button>}
           </div>
-          <div style={S.nota}>Sale en el nombre del archivo, en la hoja y en el encabezado al imprimir.</div>
+          <div style={S.nota}>Sale en el nombre del archivo, en la hoja y arriba al centro al imprimir (21/10/2026).</div>
         </div>
       )}
       {/* Pestaña escondida "." para cambiar la fecha de los Excel */}
@@ -757,13 +757,11 @@ function cargarExcelJS() {
 const fechaPuntos = (iso) => (iso ? iso.split("-").reverse().join(".") : ""); // 2026-09-30 → 30.09.2026
 const r3 = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
 
-// Encabezado / pie que SOLO se ven al imprimir (no aparecen en la hoja)
-function encabezadoImpresion(ws, titulo, fecha) {
-  const esc = (t) => String(t || "").replace(/&/g, "&&");
-  ws.headerFooter = {
-    oddHeader: `&L&"Calibri,Bold"&12${esc(titulo)}&R&"Calibri,Bold"&12Fecha: ${fechaPuntos(fecha)}`,
-    oddFooter: `&L&8SMART-TRACK · Almacén&R&8Página &P de &N`,
-  };
+// Encabezado que SOLO se ve al imprimir: únicamente la fecha, al centro, como "21/10/2026".
+// eslint-disable-next-line no-unused-vars
+function encabezadoImpresion(ws, _titulo, fecha) {
+  const f = fecha ? fecha.split("-").reverse().join("/") : "";
+  ws.headerFooter = { oddHeader: `&C&"Calibri"&8 ${f}`, evenHeader: `&C&"Calibri"&8 ${f}`, firstHeader: `&C&"Calibri"&8 ${f}` };
 }
 
 async function guardarWb(wb, archivo) {
