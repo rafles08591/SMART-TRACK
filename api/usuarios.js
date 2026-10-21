@@ -57,37 +57,54 @@ const correoDe = (username) => `${username.toLowerCase()}@smarttrack.local`;
 const slugPuesto = (p) => String(p || '').trim().toLowerCase()
   .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
-// Todos los usuarios creados desde la app (Auth + profiles)
-async function usuariosApp() {
-  const lista = [];
-  for (let page = 1; page <= 20; page++) {
-    const r = await llamar(`/auth/v1/admin/users?page=${page}&per_page=200`);
-    const users = r?.users || [];
-    lista.push(...users.filter((u) => u.user_metadata?.app_usuario));
-    if (users.length < 200) break;
-  }
-  if (!lista.length) return [];
-  const ids = lista.map((u) => u.id).join(',');
+// Registro de usuarios creados desde la app: tabla wa_estado, clave "usuarios_app".
+// (No se usa el listado de Supabase Auth porque falla con los usuarios viejos creados a mano:
+//  "Database error finding users".)
+//   { ALMACEN: { id, email, nombre, grupo, clo, puesto_label, creado }, ... }
+const CLAVE_REGISTRO = 'usuarios_app';
+async function leerRegistro() {
+  const r = await llamar(`/rest/v1/wa_estado?clave=eq.${CLAVE_REGISTRO}&select=valor`);
+  return (r?.[0]?.valor && typeof r[0].valor === 'object') ? r[0].valor : {};
+}
+async function guardarRegistro(reg) {
+  await llamar('/rest/v1/wa_estado', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ clave: CLAVE_REGISTRO, valor: reg, actualizado: new Date().toISOString() }),
+  });
+}
+
+// Todos los usuarios creados desde la app (registro + profiles)
+async function usuariosApp({ conAcceso = false } = {}) {
+  const reg = await leerRegistro();
+  const entradas = Object.entries(reg).filter(([, v]) => v?.id);
+  if (!entradas.length) return [];
+  const ids = entradas.map(([, v]) => v.id).join(',');
   const perfiles = await llamar(`/rest/v1/profiles?id=in.(${ids})&select=*`);
   const porId = Object.fromEntries((perfiles || []).map((p) => [p.id, p]));
-  return lista.map((u) => {
-    const m = u.user_metadata || {};
-    const p = porId[u.id] || {};
+  const lista = await Promise.all(entradas.map(async ([username, m]) => {
+    const p = porId[m.id];
+    if (!p) return null; // se borró por fuera
+    let ultimo = null;
+    if (conAcceso) {
+      try { ultimo = (await llamar(`/auth/v1/admin/users/${m.id}`))?.last_sign_in_at || null; } catch { /* nada */ }
+    }
     return {
-      id: u.id,
-      username: p.username || m.username,
-      email: u.email,
-      nombre: m.nombre || p.username || m.username,
+      id: m.id,
+      username: p.username || username,
+      email: m.email || correoDe(username),
+      nombre: m.nombre || username,
       tipo: m.grupo || (p.role === 'merch' ? 'merch' : 'staff'),
       clo: m.clo || null,
       role: p.role || null,
       puesto: p.puesto || null,
       puesto_label: m.puesto_label || p.puesto || '',
       activo: p.active !== false,
-      creado: u.created_at,
-      ultimo_acceso: u.last_sign_in_at || null,
+      creado: m.creado || null,
+      ultimo_acceso: ultimo,
     };
-  }).sort((a, b) => String(a.username).localeCompare(String(b.username)));
+  }));
+  return lista.filter(Boolean).sort((a, b) => String(a.username).localeCompare(String(b.username)));
 }
 
 // Quien llama debe tener sesión y ser GERENTE (se revisa contra profiles, no contra lo que diga el navegador)
@@ -131,7 +148,7 @@ export default async function handler(req) {
     try { body = await req.json(); } catch { /* vacío */ }
     const accion = body.accion;
 
-    if (accion === 'listar') return json({ usuarios: await usuariosApp() });
+    if (accion === 'listar') return json({ usuarios: await usuariosApp({ conAcceso: true }) });
 
     if (accion === 'crear') {
       const username = limpiarUsuario(body.username);
@@ -146,8 +163,28 @@ export default async function handler(req) {
         return json({ error: `El puesto "${puesto}" ya existe en la app; usa otro (p. ej. almacen)` }, 400);
       }
       if (tipo === 'merch' && !body.clo) return json({ error: 'Elige el CLO del Merch' }, 400);
+      const meta = {
+        app_usuario: true, username, nombre, grupo: tipo, clo: tipo === 'merch' ? body.clo : null,
+        puesto_label: String(body.puesto_label || '').trim() || (tipo === 'merch' ? `Merch · CLO ${body.clo}` : 'Almacén'),
+        creado_por: gerente.username || 'GERENTE',
+      };
+      const registrar = async (id) => {
+        const reg = await leerRegistro();
+        reg[username] = { id, email: correoDe(username), nombre, grupo: tipo, clo: meta.clo, puesto_label: meta.puesto_label, creado: new Date().toISOString() };
+        await guardarRegistro(reg);
+      };
       const yaHay = await llamar(`/rest/v1/profiles?username=eq.${encodeURIComponent(username)}&select=id`);
-      if (yaHay?.length) return json({ error: `Ya existe un usuario ${username}` }, 409);
+      if (yaHay?.length) {
+        // Si es uno que se creó desde la app pero quedó a medias, se recupera con los datos nuevos
+        const id = yaHay[0].id;
+        let previo = null;
+        try { previo = await llamar(`/auth/v1/admin/users/${id}`); } catch { /* nada */ }
+        if (!previo?.user_metadata?.app_usuario) return json({ error: `Ya existe un usuario ${username} (de los de siempre). Usa otro nombre de usuario.` }, 409);
+        await llamar(`/auth/v1/admin/users/${id}`, { method: 'PUT', body: JSON.stringify({ password: claveDe(pin), user_metadata: meta }) });
+        await llamar(`/rest/v1/profiles?id=eq.${id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ role: tipo, puesto, active: true }) });
+        await registrar(id);
+        return json({ ok: true, recuperado: true });
+      }
 
       const creado = await llamar('/auth/v1/admin/users', {
         method: 'POST',
@@ -155,11 +192,7 @@ export default async function handler(req) {
           email: correoDe(username),
           password: claveDe(pin),
           email_confirm: true,
-          user_metadata: {
-            app_usuario: true, username, nombre, grupo: tipo, clo: tipo === 'merch' ? body.clo : null,
-            puesto_label: String(body.puesto_label || '').trim() || (tipo === 'merch' ? `Merch · CLO ${body.clo}` : 'Almacén'),
-            creado_por: gerente.username || 'GERENTE',
-          },
+          user_metadata: meta,
         }),
       });
       const id = creado?.id || creado?.user?.id;
@@ -175,7 +208,8 @@ export default async function handler(req) {
         await llamar(`/auth/v1/admin/users/${id}`, { method: 'DELETE' }).catch(() => {});
         return json({ error: 'No se pudo crear el perfil: ' + e.message }, 500);
       }
-      return json({ ok: true, usuario: await buscarApp(username) });
+      await registrar(id);
+      return json({ ok: true });
     }
 
     const username = limpiarUsuario(body.username);
@@ -196,7 +230,10 @@ export default async function handler(req) {
     }
     if (accion === 'eliminar') {
       await llamar(`/rest/v1/profiles?id=eq.${u.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }).catch(() => {});
-      await llamar(`/auth/v1/admin/users/${u.id}`, { method: 'DELETE' });
+      await llamar(`/auth/v1/admin/users/${u.id}`, { method: 'DELETE' }).catch(() => {});
+      const reg = await leerRegistro();
+      delete reg[username];
+      await guardarRegistro(reg);
       return json({ ok: true });
     }
     return json({ error: 'Acción no válida' }, 400);
