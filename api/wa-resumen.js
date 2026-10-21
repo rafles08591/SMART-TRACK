@@ -431,7 +431,10 @@ async function modoBot(req) {
     });
   }
   // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
-  if (cmd === 'nada') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg, { historial, grupo }) });
+  if (cmd === 'nada') {
+    const r = await respuestaIA(c, body.texto, cfg, { historial, grupo });
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: r.mencionados });
+  }
   if (cmd === 'reto') {
     const hoy = fechaMX();
     const fecha = await fechaUltimoCorte({ hasta: hoy });
@@ -454,7 +457,10 @@ async function modoBot(req) {
     });
     return botEquipo(req, c, cmd, cfg, alJefe);
   }
-  if (cmd === 'riesgo') return responder({ tipo: 'texto', texto: await respuestaIA(c, body.texto, cfg) });
+  if (cmd === 'riesgo') {
+    const r = await respuestaIA(c, body.texto, cfg);
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: r.mencionados });
+  }
   if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
 
   const hoy = fechaMX();
@@ -566,6 +572,7 @@ async function contextoDatos(c) {
     const d = varsEquipoDia(calcularEquipoDia(filas, todos));
     const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
     return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
+      rallies_otc: resumenRallies(filas, todos, true),
       rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, cierran_en_meta_100: rk.rutas_ok || 'ninguna', buen_avance_pero_sin_100: rk.rutas_cerca, nota: 'Solo 100% o más se considera bien; abajo de 100 es buen avance pero no cumple.' },
       indicadores_por_ruta: await indicadoresParaIA(fecha, cfg, { filas, todos, equipo: true }) };
   }
@@ -580,6 +587,7 @@ async function contextoDatos(c) {
   return {
     rol: 'vendedor', ruta: v.ruta, corte: fila.fecha, datos_de_hoy: fila.fecha === hoy,
     indicadores_hoy: inds[v.ruta] || {},
+    rallies_otc: resumenRallies(companeras, await listaContactos(cfgV), false),
     mes: { avance: v.pct_mes, ritmo_esperado: v.esperado, vendido: v.venta_mes, objetivo: v.objetivo_mes, necesita_por_dia: v.necesita, dias_restantes: v.dias_restantes, lugar: v.lugar, de_rutas: v.total_rutas },
     dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
     marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
@@ -693,13 +701,84 @@ async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = 
   }
 }
 
+// ------------------------------------------------------------------ 🏁 RALLIES OTC para la IA
+// Ranking ya calculado por rally (Robotina solo lo lee, no hace cuentas):
+//   { nombre, unidad, vigencia, totales, ranking: [{ lugar, ruta, nombre, hoy, meta_hoy, pct_hoy, acumulado, meta_final, pct_final }] }
+// El lugar 1 es el que va MEJOR. A vendedores nunca se les dan los exclusivos de Supervisor-1.
+function resumenRallies(filas, todos, equipo) {
+  const nombres = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = primerNombre(c.nombre || '', claveRuta(c.ruta));
+  const porRally = {};
+  for (const f of filas || []) {
+    const ruta = claveRuta(f.ruta);
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (!r?.id || (r.exclusivo && !equipo)) continue;
+      const R = porRally[r.id] || (porRally[r.id] = {
+        nombre: r.nombre || 'Rally OTC',
+        unidad: r.unidad === 'piezas' ? 'piezas' : 'pesos',
+        vigencia: `${r.fechaInicio || '¿?'} a ${r.fechaFin || '¿?'}`,
+        ...(r.exclusivo ? { exclusivo_supervisor1: true } : {}),
+        filas: [],
+      });
+      const hoy = r0(n(r.avanceDia) || 0), metaHoy = n(r.objetivoDia) ? r0(n(r.objetivoDia)) : null;
+      const acum = r0(n(r.avanceTotal) || 0), metaFin = n(r.objetivoFinal) ? r0(n(r.objetivoFinal)) : null;
+      R.filas.push({
+        ruta, nombre: nombres[ruta] || f.nombre || ruta,
+        hoy, meta_hoy: metaHoy, pct_hoy: metaHoy ? Math.round((hoy / metaHoy) * 100) : null,
+        falta_hoy: metaHoy ? Math.max(0, metaHoy - hoy) : null,
+        acumulado: acum, meta_final: metaFin, pct_final: metaFin ? Math.round((acum / metaFin) * 100) : null,
+        falta_final: metaFin ? Math.max(0, metaFin - acum) : null,
+      });
+    }
+  }
+  return Object.values(porRally).map(({ filas: fs, ...R }) => {
+    const clave = (x) => (x.pct_hoy ?? x.pct_final ?? -1);
+    const ranking = fs.sort((a, b) => clave(b) - clave(a) || b.hoy - a.hoy || b.acumulado - a.acumulado)
+      .map((x, i) => ({ lugar: i + 1, ...x }));
+    const suma = (k) => fs.reduce((s, x) => s + (x[k] || 0), 0);
+    return {
+      ...R,
+      participantes: ranking.length,
+      ordenado_por: fs.some((x) => x.meta_hoy) ? '% de la meta de HOY (lugar 1 = el mejor)' : '% de la meta final (lugar 1 = el mejor)',
+      totales: { hoy: suma('hoy'), meta_hoy: suma('meta_hoy') || null, acumulado: suma('acumulado'), meta_final: suma('meta_final') || null },
+      cumplieron_hoy: ranking.filter((x) => x.pct_hoy !== null && x.pct_hoy >= 100).map((x) => x.ruta),
+      ranking,
+    };
+  });
+}
+
+// La IA menciona por ruta (@J203); aquí se cambia por el @número real de esa persona
+// y se arma la lista de mencionados. Cualquier número que la IA invente se borra.
+function aplicarMenciones(texto, todos) {
+  const tel = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor' && c.telefono) tel[claveRuta(c.ruta)] = mencion(c.telefono);
+  const validos = new Set(Object.values(tel));
+  const mencionados = new Set();
+  let t = String(texto || '')
+    .replace(/@\+?(\d{10,13})\b/g, (m, d) => (validos.has(d) ? m : ''))           // números inventados fuera
+    .replace(/@\s?(J\s?-?\d{3})\b/gi, (m, r) => {
+      const k = claveRuta(r);
+      return tel[k] ? `@${tel[k]}` : k;
+    });
+  for (const m of t.match(/@(\d{10,13})\b/g) || []) mencionados.add(m.slice(1));
+  t = t.replace(/[ \t]{2,}/g, ' ');
+  return { texto: t, mencionados: [...mencionados] };
+}
+
 async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
   const key = process.env.OPENAI_API_KEY;
-  const fallback = 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.';
+  const fallback = { texto: 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.', mencionados: [] };
   if (!key) return fallback;
   try {
-    const [datos, retroPrev] = await Promise.all([contextoDatos(c), grupo ? leerEstado('retro_grupo') : null]);
-    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX() ? String(retroPrev.texto) : '';
+    const [datos, retroPrev, todos] = await Promise.all([contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg)]);
+    // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
+    const rutaDeMencion = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.telefono) rutaDeMencion[mencion(x.telefono)] = claveRuta(x.ruta);
+    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX()
+      ? String(retroPrev.texto).replace(/@(\d{10,13})/g, (m, d) => (rutaDeMencion[d] ? `@${rutaDeMencion[d]}` : ''))
+      : '';
+    const vendedores = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.activo !== false) vendedores[claveRuta(x.ruta)] = primerNombre(x.nombre || '', claveRuta(x.ruta));
     const esJefe = c.tipo === 'equipo';
     const titulo = tratoDe(c);
     // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
@@ -711,6 +790,8 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
       esJefe
         ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
         : 'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
@@ -720,6 +801,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       'Conversación: los mensajes previos (si hay) son de los últimos 15 minutos con esta misma persona. Úsalos para entender respuestas cortas como "sí", "dale", "¿y la J206?" o "¿por qué?". Si contesta que sí a algo que ofreciste, cúmplelo de inmediato con los datos.',
       'Al final puedes ofrecer UNA sola opción de seguimiento, solo si suma información nueva que no diste (p. ej. detalle por ruta, qué clientes le faltan, qué marca empujar). Nunca ofrezcas repetir lo que ya dijiste ni preguntes por preguntar; si ya diste todo lo útil, no ofrezcas nada.',
       ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
+      `Vendedores (ruta: nombre): ${JSON.stringify(vendedores)}`,
       `Datos (JSON): ${JSON.stringify(datos)}`,
     ].join('\n');
     const r = await fetchIA({
@@ -734,7 +816,8 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
     });
     if (!r.ok) return fallback;
     const j = await r.json();
-    return (j.choices?.[0]?.message?.content || '').trim() || fallback;
+    const salida = (j.choices?.[0]?.message?.content || '').trim();
+    return salida ? aplicarMenciones(salida, todos) : fallback;
   } catch {
     return fallback;
   }
