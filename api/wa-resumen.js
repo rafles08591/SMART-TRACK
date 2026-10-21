@@ -812,12 +812,130 @@ function aplicarMenciones(texto, todos) {
   return { texto: t, mencionados: [...mencionados] };
 }
 
+// ------------------------------------------------------------------ 🔎 VENTA POR PRODUCTO
+// Cuando preguntan por un producto en específico ("¿cuánto se vendió de Switch?"), se busca en
+// el detalle del día que carga el robot (data.avanceDia = paquetes por artículo y cliente;
+// data.otcDia = OTC por artículo). Así Robotina no tiene que adivinar con las marcas generales.
+const NO_PRODUCTO = new Set(`robotina bot jefe supervisor hola buenos buenas dias tardes noches gracias porfa favor
+cuanto cuanta cuantos cuantas cuantito venta ventas vendio vendieron vendido vendida vendidos vendimos vende venden vendiste
+hoy ayer dia semana mes periodo del de la el los las en que como va vamos van voy lleva llevan llevamos llevo
+producto productos articulo articulos pieza piezas paquete paquetes paq caja cajas por para ruta rutas todas todos
+me dame dime da detalle detalles sobre cual cuales quien quienes hay se ha han un una unos unas al lo le les con mas menos
+avance avances info informacion datos dato numero numeros total totales otc reto rally meta metas marca marcas indicador
+indicadores ranking lugar efectividad visitas clientes cliente mi mis tu su sus esta este esto estos estas ese esa eso nos
+tenemos tiene tienen tengo saber quiero quisiera puedes podrias ver muestra mostrar ahorita ahora bien mal ok si no tambien
+equipo vendedor vendedores supervisores jefe proyeccion objetivo objetivos lleve llevaba vuala sin tercera mano pachuco`.split(/\s+/));
+
+function palabrasProducto(texto) {
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ');
+  return [...new Set(t.split(/\s+/).filter((w) => w.length >= 3 && !NO_PRODUCTO.has(w) && !/^j\d{3}$/.test(w) && !/^\d+$/.test(w)))];
+}
+
+// Apodos que da de alta el Gerente (WhatsApp → Robotina → "Cómo le dicen a cada producto"):
+// data.whatsappBot.apodos = [{ codigo, articulo, apodos: "SWITCH, SWICH" }]
+const normTxt = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ').replace(/\s+/g, ' ').trim();
+function casiIgual(a, b) { // distancia de edición ≤ 1 (para faltas de ortografía: swich / siwch / switch)
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, dif = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++dif > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return dif + (a.length - i) + (b.length - j) <= 1;
+}
+function productosPorApodo(texto, apodos) {
+  const t = ` ${normTxt(texto)} `;
+  const palabrasT = t.trim().split(' ');
+  const hallados = [];
+  for (const a of apodos || []) {
+    for (const frase of String(a.apodos || '').split(',').map(normTxt).filter(Boolean)) {
+      const ok = t.includes(` ${frase} `)
+        || (!frase.includes(' ') && frase.length >= 5 && palabrasT.some((w) => w.length >= 5 && casiIgual(w, frase)));
+      if (ok) hallados.push({ frase, codigo: String(a.codigo || '').trim(), articulo: String(a.articulo || '').trim() });
+    }
+  }
+  if (!hallados.length) return null;
+  // Si coincide "promo clipper", no se cuentan los que solo dicen "clipper"
+  const frases = [...new Set(hallados.map((h) => h.frase))].sort((x, y) => y.length - x.length);
+  const aceptadas = [];
+  for (const f of frases) if (!aceptadas.some((g) => g.includes(f))) aceptadas.push(f);
+  const elegidos = hallados.filter((h) => aceptadas.includes(h.frase));
+  return {
+    frases: aceptadas,
+    codigos: new Set(elegidos.map((h) => h.codigo.toUpperCase()).filter(Boolean)),
+    articulos: new Set(elegidos.map((h) => normTxt(h.articulo)).filter(Boolean)),
+  };
+}
+
+async function ventasPorProducto(texto, cfg) {
+  const porApodo = productosPorApodo(texto, cfg?.apodos);
+  const palabras = palabrasProducto(texto);
+  if (!palabras.length && !porApodo) return null;
+  let av = [], otc = [];
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia,otc:data->otcDia');
+    av = Array.isArray(r?.[0]?.av) ? r[0].av : [];
+    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+  } catch { return null; }
+  const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
+  const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
+  const coincide = (...campos) => {
+    if (porApodo) { // con apodo: solo los artículos dados de alta para ese nombre
+      const [articulo, codigo] = campos;
+      return (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) ? 1 : 0;
+    }
+    const h = norm(campos.join(' '));
+    return palabras.filter((w) => h.includes(w)).length;
+  };
+  const productos = {};
+  const sumar = (clave, nombre, tipo, ruta, cant, monto, puntos) => {
+    const p = productos[clave] || (productos[clave] = { producto: nombre, tipo, total_cantidad: 0, total_pesos: 0, por_ruta: {}, puntos });
+    p.total_cantidad += cant; p.total_pesos += monto;
+    const rr = p.por_ruta[ruta] || (p.por_ruta[ruta] = { cantidad: 0, pesos: 0 });
+    rr.cantidad += cant; rr.pesos += monto;
+  };
+  for (const x of av) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.marca) : 0;
+    if (!pts) continue;
+    sumar(`av:${x.articulo}`, x.articulo + (x.marca ? ` (${x.marca})` : ''), 'paquetes', claveRuta(x.vendedor), Number(x.paquetes) || 0, Number(x.monto) || 0, pts);
+  }
+  for (const x of otc) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.codigoArticulo) : 0;
+    if (!pts) continue;
+    sumar(`otc:${x.codigoArticulo || x.articulo}`, `${x.articulo}${x.codigoArticulo ? ` [${x.codigoArticulo}]` : ''} (OTC)`, 'piezas', claveRuta(x.vendedor), Number(x.unidadesVendidas) || 0, Number(x.monto) || 0, pts);
+  }
+  const maxPts = Math.max(0, ...Object.values(productos).map((p) => p.puntos));
+  const lista = Object.values(productos)
+    .filter((p) => p.puntos === maxPts)
+    .map(({ puntos: _p, ...p }) => ({ ...p, total_cantidad: Math.round(p.total_cantidad), total_pesos: Math.round(p.total_pesos),
+      por_ruta: Object.fromEntries(Object.entries(p.por_ruta).sort((a, b) => b[1].cantidad - a[1].cantidad)
+        .map(([k, v]) => [k, { cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) }])) }))
+    .sort((a, b) => b.total_cantidad - a.total_cantidad)
+    .slice(0, 15);
+  return {
+    fecha_del_detalle: fecha,
+    palabras_buscadas: porApodo ? porApodo.frases : palabras,
+    ...(porApodo ? { buscado_por_apodo: true } : {}),
+    encontrado: lista.length > 0,
+    productos: lista,
+    nota: lista.length
+      ? 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC). Las rutas que no aparecen no vendieron ese producto.'
+      : 'En el detalle de ventas del día NO hay ninguna venta de un producto con esas palabras.',
+  };
+}
+
 async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
   const key = process.env.OPENAI_API_KEY;
   const fallback = { texto: 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.', mencionados: [] };
   if (!key) return fallback;
   try {
-    const [datos, retroPrev, todos] = await Promise.all([contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg)]);
+    const [datos, retroPrev, todos, porProducto] = await Promise.all([
+      contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg), ventasPorProducto(texto, cfg),
+    ]);
+    if (porProducto) datos.venta_por_producto = porProducto;
     // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
     const rutaDeMencion = {};
     for (const x of todos) if (x.tipo === 'vendedor' && x.telefono) rutaDeMencion[mencion(x.telefono)] = claveRuta(x.ruta);
@@ -838,6 +956,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
       'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'PRODUCTOS: si preguntan por la venta de un producto o artículo en específico (ej. Switch, un sabor, una presentación), contesta SOLO con "venta_por_producto": es la venta real por artículo. Si "encontrado" es false o el producto no aparece ahí, di claramente que hoy no hay venta registrada de ese producto (y la fecha del detalle). NUNCA uses las marcas, metas o porcentajes de otros indicadores para responder sobre un producto, y nunca inventes ventas.',
       'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
       esJefe
         ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
