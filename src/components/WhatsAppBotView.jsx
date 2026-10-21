@@ -9,6 +9,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { NOMBRES, MARCAS_DIA } from "../constants";
 import { supabase } from "../supabaseClient";
 import IndicadoresRobotinaView from "./IndicadoresRobotinaView";
+import ApodosProductosView from "./ApodosProductosView";
 
 // Deben coincidir con PLANTILLAS_DEFAULT de api/_wa-lib.js
 const PLANTILLAS_DEFAULT = {
@@ -545,7 +546,10 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
 
       {seccion === "robotina" && (
         // Se guarda al momento (no necesita "Guardar cambios")
-        <IndicadoresRobotinaView data={data} persistFresco={persistFresco} puedeEditar={puedeEditar} />
+        <>
+          <IndicadoresRobotinaView data={data} persistFresco={persistFresco} puedeEditar={puedeEditar} />
+          <ApodosProductosView data={data} persistFresco={persistFresco} puedeEditar={puedeEditar} />
+        </>
       )}
 
       {seccion === "mensajes" && (
