@@ -48,6 +48,16 @@ const COLOR = {
 };
 
 const PIN_LENGTH = 4;
+
+// Usuarios creados desde la app (módulo Usuarios del Gerente). Se leen de /api/usuarios y se
+// guardan en el teléfono para que el login funcione aunque la señal tarde.
+const USUARIOS_APP_KEY = "smarttrack_usuarios_app";
+function leerUsuariosAppCache() {
+  try { return JSON.parse(localStorage.getItem(USUARIOS_APP_KEY) || "[]"); } catch { return []; }
+}
+function emailDe(username, extras) {
+  return USER_EMAIL_MAP[username] || extras.find((u) => u.username === username)?.email || null;
+}
 const RECORDADO_KEY = "smarttrack_ultimo_usuario";
 
 function leerUsuarioRecordado() {
@@ -80,14 +90,29 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [recordado, setRecordado] = useState(null);
+  const [extras, setExtras] = useState(leerUsuariosAppCache);
+
+  useEffect(() => {
+    let vivo = true;
+    fetch("/api/usuarios?accion=login")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!vivo || !j || !Array.isArray(j.usuarios)) return;
+        setExtras(j.usuarios);
+        try { localStorage.setItem(USUARIOS_APP_KEY, JSON.stringify(j.usuarios)); } catch {}
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, []);
 
   useEffect(() => {
     const username = leerUsuarioRecordado();
-    if (username && USER_EMAIL_MAP[username]) {
+    if (username && emailDe(username, extras)) {
+      const extra = extras.find((u) => u.username === username);
       const obj = {
         username,
-        label: username.startsWith("RUTA ") ? username.replace("RUTA ", "") : username,
-        sub: username.startsWith("RUTA ") ? "Ruta de venta" : username,
+        label: extra ? extra.nombre : username.startsWith("RUTA ") ? username.replace("RUTA ", "") : username,
+        sub: extra ? extra.puesto_label : username.startsWith("RUTA ") ? "Ruta de venta" : username,
       };
       setObjetivo(obj);
       setRecordado(obj);
@@ -114,7 +139,7 @@ export default function Login({ onLogin }) {
     setLoading(true);
     setError("");
 
-    const email = USER_EMAIL_MAP[objetivo.username];
+    const email = emailDe(objetivo.username, extras);
     if (!email) {
       setError("Usuario no configurado");
       setLoading(false);
@@ -169,7 +194,7 @@ export default function Login({ onLogin }) {
       setLoading(false);
       setPin("");
     }
-  }, [objetivo, onLogin, loading]);
+  }, [objetivo, onLogin, loading, extras]);
 
   const pressDigit = useCallback((d) => {
     if (loading || success || pin.length >= PIN_LENGTH) return;
@@ -264,6 +289,8 @@ export default function Login({ onLogin }) {
     { username: "ADMIN", nombre: "Admin", rolLabel: "Administrador", Icon: Settings },
     { username: "SUPLENTE-1", nombre: "Suplente 1", rolLabel: "Suplente 1", Icon: UserCog },
     { username: "SUPLENTE-2", nombre: "Suplente 2", rolLabel: "Suplente 2", Icon: UserCog },
+    // Usuarios nuevos dados de alta por el Gerente
+    ...extras.filter((u) => u.tipo !== "merch").map((u) => ({ username: u.username, nombre: u.nombre, rolLabel: u.puesto_label || "Staff", Icon: UserCog })),
   ];
 
   const pickStaff = (s) => {
@@ -276,7 +303,10 @@ export default function Login({ onLogin }) {
   const MERCH_CLOS = [
     { nombre: "PVR", usuarios: ["MERCH07", "MERCH28", "MERCH29", "MERCH30"] },
     { nombre: "TEPIC", usuarios: ["MERCH04", "MERCH31", "MERCH32", "MERCH62", "MERCH63"] },
-  ];
+  ].map((c) => ({
+    ...c,
+    usuarios: [...c.usuarios, ...extras.filter((u) => u.tipo === "merch" && u.clo === c.nombre && !c.usuarios.includes(u.username)).map((u) => u.username)],
+  }));
 
   const pickClo = (c) => {
     setClo(c);
