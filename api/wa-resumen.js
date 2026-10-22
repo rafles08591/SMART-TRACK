@@ -824,7 +824,9 @@ me dame dime da detalle detalles sobre cual cuales quien quienes hay se ha han u
 avance avances info informacion datos dato numero numeros total totales otc reto rally meta metas marca marcas indicador
 indicadores ranking lugar efectividad visitas clientes cliente mi mis tu su sus esta este esto estos estas ese esa eso nos
 tenemos tiene tienen tengo saber quiero quisiera puedes podrias ver muestra mostrar ahorita ahora bien mal ok si no tambien
-equipo vendedor vendedores supervisores jefe proyeccion objetivo objetivos lleve llevaba vuala sin tercera mano pachuco`.split(/\s+/));
+equipo vendedor vendedores supervisores jefe proyeccion objetivo objetivos lleve llevaba vuala sin tercera mano pachuco
+desglose desglosado desglosa desglosar general completo completa resumen top mejores vendidas lista listado cada uno
+porfavor necesito manda mandame pasame paso pasa dia hoyy ruta`.split(/\s+/));
 
 function palabrasProducto(texto) {
   const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ');
@@ -888,10 +890,19 @@ const APODOS_BASE = [
   { codigo: '0293', articulo: 'HIDRA FRESA', apodos: 'HIDRA' },
 ];
 
+// "¿qué se vendió por producto?", "detalle por ruta por producto", "más vendidos"… sin nombrar un producto
+function pideDetalleProductos(texto) {
+  const t = normTxt(texto);
+  return /\b(por producto|por productos|por articulo|productos|articulos|mas vendid\w*|que se vendio|que vendio|que vendieron|que han vendido|top)\b/.test(t);
+}
+
 async function ventasPorProducto(texto, cfg) {
   const porApodo = productosPorApodo(texto, [...(Array.isArray(cfg?.apodos) ? cfg.apodos : []), ...APODOS_BASE]);
   const palabras = palabrasProducto(texto);
-  if (!palabras.length && !porApodo) return null;
+  const general = !palabras.length && !porApodo && pideDetalleProductos(texto);
+  if (!palabras.length && !porApodo && !general) return null;
+  // Si nombran rutas (J203, j 205), solo esas
+  const rutasPedidas = new Set((normTxt(texto).match(/\bj\s?-?\d{3}\b/g) || []).map((x) => claveRuta(x.toUpperCase())));
   let av = [], otc = [];
   try {
     const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia,otc:data->otcDia');
@@ -905,13 +916,15 @@ async function ventasPorProducto(texto, cfg) {
     for (const c of await listaContactos(cfg)) if (c.tipo === 'vendedor' && c.ruta) misRutas.add(claveRuta(c.ruta));
     for (const f of await sb('resumen_vendedores?select=ruta&order=fecha.desc&limit=40')) if (f.ruta) misRutas.add(claveRuta(f.ruta));
   } catch { /* sin filtro si no se pudo leer */ }
-  const esMia = (vendedor) => !misRutas.size || misRutas.has(claveRuta(vendedor));
+  const esMia = (vendedor) => (!misRutas.size || misRutas.has(claveRuta(vendedor)))
+    && (!rutasPedidas.size || rutasPedidas.has(claveRuta(vendedor)));
   av = av.filter((x) => esMia(x.vendedor));
   otc = otc.filter((x) => esMia(x.vendedor));
   const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
   const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
   const coincide = (...campos) => {
+    if (general) return 1;
     if (porApodo) { // con apodo: solo los artículos dados de alta para ese nombre
       const [articulo, codigo] = campos;
       return (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) ? 1 : 0;
@@ -939,6 +952,27 @@ async function ventasPorProducto(texto, cfg) {
     const pts = x.fecha === fecha ? coincide(x.articulo, x.codigoArticulo) : 0;
     if (!pts) continue;
     sumar(`otc:${x.codigoArticulo || x.articulo}`, `${x.articulo}${x.codigoArticulo ? ` [${x.codigoArticulo}]` : ''} (OTC)`, 'piezas', claveRuta(x.vendedor), Number(x.unidadesVendidas) || 0, Number(x.monto) || 0, pts);
+  }
+  if (general) {
+    // Resumen: lo más vendido del equipo y, por ruta, sus artículos más vendidos
+    const todos = Object.values(productos);
+    const porRuta = {};
+    for (const p of todos) {
+      for (const [ruta, v] of Object.entries(p.por_ruta)) {
+        (porRuta[ruta] = porRuta[ruta] || []).push({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) });
+      }
+    }
+    const top = (arr, n) => arr.sort((a, b) => b.pesos - a.pesos || b.cantidad - a.cantidad).slice(0, n);
+    return {
+      fecha_del_detalle: fecha,
+      tipo_consulta: 'detalle general por producto',
+      rutas_del_equipo: [...misRutas].sort(),
+      ...(rutasPedidas.size ? { solo_rutas: [...rutasPedidas] } : {}),
+      encontrado: todos.length > 0,
+      mas_vendidos_equipo: top(todos.map((p) => ({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(p.total_cantidad), pesos: Math.round(p.total_pesos), rutas: Object.keys(p.por_ruta).length })), 10),
+      por_ruta: Object.fromEntries(Object.entries(porRuta).sort().map(([r, arr]) => [r, { articulos_distintos: arr.length, top: top(arr, rutasPedidas.size ? 15 : 6) }])),
+      nota: 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC), ordenado por pesos. "top" por ruta son sus artículos más vendidos; si piden uno en específico, que lo pregunten por nombre.',
+    };
   }
   const maxPts = Math.max(0, ...Object.values(productos).map((p) => p.puntos));
   const lista = Object.values(productos)
@@ -984,11 +1018,14 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
     const sistema = [
       'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
       tono,
-      'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      porProducto?.tipo_consulta
+        ? 'Reglas: formato WhatsApp (*negritas*), una sección corta por ruta (máximo 25 líneas en total), un par de emojis máximo.'
+        : 'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
       'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'DETALLE POR PRODUCTO: si "venta_por_producto" trae "tipo_consulta": "detalle general por producto", da lo más vendido del equipo y por ruta sus artículos principales (cantidad con su unidad y pesos). Sí tienes ese detalle: nunca digas que no lo tienes. Si es mucho, resume y ofrece el detalle de una ruta.',
       'PRODUCTOS: si preguntan por la venta de un producto o artículo en específico (ej. Switch, un sabor, una presentación), contesta SOLO con "venta_por_producto": es la venta real por artículo. Si "encontrado" es false o el producto no aparece ahí, di claramente que hoy no hay venta registrada de ese producto (y la fecha del detalle). NUNCA uses las marcas, metas o porcentajes de otros indicadores para responder sobre un producto, y nunca inventes ventas.',
       'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
       esJefe
@@ -1009,7 +1046,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
         temperature: 0.8,
-        max_tokens: 300,
+        max_tokens: porProducto?.tipo_consulta ? 900 : 300,
         messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(texto || '').slice(0, 800) }],
       }),
     });
