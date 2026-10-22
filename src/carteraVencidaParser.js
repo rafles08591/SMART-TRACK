@@ -22,8 +22,11 @@ function parseFechaMX(str) {
 }
 
 function limpiarEstado(html) {
-  const m = String(html || "").match(/<b>(.*?)<\/b>/i);
-  return m ? m[1].trim() : String(html || "").trim();
+  // Antes venía como <font><b>Saldo</b></font>; ahora viene en texto plano ("Saldo" / "Corriente")
+  const texto = String(html || "").replace(/<[^>]*>/g, "").trim();
+  if (/^saldo$/i.test(texto)) return "Saldo";
+  if (/^corriente$/i.test(texto)) return "Corriente";
+  return texto;
 }
 
 function clasificarDocumento(doc) {
@@ -35,51 +38,75 @@ function clasificarDocumento(doc) {
   return "Otro";
 }
 
+// Columnas que se buscan por NOMBRE en el encabezado (así no importa si PowerStreet agrega
+// o mueve columnas — en oct-2026 agregó "Repartidor" después de "Vendedor").
+const COLUMNAS_VIEJAS = ["agencia", "vendedor", "cliente", "nombre", "fecha", "hora", "vence", "documento", "estado", "importe", "cancelado", "saldo"];
+const normCol = (s) => String(s || "").replace(/<[^>]*>/g, " ").trim().toLowerCase()
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+
 export function parseCreditosRaw(rawText) {
   if (!rawText) return [];
-  let texto = rawText.trim();
-  // Quita el encabezado si viene pegado junto con los datos.
-  texto = texto.replace(
-    /^Agencia,Vendedor,Cliente,Nombre,Fecha,Hora,Vence,Documento,Estado,Importe,Cancelado,Saldo/i,
-    ""
-  );
-  // Cada registro nuevo empieza con un patrón tipo "(12) - ".
-  const partes = texto
-    .split(/(?=\(\d+\)\s*-\s*)/g)
+  let texto = String(rawText).replace(/\r/g, "").trim();
+
+  // 1) Encabezado: si viene, de ahí salen las posiciones de cada columna.
+  let columnas = COLUMNAS_VIEJAS;
+  const mEnc = texto.match(/^Agencia,[^\n(]*?Saldo(?=\s|\(|$)/i);
+  if (mEnc) {
+    columnas = mEnc[0].split(",").map(normCol);
+    texto = texto.slice(mEnc[0].length).trim();
+  }
+  const pos = (nombre) => columnas.indexOf(nombre);
+  const idx = {
+    agencia: pos("agencia"), vendedor: pos("vendedor"), cliente: pos("cliente"), nombre: pos("nombre"),
+    fecha: pos("fecha"), hora: pos("hora"), vence: pos("vence"), documento: pos("documento"),
+    estado: pos("estado"), importe: pos("importe"), cancelado: pos("cancelado"), saldo: pos("saldo"),
+  };
+  if (idx.vendedor < 0 || idx.saldo < 0 || idx.vence < 0) return [];
+  const minimo = Math.max(...Object.values(idx)) + 1;
+
+  // 2) Registros: uno por renglón; si vino pegado sin saltos, cada registro empieza con "(12) - ".
+  const partes = (texto.includes("\n") ? texto.split("\n") : texto.split(/(?=\(\d+\)\s*-\s*)/g))
     .map((p) => p.trim())
     .filter(Boolean);
 
   const registros = [];
   for (const parte of partes) {
-    const campos = parte.split(",");
-    if (campos.length < 12) continue; // registro incompleto/corrupto, se ignora
-    const [
-      agencia, vendedorRaw, clienteCodigo, clienteNombre, fechaRaw, hora,
-      venceRaw, documentoRaw, estadoRaw, importeRaw, canceladoRaw, saldoRaw,
-    ] = campos;
+    let campos = parte.split(",");
+    if (campos.length < minimo) continue; // registro incompleto/corrupto, se ignora
+    // Si el nombre del cliente traía comas, sobran campos: se juntan en "Nombre"
+    const sobran = campos.length - columnas.length;
+    if (sobran > 0 && idx.nombre >= 0) {
+      campos = [
+        ...campos.slice(0, idx.nombre),
+        campos.slice(idx.nombre, idx.nombre + sobran + 1).join(","),
+        ...campos.slice(idx.nombre + sobran + 1),
+      ];
+    }
+    const val = (k) => (idx[k] >= 0 ? String(campos[idx[k]] ?? "") : "");
 
-    const vendedorPartes = vendedorRaw.split(" - ").map((s) => s.trim());
+    const vendedorPartes = val("vendedor").split(" - ").map((s) => s.trim());
     const rutaCodigo = vendedorPartes[0] || "";
+    if (!/^J\w+/i.test(rutaCodigo)) continue; // renglones de totales u otros
     const vendedorNombre =
       vendedorPartes.length > 2 ? vendedorPartes.slice(2).join(" - ") : vendedorPartes[vendedorPartes.length - 1] || "";
 
-    const documento = documentoRaw.replace(/\s+/g, " ").trim();
+    const documento = val("documento").replace(/\s+/g, " ").trim();
 
     registros.push({
-      agencia: agencia.trim(),
+      agencia: val("agencia").trim(),
       rutaCodigo,
       vendedorNombre,
-      clienteCodigo: (clienteCodigo || "").trim(),
-      clienteNombre: (clienteNombre || "").trim(),
-      fecha: parseFechaMX(fechaRaw),
-      hora: (hora || "").trim(),
-      vence: parseFechaMX(venceRaw),
+      clienteCodigo: val("cliente").trim(),
+      clienteNombre: val("nombre").trim(),
+      fecha: parseFechaMX(val("fecha")),
+      hora: val("hora").trim(),
+      vence: parseFechaMX(val("vence")),
       documento,
       tipoDocumento: clasificarDocumento(documento),
-      estado: limpiarEstado(estadoRaw), // "Corriente" | "Saldo"
-      importe: parseFloat(importeRaw) || 0,
-      cancelado: parseFloat(canceladoRaw) || 0,
-      saldo: parseFloat(saldoRaw) || 0,
+      estado: limpiarEstado(val("estado")), // "Corriente" | "Saldo"
+      importe: parseFloat(val("importe")) || 0,
+      cancelado: parseFloat(val("cancelado")) || 0,
+      saldo: parseFloat(val("saldo")) || 0,
     });
   }
   return registros;
