@@ -7,7 +7,8 @@
 //     Unidades, Saldo…) y se compara contra la base → pedido, menos el sugerido.
 //   • Inventario: Cédula de conteo (manual, con switch discreto de chuki) y hoja de conteo ciego.
 //   • Picking: se pega el picking por vendedor y llena solo la columna Picking de la cédula.
-//   • Pestaña "." (abajo): fecha de los Excel que se descargan.
+//   • Remisiones: fotos de la remisión → OCR → código FA escrito en la foto (RemisionesView.jsx).
+//   • Pestaña "." (abajo a la derecha, casi invisible): fecha de los Excel que se descargan.
 //
 // Existencias: la parte entera del Saldo son PAQUETES (406.03 → 406 paq; el decimal son
 // sueltos y cuentan como fracción según las Unidades del reporte).
@@ -25,6 +26,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import RemisionesView from "./RemisionesView";
 
 const hoyISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/<br\s*\/?>/gi, " ").replace(/\s+/g, " ").trim();
@@ -199,7 +201,7 @@ function baseInicial(alm) {
 export default function AlmacenView({ data, persistFresco, puedeEditar = true, quien = "" }) {
   const alm = data?.almacen || {};
   const [pestana, setPestana] = useState("pedido");
-  // Fecha de los Excel (pestaña "." escondida abajo). Si no se mueve, es la del día.
+  // Fecha de los Excel (pestaña "." escondida abajo a la derecha). Si no se mueve, es la del día.
   const [fechaDoc, setFechaDoc] = useState(hoyISO());
 
   return (
@@ -211,7 +213,7 @@ export default function AlmacenView({ data, persistFresco, puedeEditar = true, q
         </div>
       </div>
       <div style={S.tabs}>
-        {[["base", "📋 Base de mínimos"], ["pedido", "🧮 Calcular pedido"], ["inventario", "📦 Inventario"], ["picking", "🚚 Picking"]].map(([k, l]) => (
+        {[["base", "📋 Base de mínimos"], ["pedido", "🧮 Calcular pedido"], ["inventario", "📦 Inventario"], ["picking", "🚚 Picking"], ["remisiones", "🧾 Remisiones"]].map(([k, l]) => (
           <button key={k} onClick={() => setPestana(k)} style={pestana === k ? S.tabOn : S.tab}>{l}</button>
         ))}
       </div>
@@ -222,6 +224,9 @@ export default function AlmacenView({ data, persistFresco, puedeEditar = true, q
       {pestana === "inventario" && (
         <Inventario alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} fechaDoc={fechaDoc}
           irABase={() => setPestana("base")} irAPicking={() => setPestana("picking")} />
+      )}
+      {pestana === "remisiones" && (
+        <RemisionesView alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} fechaDoc={fechaDoc} S={S} />
       )}
       {pestana === "picking" && (
         <Picking alm={alm} persistFresco={persistFresco} puedeEditar={puedeEditar} quien={quien} irAInventario={() => setPestana("inventario")} />
