@@ -204,14 +204,18 @@ export async function marcarPagina(pagina) {
     if (!r.codigo || r.yaEscrito) continue;
     const texto = codigoCorto(r.codigo);
     const fuente = (t) => `bold ${t}px "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive`;
-    let tam = Math.max(14, Math.round(r.pos.h * 1.3));
-    const x = r.pos.x !== null ? r.pos.x + tam * 0.3 : c.width * 0.8;
-    // Que quepa entre la cantidad en cajetillas y la de paquetes
-    const disponible = (r.pos.xFin && r.pos.xFin > x ? r.pos.xFin : c.width * 0.97) - x - tam * 0.2;
+    // Grande, como cuando se escribe con pluma: ~2.8 veces la altura del renglón
+    let tam = Math.max(34, Math.round(r.pos.h * 2.8));
+    const x = r.pos.x !== null ? r.pos.x + r.pos.h * 0.4 : c.width * 0.78;
+    // Solo se achica si se saldría de la hoja
     ctx.font = fuente(tam);
-    while (tam > 12 && ctx.measureText(texto).width > disponible) { tam -= 1; ctx.font = fuente(tam); }
-    ctx.fillStyle = "#1f3fbf";
+    while (tam > 18 && x + ctx.measureText(texto).width > c.width * 0.99) { tam -= 1; ctx.font = fuente(tam); }
     ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(3, tam * 0.12);
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; // contorno blanco para que se lea sobre las líneas
+    ctx.strokeText(texto, x, r.pos.cy);
+    ctx.fillStyle = "#1f3fbf";
     ctx.fillText(texto, x, r.pos.cy);
   }
   return c.toDataURL("image/jpeg", 0.85);
