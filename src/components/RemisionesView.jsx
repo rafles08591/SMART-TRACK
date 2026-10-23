@@ -65,9 +65,11 @@ export function agruparFilas(palabras) {
   return filas;
 }
 
+// En estos documentos la coma y el punto separan miles (12,000 / 12.000); no hay decimales en cantidades
 const numero = (t) => {
   const s = String(t).replace(/[^\d.,]/g, "");
   if (!/\d/.test(s)) return null;
+  if (/^\d{1,3}([.,]\d{3})+$/.test(s)) return Number(s.replace(/[.,]/g, ""));
   return Number(s.replace(/,/g, ""));
 };
 
@@ -107,6 +109,11 @@ export function leerPagina(palabras, equivalencias) {
     }
     let cajetillas = nums.length ? nums[0].n : null;
     let paquetes = nums.length > 1 ? nums[nums.length - 1].n : null;
+    // El OCR a veces se come los miles ("12,000" → 12 y "1,200" → 1.2): si los paquetes traen decimales, son miles
+    if (paquetes !== null && !Number.isInteger(paquetes) && cajetillas !== null) {
+      const f = cajetillas === Math.round(paquetes * 10) || cajetillas === Math.round(paquetes * 8) ? 1000 : 1;
+      if (f > 1) { cajetillas *= f; paquetes = Math.round(paquetes * f); }
+    }
     // Cuadre: paquetes = cajetillas / 10 (o /8 en los de 25). Si el OCR pegó un número escrito a mano
     // ("61200" en vez de "1,200") se corrige con el que sí cuadra.
     const cuadra = (c, q) => c && q && (c === q * 10 || c === q * 8);
@@ -200,12 +207,17 @@ export async function marcarPagina(pagina) {
   c.width = img.naturalWidth; c.height = img.naturalHeight;
   const ctx = c.getContext("2d");
   ctx.drawImage(img, 0, 0);
+  // Separación típica entre renglones (para que los códigos no se encimen)
+  const ys = pagina.renglones.map((r) => r.pos.cy).sort((a, b) => a - b);
+  const difs = ys.slice(1).map((y, i) => y - ys[i]).filter((d) => d > 5).sort((a, b) => a - b);
+  const espacio = difs.length ? difs[Math.floor(difs.length / 2)] : 999;
   for (const r of pagina.renglones) {
-    if (!r.codigo || r.yaEscrito) continue;
+    if (!r.codigo) continue; // se escribe siempre, aunque ya traiga el código a mano
     const texto = codigoCorto(r.codigo);
     const fuente = (t) => `bold ${t}px "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive`;
-    // Grande, como cuando se escribe con pluma: ~2.4 veces la altura del renglón
-    let tam = Math.max(30, Math.round(r.pos.h * 2.4));
+    // Grande, como cuando se escribe con pluma: del mismo alto que el renglón
+    // Grande pero sin encimarse con el renglón de abajo
+    let tam = Math.max(14, Math.min(Math.round(r.pos.h * 1.0), Math.round(espacio * 0.75)));
     const x = r.pos.x !== null ? r.pos.x + r.pos.h * 0.4 : c.width * 0.78;
     // Solo se achica si se saldría de la hoja
     ctx.font = fuente(tam);
