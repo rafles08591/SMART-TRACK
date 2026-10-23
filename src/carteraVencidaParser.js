@@ -44,24 +44,77 @@ const COLUMNAS_VIEJAS = ["agencia", "vendedor", "cliente", "nombre", "fecha", "h
 const normCol = (s) => String(s || "").replace(/<[^>]*>/g, " ").trim().toLowerCase()
   .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
 
+// Plan B: si cambia el encabezado de forma rara, cada renglón se interpreta por su contenido:
+//   ruta "J201 - …", fechas dd/mm/aaaa (la 1ª es la venta, la 2ª el vencimiento), hora hh:mm:ss,
+//   documento "Venta Credito…/Factura…", estado "Corriente/Saldo" y al final Importe, Cancelado, Saldo.
+function leerPorContenido(texto) {
+  const partes = (texto.includes("\n") ? texto.split("\n") : texto.split(/(?=\(\d+\)\s*-\s*)/g)).map((p) => p.trim()).filter(Boolean);
+  const registros = [];
+  for (const parte of partes) {
+    const c = parte.split(",").map((x) => x.trim());
+    const iVen = c.findIndex((x) => /^J\d{3}\s*-/i.test(x));
+    const fechas = c.map((x, i) => [x, i]).filter(([x]) => /^\d{1,2}\/\d{1,2}\/\d{4}/.test(x));
+    const iEst = c.findIndex((x) => /^(<[^>]*>)*\s*(corriente|saldo)\s*(<[^>]*>)*$/i.test(x));
+    const iDoc = c.findIndex((x) => /(venta|factura|credito|ordering|nota)/i.test(x) && !/^J\d{3}/i.test(x));
+    const nums = c.map((x, i) => [x, i]).filter(([x, i]) => i > Math.max(iEst, iDoc) && /^-?\d+(\.\d+)?$/.test(x));
+    if (iVen < 0 || fechas.length < 2 || nums.length < 1) continue;
+    const vp = c[iVen].split(" - ").map((s) => s.trim());
+    const n = (k) => parseFloat(nums[k]?.[0]) || 0;
+    const documento = iDoc >= 0 ? c[iDoc].replace(/\s+/g, " ") : "";
+    // Cliente y nombre: los dos campos de texto entre la ruta y la primera fecha (saltando vacíos)
+    const entre = c.slice(iVen + 1, fechas[0][1]).filter(Boolean);
+    registros.push({
+      agencia: c[0] || "",
+      rutaCodigo: vp[0],
+      vendedorNombre: vp.length > 2 ? vp.slice(2).join(" - ") : vp[vp.length - 1] || "",
+      clienteCodigo: entre.length > 1 ? entre[0] : "",
+      clienteNombre: entre.length > 1 ? entre.slice(1).join(",") : entre[0] || "",
+      fecha: parseFechaMX(fechas[0][0]),
+      hora: (c.find((x) => /^\d{1,2}:\d{2}(:\d{2})?$/.test(x)) || ""),
+      vence: parseFechaMX(fechas[1][0]),
+      documento,
+      tipoDocumento: clasificarDocumento(documento),
+      estado: iEst >= 0 ? limpiarEstado(c[iEst]) : "",
+      importe: nums.length >= 3 ? n(nums.length - 3) : n(0),
+      cancelado: nums.length >= 3 ? n(nums.length - 2) : 0,
+      saldo: n(nums.length - 1),
+    });
+  }
+  return registros;
+}
+
 export function parseCreditosRaw(rawText) {
   if (!rawText) return [];
   let texto = String(rawText).replace(/\r/g, "").trim();
 
   // 1) Encabezado: si viene, de ahí salen las posiciones de cada columna.
   let columnas = COLUMNAS_VIEJAS;
-  const mEnc = texto.match(/^Agencia,[^\n(]*?Saldo(?=\s|\(|$)/i);
+  // Encabezado: el primer renglón si trae nombres de columna (Saldo, Vence…) en cualquier orden
+  const primera = texto.split("\n")[0];
+  const mEnc = texto.includes("\n")
+    ? (/saldo/i.test(primera) && /venc/i.test(primera) && !/^\(\d+\)/.test(primera) ? [primera] : null)
+    : texto.match(/^Agencia,[^\n(]*?Saldo(?=\s|\(|$)/i); // pegado sin saltos de línea
   if (mEnc) {
     columnas = mEnc[0].split(",").map(normCol);
     texto = texto.slice(mEnc[0].length).trim();
   }
-  const pos = (nombre) => columnas.indexOf(nombre);
-  const idx = {
-    agencia: pos("agencia"), vendedor: pos("vendedor"), cliente: pos("cliente"), nombre: pos("nombre"),
-    fecha: pos("fecha"), hora: pos("hora"), vence: pos("vence"), documento: pos("documento"),
-    estado: pos("estado"), importe: pos("importe"), cancelado: pos("cancelado"), saldo: pos("saldo"),
+  // Busca la columna por nombre exacto o parecido ("Vendedor/Reparto", "Fecha Vencimiento", "Saldo Pendiente"…)
+  const pos = (...nombres) => {
+    for (const n of nombres) { const i = columnas.indexOf(n); if (i >= 0) return i; }
+    for (const n of nombres) { const i = columnas.findIndex((c) => c.split(/[\s/._-]+/).includes(n) || c.startsWith(n)); if (i >= 0) return i; }
+    return -1;
   };
-  if (idx.vendedor < 0 || idx.saldo < 0 || idx.vence < 0) return [];
+  const idx = {
+    agencia: pos("agencia"), vendedor: pos("vendedor", "ruta", "reparto"), cliente: pos("cliente", "codigo"),
+    nombre: pos("nombre", "razon social"), fecha: pos("fecha"), hora: pos("hora"),
+    vence: pos("vence", "vencimiento", "fecha vencimiento"), documento: pos("documento", "doc"),
+    estado: pos("estado", "status"), importe: pos("importe", "total"), cancelado: pos("cancelado", "abono", "pagado"),
+    saldo: pos("saldo", "pendiente"),
+  };
+  // Que "Fecha" no sea la misma columna que "Vence"
+  if (idx.fecha === idx.vence) idx.fecha = columnas.findIndex((c, i) => i !== idx.vence && c.startsWith("fecha"));
+  // Si el encabezado no se entiende, se leen las columnas por lo que traen (ver leerPorContenido)
+  if (idx.vendedor < 0 || idx.saldo < 0 || idx.vence < 0) return leerPorContenido(texto);
   const minimo = Math.max(...Object.values(idx)) + 1;
 
   // 2) Registros: uno por renglón; si vino pegado sin saltos, cada registro empieza con "(12) - ".
@@ -109,6 +162,8 @@ export function parseCreditosRaw(rawText) {
       saldo: parseFloat(val("saldo")) || 0,
     });
   }
+  // Si con el encabezado no salió nada, se intenta leyendo cada renglón por su contenido
+  if (!registros.length) return leerPorContenido(texto);
   return registros;
 }
 
