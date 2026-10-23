@@ -853,8 +853,10 @@ function productosPorApodo(texto, apodos) {
   const hallados = [];
   for (const a of apodos || []) {
     for (const frase of String(a.apodos || '').split(',').map(normTxt).filter(Boolean)) {
-      const ok = t.includes(` ${frase} `)
-        || (!frase.includes(' ') && frase.length >= 5 && palabrasT.some((w) => w.length >= 5 && casiIgual(w, frase)));
+      // Todas las palabras del apodo deben venir en la pregunta, en cualquier orden y aunque haya
+      // palabras en medio ("vuala de vainilla" = VUALA VAINILLA). Con una letra de diferencia si es larga.
+      const esta = (fw) => palabrasT.some((w) => w === fw || (fw.length >= 5 && w.length >= 5 && casiIgual(w, fw)));
+      const ok = t.includes(` ${frase} `) || frase.split(' ').every(esta);
       if (ok) hallados.push({ frase, codigo: String(a.codigo || '').trim(), articulo: String(a.articulo || '').trim() });
     }
   }
@@ -864,8 +866,11 @@ function productosPorApodo(texto, apodos) {
   const aceptadas = [];
   for (const f of frases) if (!aceptadas.some((g) => g.includes(f))) aceptadas.push(f);
   const elegidos = hallados.filter((h) => aceptadas.includes(h.frase));
+  // Palabras de la pregunta que ya se usaron en apodos (para buscar las demás por nombre de artículo)
+  const usadas = new Set(aceptadas.flatMap((f) => f.split(' ')));
   return {
     frases: aceptadas,
+    usadas,
     codigos: new Set(elegidos.map((h) => h.codigo.toUpperCase()).filter(Boolean)),
     articulos: new Set(elegidos.map((h) => normTxt(h.articulo)).filter(Boolean)),
   };
@@ -925,15 +930,19 @@ async function ventasPorProducto(texto, cfg) {
   // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
   const coincide = (...campos) => {
     if (general) return 1;
-    if (porApodo) { // con apodo: solo los artículos dados de alta para ese nombre
+    if (porApodo) { // con apodo: los artículos dados de alta para ese nombre valen más
       const [articulo, codigo] = campos;
-      return (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) ? 1 : 0;
+      if (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) return 100;
     }
+    // Además del apodo, se busca por nombre con todas las palabras (por si el artículo vendido
+    // todavía no tiene apodo, p. ej. una presentación nueva)
+    const lista = palabras;
+    if (!lista.length) return 0;
     const h = norm(campos.join(' '));
     const tokens = h.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
     // Coincide si la palabra está dentro del nombre, o si se parece a un pedazo del nombre
     // (una letra de diferencia, o el pedazo empieza con la palabra: "swich" ~ "swichc")
-    return palabras.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
+    return lista.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
       || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2))).length;
   };
   const productos = {};
@@ -963,6 +972,19 @@ async function ventasPorProducto(texto, cfg) {
       }
     }
     const top = (arr, n) => arr.sort((a, b) => b.pesos - a.pesos || b.cantidad - a.cantidad).slice(0, n);
+    // Totales exactos por ruta (para que la IA no sume a mano): mismos que la tabla de la app
+    const totales = {};
+    for (const x of av) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.paquetes += Number(x.paquetes) || 0; t.venta_pesos += Number(x.monto) || 0;
+    }
+    for (const x of otc) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.otc_pesos += Number(x.monto) || 0; t.otc_piezas += Number(x.unidadesVendidas) || 0;
+    }
+    const redondear = (t) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v)]));
     return {
       fecha_del_detalle: fecha,
       tipo_consulta: 'detalle general por producto',
@@ -970,13 +992,16 @@ async function ventasPorProducto(texto, cfg) {
       ...(rutasPedidas.size ? { solo_rutas: [...rutasPedidas] } : {}),
       encontrado: todos.length > 0,
       mas_vendidos_equipo: top(todos.map((p) => ({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(p.total_cantidad), pesos: Math.round(p.total_pesos), rutas: Object.keys(p.por_ruta).length })), 10),
-      por_ruta: Object.fromEntries(Object.entries(porRuta).sort().map(([r, arr]) => [r, { articulos_distintos: arr.length, top: top(arr, rutasPedidas.size ? 15 : 6) }])),
+      por_ruta: Object.fromEntries(Object.entries(porRuta).sort().map(([r, arr]) => [r, {
+        totales_del_dia: redondear(totales[r] || {}), articulos_distintos: arr.length, top: top(arr, rutasPedidas.size ? 15 : 6),
+      }])),
       nota: 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC), ordenado por pesos. "top" por ruta son sus artículos más vendidos; si piden uno en específico, que lo pregunten por nombre.',
     };
   }
-  const maxPts = Math.max(0, ...Object.values(productos).map((p) => p.puntos));
+  // Se quedan: los de apodo (100) y, de los demás, los que coinciden con más palabras
+  const maxPts = Math.max(0, ...Object.values(productos).filter((p) => p.puntos < 100).map((p) => p.puntos));
   const lista = Object.values(productos)
-    .filter((p) => p.puntos === maxPts)
+    .filter((p) => p.puntos >= 100 || (maxPts > 0 && p.puntos === maxPts))
     .map(({ puntos: _p, ...p }) => ({ ...p, total_cantidad: Math.round(p.total_cantidad), total_pesos: Math.round(p.total_pesos),
       por_ruta: Object.fromEntries(Object.entries(p.por_ruta).sort((a, b) => b[1].cantidad - a[1].cantidad)
         .map(([k, v]) => [k, { cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) }])) }))
@@ -1025,6 +1050,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
       'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'TOTALES: nunca sumes ni restes tú. Para totales usa los ya calculados ("totales_del_dia" por ruta, o los indicadores del día como "OTC del día" y "Venta del día"). Los "top" son solo los artículos principales, NO el total de la ruta.',
       'DETALLE POR PRODUCTO: si "venta_por_producto" trae "tipo_consulta": "detalle general por producto", da lo más vendido del equipo y por ruta sus artículos principales (cantidad con su unidad y pesos). Sí tienes ese detalle: nunca digas que no lo tienes. Si es mucho, resume y ofrece el detalle de una ruta.',
       'PRODUCTOS: si preguntan por la venta de un producto o artículo en específico (ej. Switch, un sabor, una presentación), contesta SOLO con "venta_por_producto": es la venta real por artículo. Si "encontrado" es false o el producto no aparece ahí, di claramente que hoy no hay venta registrada de ese producto (y la fecha del detalle). NUNCA uses las marcas, metas o porcentajes de otros indicadores para responder sobre un producto, y nunca inventes ventas.',
       'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
