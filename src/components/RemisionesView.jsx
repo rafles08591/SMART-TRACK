@@ -1,466 +1,1517 @@
-// @ts-nocheck
-// RemisionesView.jsx — Almacén → 🧾 Remisiones.
-// Se suben las fotos (o el PDF) de la remisión de Philip Morris y la app:
-//   1) lee cada página con OCR (api/remision-ocr.js),
-//   2) ubica cada renglón por su EAN y le asigna el código FA de SMART-TRACK,
-//   3) escribe ese código en la foto, a la derecha de la cantidad (como se hace hoy con pluma),
-//   4) deja descargar las fotos marcadas en PDF y la lista en Excel.
-// Equivalencias EAN → código FA en data.almacen.equivalencias (se aprenden y se pueden editar).
-// Remisiones procesadas en data.almacen.remisiones (solo datos, sin fotos).
-import React, { useEffect, useRef, useState } from "react";
-import * as XLSX from "xlsx";
-import { supabase } from "../supabaseClient";
+// api/wa-resumen.js — arma los mensajes que n8n envía por Evolution API.
+//
+//   GET  /api/wa-resumen?modo=matutino   → tarjeta + texto para cada contacto (corte más reciente antes de hoy)
+//                                          vendedores: su tarjeta · equipo (Supervisor/Gerente): tarjeta del equipo
+//   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA (la dispara la app al cargar el avance)
+//   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a vendedores que van abajo hoy
+//   GET  /api/wa-resumen?modo=riesgo     → (prueba) texto de Rutas en riesgo para supervisores
+//   POST /api/wa-resumen?modo=bot        → body { numero, texto, grupo? }  → respuesta del bot
+//                                          (con grupo = …@g.us contesta en el grupo mencionando a quien preguntó)
+//   GET  /api/wa-resumen?modo=retro_grupo → retro de cada hora al grupo (9 am – 8 pm), candidatos a la Tercera Mano
+//   GET  /api/wa-resumen?modo=diag       → diagnóstico
+//
+// Todas requieren el header  x-bot-token: <BOT_TOKEN>
+// Contactos y textos se editan en SMART-TRACK (pestaña WhatsApp) → data.whatsappBot
 
-// Equivalencias conocidas (de las remisiones que ya traían el código a mano)
-export const EQUIVALENCIAS_BASE = {
-  "75084202": "FA04016", // FAROS FARITOS KS BOB 25
-  "75086183": "FA04017", // FAROS FARITOS KS BOX 20
-  "75001322": "FA01001", // MARLBORO RED 3.5 LS BOX 20
-  "75001339": "FA01003", // MARLBORO RED 3.5 LS BOX 14
-  "75021597": "FA01006", // MARLBORO RED 3.5 100 BOX 20
-  "75068738": "FA01046", // MARLBORO GOLD (3.5) KS RCB 20
-  "75068844": "FA01047", // MARLBORO GOLD (3.5) KS RCB 14
-  "75068769": "FA01050", // MARLBORO DFUSIONV MNT 100 RCB 20
-  "75063801": "FA01085", // MARLBORO C3IM MNT 100 BOX 20
-};
+import {
+  autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
+  ultimosPorRuta, filasDeFecha, contactos, contactoPorTelefono, calcular, medalla, claveRuta, sb,
+  configBot, listaContactos, PLANTILLAS_DEFAULT, llenarPlantilla, varsVendedor, calcularEquipo, varsEquipo,
+  varsDia, calcularEquipoDia, varsEquipoDia, sinVualaDe, destino, calcularGrupo, varsGrupo, calcularGrupoDia, varsGrupoDia,
+  calcularRiesgo, varsRiesgo, calcularRiesgoTarde, varsRiesgoTarde,
+  elegirReto, avanceReto, textoRetoAnuncio, textoRetoTabla, textoRetoVendedor,
+  rankingPaquetes, detectarRebases, textoRebase, leerEstado, guardarEstado,
+} from './_wa-lib.js';
 
-const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-const scripts = {};
-function cargarScript(src, global) {
-  if (window[global]) return Promise.resolve(window[global]);
-  if (!scripts[src]) {
-    scripts[src] = new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = src;
-      s.onload = () => (window[global] ? resolve(window[global]) : reject(new Error("no cargó " + global)));
-      s.onerror = () => reject(new Error("No se pudo descargar " + global + " (revisa internet)"));
-      document.head.appendChild(s);
-    });
-  }
-  return scripts[src];
-}
+export const config = { runtime: 'edge' };
 
-const hoyISO = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
-const codigoCorto = (fa) => String(fa || "").toUpperCase().replace(/^FA/, ""); // FA04016 → 04016 (como lo escriben)
-const aFA = (c) => {
-  const d = String(c || "").toUpperCase().replace(/[O]/g, "0").replace(/[^0-9A-Z]/g, "");
-  if (!d) return "";
-  return d.startsWith("FA") ? d : `FA${d}`;
-};
-
-// ─────────────────── Lectura de la página (pura, sin React) ───────────────────
-// palabras: [{ t, x, y, w, h }] → filas agrupadas por altura
-export function agruparFilas(palabras) {
-  const ws = [...palabras].filter((p) => p.t && p.h > 0).sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2));
-  const filas = [];
-  for (const w of ws) {
-    const cy = w.y + w.h / 2;
-    const f = filas.find((r) => Math.abs(r.cy - cy) < Math.max(8, Math.min(r.h, w.h) * 0.6));
-    if (f) { f.ws.push(w); f.cy = (f.cy * (f.ws.length - 1) + cy) / f.ws.length; f.h = Math.max(f.h, w.h); }
-    else filas.push({ cy, h: w.h, ws: [w] });
-  }
-  for (const f of filas) f.ws.sort((a, b) => a.x - b.x);
-  return filas;
-}
-
-// En estos documentos la coma y el punto separan miles (12,000 / 12.000); no hay decimales en cantidades
-const numero = (t) => {
-  const s = String(t).replace(/[^\d.,]/g, "");
-  if (!/\d/.test(s)) return null;
-  if (/^\d{1,3}([.,]\d{3})+$/.test(s)) return Number(s.replace(/[.,]/g, ""));
-  return Number(s.replace(/,/g, ""));
-};
-
-// Encuentra los renglones de producto (los que traen EAN) y lo demás de la remisión
-export function leerPagina(palabras, equivalencias) {
-  const texto = palabras.map((p) => p.t).join(" ");
-  const pegado = texto.replace(/\s+/g, "").toUpperCase(); // "R E M I S I O N" → "REMISION"
-  // En la remisión cada renglón trae la clave FA de Philip Morris; en la factura no.
-  const traeClaves = palabras.some((p) => /^FA\d{6}/i.test(p.t));
-  const esRemision = /REMISI[OÓ0]N/.test(pegado) || traeClaves;
-  const esFactura = !esRemision && /FACTURA|CFDI|FOLIOFISCAL/.test(pegado);
-  // Totales impresos al pie: "Total CAJ 34,040   Total PAQ 3,440"
-  const mCaj = texto.match(/Total\s*CAJ\.?\s*([\d,\.]+)/i);
-  const mPaq = texto.match(/Total\s*PAQ\.?\s*([\d,\.]+)/i);
-  const totalImpreso = { cajetillas: mCaj ? numero(mCaj[1]) : null, paquetes: mPaq ? numero(mPaq[1]) : null };
-  const folio = (texto.match(/\b(K[A-Z]\d{5,7})\b/) || [])[1] || "";
-  const fecha = (texto.match(/\b(\d{2}\/\d{2}\/20\d{2})\b/) || [])[1] || "";
-  const filas = agruparFilas(palabras);
-  const renglones = [];
-  for (const f of filas) {
-    const iEan = f.ws.findIndex((w) => /^7\d{7}$/.test(w.t.replace(/\D/g, "")) && w.t.replace(/\D/g, "").length === 8);
-    if (iEan < 0) continue;
-    const ean = f.ws[iEan].t.replace(/\D/g, "");
-    const clave = (f.ws.find((w) => /^FA\d{5,6}/i.test(w.t)) || {}).t || "";
-    const iClave = f.ws.findIndex((w) => /^FA\d{5,6}/i.test(w.t));
-    const descripcion = f.ws.slice(iClave >= 0 ? iClave + 1 : 0, iEan).map((w) => w.t).join(" ").trim();
-    // A la derecha del EAN: unidad (PIEZA), cajetillas, [código a mano], paquetes
-    const despues = f.ws.slice(iEan + 1).filter((w) => !/^pieza$/i.test(w.t));
-    // Código escrito a mano: 5 dígitos que empiezan con 0 (la O también cuenta como 0)
-    let aMano = "";
-    const nums = [];
-    for (const w of despues) {
-      const limpio = w.t.replace(/[Oo]/g, "0").replace(/[^\d,]/g, "");
-      if (/^0\d{4}$/.test(limpio) && !aMano) { aMano = limpio; continue; }
-      const n = numero(w.t);
-      if (n !== null) nums.push({ n, w });
-    }
-    let cajetillas = nums.length ? nums[0].n : null;
-    let paquetes = nums.length > 1 ? nums[nums.length - 1].n : null;
-    // El OCR a veces se come los miles ("12,000" → 12 y "1,200" → 1.2): si los paquetes traen decimales, son miles
-    if (paquetes !== null && !Number.isInteger(paquetes) && cajetillas !== null) {
-      const f = cajetillas === Math.round(paquetes * 10) || cajetillas === Math.round(paquetes * 8) ? 1000 : 1;
-      if (f > 1) { cajetillas *= f; paquetes = Math.round(paquetes * f); }
-    }
-    // Cuadre: paquetes = cajetillas / 10 (o /8 en los de 25). Si el OCR pegó un número escrito a mano
-    // ("61200" en vez de "1,200") se corrige con el que sí cuadra.
-    const cuadra = (c, q) => c && q && (c === q * 10 || c === q * 8);
-    let revisar = false;
-    if (cajetillas && !cuadra(cajetillas, paquetes)) {
-      const p10 = cajetillas / 10, p8 = cajetillas / 8;
-      if (paquetes && String(paquetes).endsWith(String(p10))) paquetes = p10;
-      else if (paquetes && Number.isInteger(p8) && String(paquetes).endsWith(String(p8))) paquetes = p8;
-      else if (paquetes && (paquetes * 10 > cajetillas * 3 || !paquetes)) { paquetes = Math.round(p10); revisar = true; }
-      else if (paquetes) { cajetillas = paquetes * 10; revisar = true; } // la cantidad en cajetillas venía mal leída
-      else { paquetes = Math.round(p10); revisar = true; }
-    }
-    const fa = equivalencias[ean] || (aMano ? aFA(aMano) : "");
-    renglones.push({
-      ean, clave, descripcion, cajetillas, paquetes,
-      codigo: fa, origen: equivalencias[ean] ? "equivalencia" : aMano ? "escrito a mano" : "", revisar,
-      yaEscrito: !!aMano,
-      // Dónde escribir: a la derecha de la cantidad en cajetillas (o al 78% del ancho si no se ubicó)
-      pos: {
-        x: nums.length ? nums[0].w.x + nums[0].w.w : null,
-        // hasta dónde cabe (inicio de la cantidad en paquetes)
-        xFin: nums.length > 1 ? nums[nums.length - 1].w.x : null,
-        cy: f.cy, h: f.h,
-      },
-    });
-  }
-  // Si solo un renglón quedó dudoso, se completa con el total impreso de la remisión
-  const dudosos = renglones.filter((r) => r.revisar || r.paquetes === null);
-  if (totalImpreso.paquetes && dudosos.length === 1) {
-    const r = dudosos[0];
-    const resto = renglones.filter((x) => x !== r);
-    const paq = totalImpreso.paquetes - resto.reduce((a, x) => a + (x.paquetes || 0), 0);
-    const caj = totalImpreso.cajetillas ? totalImpreso.cajetillas - resto.reduce((a, x) => a + (x.cajetillas || 0), 0) : null;
-    if (paq > 0) { r.paquetes = paq; r.cajetillas = caj > 0 ? caj : paq * 10; r.revisar = false; r.porTotal = true; }
-  }
-  return { esRemision, esFactura, folio, fecha, renglones, totalImpreso };
-}
-
-// ─────────────────── Imágenes ───────────────────
-function cargarImagen(src) {
-  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
-}
-// Reduce la foto hasta que pese menos de ~900 KB (límite del OCR gratis: 1 MB)
-async function comprimir(canvasOrigen) {
-  let ancho = Math.min(1800, canvasOrigen.width);
-  for (let intento = 0; intento < 6; intento++) {
-    const c = document.createElement("canvas");
-    c.width = ancho; c.height = Math.round(canvasOrigen.height * (ancho / canvasOrigen.width));
-    const ctx = c.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(canvasOrigen, 0, 0, c.width, c.height);
-    const calidad = intento < 3 ? 0.75 - intento * 0.1 : 0.55;
-    const url = c.toDataURL("image/jpeg", calidad);
-    if (url.length * 0.75 < 900 * 1024) return { url, ancho: c.width, alto: c.height };
-    if (intento >= 2) ancho = Math.round(ancho * 0.85);
-  }
-  throw new Error("La foto es demasiado pesada");
-}
-async function archivoAPaginas(file) {
-  const canvases = [];
-  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-    const pdfjsLib = await cargarScript(PDFJS, "pdfjsLib");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const vp0 = page.getViewport({ scale: 1 });
-      const vp = page.getViewport({ scale: 1800 / vp0.width });
-      const c = document.createElement("canvas");
-      c.width = vp.width; c.height = vp.height;
-      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-      canvases.push(c);
-    }
-  } else {
-    const url = URL.createObjectURL(file);
-    try {
-      const img = await cargarImagen(url);
-      const c = document.createElement("canvas");
-      c.width = img.naturalWidth; c.height = img.naturalHeight;
-      c.getContext("2d").drawImage(img, 0, 0);
-      canvases.push(c);
-    } finally { URL.revokeObjectURL(url); }
-  }
-  return Promise.all(canvases.map(comprimir));
-}
-
-// Escribe los códigos en la foto (azul, como pluma). Los renglones que ya traían el código a mano se dejan igual.
-export async function marcarPagina(pagina) {
-  const img = await cargarImagen(pagina.url);
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth; c.height = img.naturalHeight;
-  const ctx = c.getContext("2d");
-  ctx.drawImage(img, 0, 0);
-  // Separación típica entre renglones (para que los códigos no se encimen)
-  const ys = pagina.renglones.map((r) => r.pos.cy).sort((a, b) => a - b);
-  const difs = ys.slice(1).map((y, i) => y - ys[i]).filter((d) => d > 5).sort((a, b) => a - b);
-  const espacio = difs.length ? difs[Math.floor(difs.length / 2)] : 999;
-  for (const r of pagina.renglones) {
-    if (!r.codigo) continue; // se escribe siempre, aunque ya traiga el código a mano
-    const texto = codigoCorto(r.codigo);
-    const fuente = (t) => `bold ${t}px "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive`;
-    // Grande, como cuando se escribe con pluma: del mismo alto que el renglón
-    // Grande pero sin encimarse con el renglón de abajo
-    let tam = Math.max(14, Math.min(Math.round(r.pos.h * 1.0), Math.round(espacio * 0.75)));
-    const x = r.pos.x !== null ? r.pos.x + r.pos.h * 0.4 : c.width * 0.78;
-    // Solo se achica si se saldría de la hoja
-    ctx.font = fuente(tam);
-    while (tam > 18 && x + ctx.measureText(texto).width > c.width * 0.99) { tam -= 1; ctx.font = fuente(tam); }
-    ctx.textBaseline = "middle";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(3, tam * 0.12);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; // contorno blanco para que se lea sobre las líneas
-    ctx.strokeText(texto, x, r.pos.cy);
-    ctx.fillStyle = "#1f3fbf";
-    ctx.fillText(texto, x, r.pos.cy);
-  }
-  return c.toDataURL("image/jpeg", 0.85);
-}
-
-async function ocr(url) {
-  const { data: s } = await supabase.auth.getSession();
-  const token = s?.session?.access_token;
-  if (!token) throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
-  const r = await fetch("/api/remision-ocr", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ imagen: url }),
+const json = (data, status = 200) =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
-  return j.palabras || [];
+
+function baseUrl(req) {
+  return (process.env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, '');
 }
 
-// ─────────────────── Pantalla ───────────────────
-export default function RemisionesView({ alm, persistFresco, puedeEditar, quien, fechaDoc, S }) {
-  const [equiv, setEquiv] = useState({ ...EQUIVALENCIAS_BASE, ...(alm.equivalencias || {}) });
-  const [paginas, setPaginas] = useState([]); // [{ url, ancho, alto, esRemision, folio, fecha, renglones, marcada }]
-  const [estado, setEstado] = useState("");
-  const [trabajando, setTrabajando] = useState(false);
-  const [guardando, setGuardando] = useState(false);
-  const fileRef = useRef(null);
+async function urlTarjeta(req, ruta, fecha, actualizadoEn, tipo = '') {
+  const s = await firmar(tipo ? `${tipo.toUpperCase()}:${ruta}` : ruta, fecha);
+  const v = actualizadoEn ? new Date(actualizadoEn).getTime() : Date.now();
+  return `${baseUrl(req)}/api/tarjeta?ruta=${encodeURIComponent(ruta)}&f=${fecha}&s=${s}&v=${v}${tipo ? `&t=${tipo}` : ''}`;
+}
 
-  useEffect(() => { setEquiv((e) => ({ ...EQUIVALENCIAS_BASE, ...(alm.equivalencias || {}), ...e })); }, [alm.equivalencias]);
+const plantilla = (cfg, tipo) => {
+  const t = cfg?.plantillas?.[tipo];
+  return typeof t === 'string' && t.trim() ? t : PLANTILLAS_DEFAULT[tipo];
+};
 
-  async function subir(e) {
-    const files = [...(e.target.files || [])];
-    e.target.value = "";
-    if (!files.length) return;
-    setTrabajando(true);
-    const nuevas = [];
-    try {
-      let n = 0;
-      for (const f of files) {
-        setEstado(`Abriendo ${f.name}…`);
-        const pags = await archivoAPaginas(f);
-        for (const p of pags) {
-          n++;
-          setEstado(`Leyendo página ${n}…`);
-          const palabras = await ocr(p.url);
-          const info = leerPagina(palabras, equiv);
-          nuevas.push({ ...p, ...info, nombre: f.name });
+const conAviso = (texto, cfg) => {
+  const aviso = String(cfg?.aviso || '').trim();
+  return aviso ? `${texto}\n\n📣 ${aviso}` : texto;
+};
+
+async function companerasDe(fecha, cache) {
+  if (!cache[fecha]) cache[fecha] = await filasDeFecha(fecha);
+  return cache[fecha];
+}
+
+// Fecha del corte más reciente (opcionalmente antes de hoy).
+async function fechaUltimoCorte({ antesDe = null, hasta = null } = {}) {
+  let q = 'resumen_vendedores?select=fecha&order=fecha.desc&limit=1';
+  if (antesDe) q += `&fecha=lt.${antesDe}`;
+  if (hasta) q += `&fecha=lte.${hasta}`;
+  const r = await sb(q);
+  return r[0]?.fecha || null;
+}
+
+// 🎯 Reto de una fecha: se elige con el corte anterior a esa fecha (siempre da lo mismo).
+async function retoDe(fecha, cfg, cache) {
+  if (!fecha || cfg?.retoActivo === false) return null;
+  const base = await fechaUltimoCorte({ antesDe: fecha });
+  if (!base) return null;
+  return elegirReto(await companerasDe(base, cache), cfg, fecha);
+}
+const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
+
+// ------------------------------------------------------------------ menús
+const MENU_VENDEDOR = [
+  '🤖 *ROBOTINA · SMART-TRACK*',
+  'Escríbeme una palabra:',
+  '',
+  '• *avance* – tu tarjeta con los números',
+  '• *hoy* – cómo vas en el día',
+  '• *ranking* – tu lugar en el equipo',
+  '• *clientes* – tus visitas',
+  '• *marcas* – cómo vas en cada marca',
+  '• *reto* – cómo vas en el reto del día',
+].join('\n');
+
+const MENU_EQUIPO = [
+  '🤖 *ROBOTINA · Equipo*',
+  'Escríbeme una palabra:',
+  '',
+  '• *avance* – tarjeta del equipo completo',
+  '• *ranking* – las 7 rutas ordenadas',
+  '• *hoy* – avance del día por ruta',
+  '• *riesgo* – rutas en riesgo y qué hacer con cada una',
+  '• *reto* – tabla del reto del día',
+].join('\n');
+
+function normalizar(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+// El número del bot es el de la empresa (también le escriben clientes), así que
+// SOLO se contesta a mensajes cortos que sean un comando. Todo lo demás se ignora.
+function comando(texto) {
+  const t = normalizar(texto).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || t.split(' ').length > 3) return 'nada';
+  if (/^(menu|ayuda|bot|comandos|opciones)$/.test(t)) return 'menu';
+  if (/\b(actualiza|actualizar|actualizate|actualizalo|reinicia|reiniciar|reiniciate|refresca)\b/.test(t)) return 'actualizar';
+  if (/\b(riesgo|alerta|alertas|focos|apoyo)\b/.test(t)) return 'riesgo';
+  if (/\b(reto|retos|concurso|competencia)\b/.test(t)) return 'reto';
+  if (/\b(marcas?|ice|bloss|summ|faronet)\b/.test(t)) return 'marcas';
+  if (/\b(avance|resumen|mes|cuota|numeros|meta|tarjeta|equipo)\b/.test(t)) return 'avance';
+  if (/\b(hoy|dia)\b/.test(t)) return 'hoy';
+  if (/\b(ranking|lugar|posicion|tabla)\b/.test(t)) return 'ranking';
+  if (/\b(clientes|visitas|efectividad)\b/.test(t)) return 'clientes';
+  return 'nada';
+}
+
+// ------------------------------------------------------------------ matutino
+async function modoMatutino(req) {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const [lista, ultimos, fechaEq] = await Promise.all([
+    contactos({ campo: 'matutino', cfg }),
+    ultimosPorRuta({ antesDe: hoy }),
+    fechaUltimoCorte({ antesDe: hoy }),
+  ]);
+  const todos = await listaContactos(cfg);
+  const cache = {};
+  const mensajes = [];
+  // 🎯 Reto de hoy + ganador del reto de ayer
+  let retoHoy = null, retoAyer = null;
+  if (fechaEq && cfg?.retoActivo !== false) {
+    const filasEq = await companerasDe(fechaEq, cache);
+    retoHoy = elegirReto(filasEq, cfg, hoy);
+    retoAyer = avanceReto(await retoDe(fechaEq, cfg, cache), filasEq, todos);
+  }
+  const anuncio = textoRetoAnuncio(retoHoy, retoAyer);
+
+  for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      if (!fechaEq) continue;
+      const filas = await companerasDe(fechaEq, cache);
+      if (!filas.length) continue;
+      const g = calcularGrupo(filas, todos);
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'grupo'), varsGrupo(g)), anuncio), cfg),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fechaEq, g.actualizado),
+      });
+      continue;
+    }
+    if (c.tipo === 'equipo') {
+      if (!fechaEq) continue;
+      const filas = await companerasDe(fechaEq, cache);
+      if (!filas.length) continue;
+      const eq = calcularEquipo(filas, todos);
+      mensajes.push({
+        ruta: 'EQUIPO',
+        tipo: 'equipo',
+        numero: destino(c),
+        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), anuncio), cfg),
+        tarjeta_url: await urlTarjeta(req, 'EQUIPO', fechaEq),
+      });
+      continue;
+    }
+    const fila = ultimos[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, await companerasDe(fila.fecha, cache));
+    mensajes.push({
+      ruta: c.ruta,
+      tipo: 'vendedor',
+      numero: destino(c),
+      caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), textoRetoVendedor(retoHoy, c.ruta, 'anuncio')), cfg),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
+  }
+  // 🚨 Rutas en riesgo → solo texto, a Supervisor / Gerente
+  if (cfg?.riesgoActivo !== false && fechaEq) {
+    const sup = (await contactos({ campo: 'riesgo', cfg })).filter((c) => c.tipo === 'equipo');
+    if (sup.length) {
+      const filas = await companerasDe(fechaEq, cache);
+      if (filas.length) {
+        const rk = calcularRiesgo(filas, todos, umbralRiesgo(cfg));
+        for (const c of sup) {
+          mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), tarjeta_url: '', texto: textoRiesgo(cfg, rk, c) });
         }
       }
-      // Aprender: lo escrito a mano que todavía no está en la tabla
-      const aprendidas = {};
-      for (const p of nuevas) for (const r of p.renglones) if (r.yaEscrito && r.codigo && !equiv[r.ean]) aprendidas[r.ean] = r.codigo;
-      if (Object.keys(aprendidas).length) setEquiv((q) => ({ ...q, ...aprendidas }));
-      for (const p of nuevas) p.marcada = p.esRemision && p.renglones.length ? await marcarPagina(p) : null;
-      setPaginas(nuevas); // una carga nueva reemplaza a la anterior en pantalla
-      const rem = nuevas.filter((p) => p.esRemision);
-      const sinCod = rem.reduce((s, p) => s + p.renglones.filter((r) => !r.codigo).length, 0);
-      setEstado(`✅ ${nuevas.length} páginas leídas: ${rem.length} remisiones con ${rem.reduce((s, p) => s + p.renglones.length, 0)} renglones`
-        + (nuevas.length - rem.length ? ` · ${nuevas.length - rem.length} facturas u otras (sin marcar)` : "")
-        + (sinCod ? ` · ⚠️ ${sinCod} sin código: escríbelo abajo` : ""));
-    } catch (err) {
-      setEstado("❌ " + (err?.message || err));
-      if (nuevas.length) setPaginas(nuevas);
-    } finally {
-      setTrabajando(false);
     }
   }
+  return json({ fecha: hoy, total: mensajes.length, mensajes });
+}
 
-  // Cambiar el código de un renglón (y recordar la equivalencia de ese EAN)
-  async function cambiarCodigo(ip, ir, valor) {
-    const fa = valor ? aFA(valor) : "";
-    const ean = paginas[ip].renglones[ir].ean;
-    setEquiv((q) => ({ ...q, [ean]: fa }));
-    const copia = paginas.map((p) => ({ ...p, renglones: p.renglones.map((r) => (r.ean === ean ? { ...r, codigo: fa, origen: "capturado" } : r)) }));
-    for (const p of copia) if (p.esRemision && p.renglones.some((r) => r.ean === ean)) p.marcada = await marcarPagina(p);
-    setPaginas(copia);
+const umbralRiesgo = (cfg) => (Number(cfg?.umbralRiesgo) > 0 ? Math.min(100, Number(cfg.umbralRiesgo)) : 95);
+
+function textoRiesgo(cfg, rk, c) {
+  const v = { ...varsRiesgo(rk), nombre: primerNombre(c?.nombre, '') || 'Equipo' };
+  if (!rk.enRiesgo.length) {
+    const lineas = [`🚨 *RUTAS EN RIESGO* · corte ${v.fecha || ''}`, `Ninguna abajo del ${v.umbral}. Equipo cierra en *${v.proyeccion_equipo || '—'}*.`];
+    if (v.rutas_cerca) lineas.push(`🟡 Buen avance, pero aún no llegan al 100%: ${v.rutas_cerca}`);
+    if (v.rutas_ok) lineas.push(`✅ Cierran en meta (100% o más): ${v.rutas_ok}`);
+    return lineas.join('\n');
   }
+  return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
+}
 
-  const renglones = paginas.flatMap((p) => (p.esRemision ? p.renglones.map((r) => ({ ...r, folio: p.folio, fecha: p.fecha })) : []));
-
-  async function guardar() {
-    setGuardando(true);
-    try {
-      const nuevasEq = Object.fromEntries(Object.entries(equiv).filter(([k, v]) => v && EQUIVALENCIAS_BASE[k] !== v));
-      const registro = paginas.filter((p) => p.esRemision).map((p) => ({
-        folio: p.folio, fecha: p.fecha,
-        renglones: p.renglones.map(({ ean, clave, descripcion, cajetillas, paquetes, codigo }) => ({ ean, clave, descripcion, cajetillas, paquetes, codigo })),
-      }));
-      await persistFresco((fresca) => {
-        const a = fresca.almacen || {};
-        const previas = (a.remisiones || []).filter((r) => !registro.some((n) => n.folio && n.folio === r.folio));
-        return {
-          almacen: {
-            ...a,
-            equivalencias: { ...(a.equivalencias || {}), ...nuevasEq },
-            remisiones: [...registro.map((r) => ({ ...r, cargada: new Date().toISOString(), quien })), ...previas].slice(0, 200),
-          },
-        };
+// ------------------------------------------------------------------ avance del día
+// Lo dispara la app cada vez que Gerente / Supervisor cargan el Avance del día.
+async function modoDia(req) {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  if (cfg?.avanceDiaActivo === false) return json({ fecha: hoy, total: 0, mensajes: [], nota: 'avance del día desactivado' });
+  const fecha = await fechaUltimoCorte({ hasta: hoy });
+  if (!fecha) return json({ fecha: hoy, total: 0, mensajes: [] });
+  const [lista, filas, todos] = await Promise.all([
+    contactos({ campo: 'dia', cfg }), filasDeFecha(fecha), listaContactos(cfg),
+  ]);
+  const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
+  const mensajes = [];
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const tablaReto = textoRetoTabla(av);
+  for (const c of lista) {
+    if (c.tipo === 'grupo') {
+      // Al cargar avance: SOLO indicadores del día, en paquetes / piezas / pesos (sin %)
+      const g = calcularGrupoDia(filas, todos);
+      if (!g.rutas.length) continue;
+      mensajes.push({
+        ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)), tablaReto),
+        tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
       });
-      setEstado("✅ Guardado: equivalencias y remisiones.");
-    } catch (err) {
-      setEstado("❌ No se pudo guardar: " + (err?.message || err));
-    } finally {
-      setGuardando(false);
+      continue;
     }
+    if (c.tipo === 'equipo') {
+      const eq = calcularEquipoDia(filas, todos);
+      if (!eq.rutasDia.length) continue;
+      mensajes.push({
+        ruta: 'EQUIPO', tipo: 'equipo', numero: destino(c),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }), tablaReto),
+        tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha, eq.actualizado, 'dia'),
+      });
+      continue;
+    }
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filas);
+    if (m.pctDia === null && !m.ventaDia) continue;
+    mensajes.push({
+      ruta: c.ruta, tipo: 'vendedor', numero: destino(c),
+      caption: junta(llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)), textoRetoVendedor(av, c.ruta)),
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
+    });
   }
 
-  async function descargarPDF() {
-    const marcadas = paginas.filter((p) => p.marcada || p.url);
-    if (!marcadas.length) return;
-    setTrabajando(true);
-    try {
-      const { jsPDF } = await cargarScript(JSPDF, "jspdf");
-      let doc = null;
-      for (const p of marcadas) {
-        const w = p.ancho, h = p.alto;
-        const orient = w > h ? "l" : "p";
-        if (!doc) doc = new jsPDF({ orientation: orient, unit: "px", format: [w, h], compress: true });
-        else doc.addPage([w, h], orient);
-        doc.addImage(p.marcada || p.url, "JPEG", 0, 0, w, h);
+  // 🏁 Te rebasaron: se compara el ranking del día (paquetes) contra el avance anterior
+  let rebases = [];
+  if (cfg?.rebaseActivo !== false) {
+    const ahora = rankingPaquetes(filas);
+    const antes = await leerEstado('ranking_dia');
+    if (antes?.fecha === fecha) rebases = detectarRebases(antes.lista, ahora);
+    if (ahora.length) await guardarEstado('ranking_dia', { fecha, lista: ahora });
+    const nombres = {};
+    for (const c of todos) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = c.nombre;
+    const vend = (await contactos({ campo: 'rebase', cfg })).filter((c) => c.tipo === 'vendedor');
+    for (const r of rebases) {
+      for (const c of vend.filter((x) => claveRuta(x.ruta) === r.victima)) {
+        mensajes.push({
+          ruta: c.ruta, tipo: 'rebase', numero: destino(c), tarjeta_url: '',
+          texto: textoRebase(r, primerNombre(c.nombre, r.victima), nombres, cfg?.tonoBot || 'picante'),
+        });
       }
-      const folios = [...new Set(paginas.map((p) => p.folio).filter(Boolean))].join("_") || "remision";
-      doc.save(`REMISION_${folios}_CON_CODIGOS.pdf`);
-    } catch (err) {
-      setEstado("❌ No se pudo armar el PDF: " + (err?.message || err));
-    } finally {
-      setTrabajando(false);
+    }
+  }
+  return json({ fecha, total: mensajes.length, mensajes, rebases: rebases.length });
+}
+
+// ------------------------------------------------------------------ alerta
+async function modoAlerta() {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const umbral = Number(cfg?.umbralAlerta) > 0 ? Number(cfg.umbralAlerta) : 70;
+  const [lista, filasHoy, sup, todos] = await Promise.all([
+    contactos({ campo: 'alerta', cfg }), filasDeFecha(hoy), contactos({ campo: 'riesgo', cfg }), listaContactos(cfg),
+  ]);
+  const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
+  const mensajes = [];
+  for (const c of lista) {
+    if (c.tipo !== 'vendedor') continue;
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filasHoy);
+    const sv = sinVualaDe(fila);
+    const vaAbajo = m.pctDia !== null && m.pctDia < umbral;
+    const faltaSinVuala = sv && !sv.cumple;
+    if (!vaAbajo && !faltaSinVuala) continue;
+    const vars = varsDia(fila, m, filasHoy, c);
+    // Si solo le falta el Sin Vuala (la venta va bien), mensaje corto de retro.
+    const texto = vaAbajo
+      ? llenarPlantilla(plantilla(cfg, 'alerta'), vars)
+      : `⏰ *${vars.nombre}*, tu venta va bien (${vars.pct_dia || '—'}) 💪\n\n${vars.retro_sin_vuala}`;
+    mensajes.push({ ruta: c.ruta, numero: destino(c), texto });
+  }
+  // 🚨 Supervisor / Gerente: rutas que necesitan apoyo HOY
+  if (cfg?.riesgoActivo !== false && filasHoy.length) {
+    const rt = calcularRiesgoTarde(filasHoy, todos, umbral, umbralRiesgo(cfg));
+    if (rt.enRiesgo.length) {
+      for (const c of sup.filter((x) => x.tipo === 'equipo')) {
+        const texto = llenarPlantilla(plantilla(cfg, 'riesgo_tarde'), { ...varsRiesgoTarde(rt), nombre: primerNombre(c.nombre, '') || 'Equipo' });
+        mensajes.push({ ruta: 'RIESGO', tipo: 'riesgo', numero: destino(c), texto });
+      }
+    }
+  }
+  return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
+}
+
+// ------------------------------------------------------------------ bot
+async function botEquipo(req, c, cmd, cfg, responder) {
+  if (cmd === 'menu' || cmd === 'clientes' || cmd === 'marcas') return responder({ tipo: 'texto', texto: MENU_EQUIPO });
+  const hoy = fechaMX();
+  const fecha = await fechaUltimoCorte({ hasta: hoy });
+  if (!fecha) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados.' });
+  const filas = await filasDeFecha(fecha);
+  const eq = calcularEquipo(filas, await listaContactos(cfg));
+  const v = varsEquipo(eq);
+  const aviso = fecha === hoy ? '' : `\n\n_Los datos de hoy aún no se cargan; esto es del ${fechaCorta(fecha)}._`;
+
+  if (cmd === 'avance') {
+    return responder({
+      tipo: 'imagen',
+      caption: llenarPlantilla(plantilla(cfg, 'equipo'), { ...v, nombre: primerNombre(c.nombre, '') }),
+      tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha),
+    });
+  }
+  if (cmd === 'riesgo') {
+    const rk = calcularRiesgo(filas, await listaContactos(cfg), umbralRiesgo(cfg));
+    return responder({ tipo: 'texto', texto: textoRiesgo(cfg, rk, c) + aviso });
+  }
+  if (cmd === 'ranking') {
+    return responder({ tipo: 'texto', texto: `🏁 *Ranking del mes* · corte del ${v.fecha}\n\n${v.ranking}${aviso}` });
+  }
+  // hoy
+  const lineas = eq.rutas
+    .filter((r) => r.m.pctDia !== null)
+    .sort((a, b) => b.m.pctDia - a.m.pctDia)
+    .map((r) => `${r.ruta}${r.nombre ? ` ${primerNombre(r.nombre, r.ruta)}` : ''}: ${cantidad(r.m.ventaDia, r.m.unidad)} de ${cantidad(r.m.objDia, r.m.unidad)} (${pct(r.m.pctDia)})`);
+  return responder({
+    tipo: 'texto',
+    texto: `📦 *Avance del día* · ${v.fecha}\nEquipo: ${v.pct_dia_equipo || '—'}\n\n${lineas.join('\n') || 'Sin datos del día.'}${aviso}`,
+  });
+}
+
+// ------------------------------------------------------------------ 🧠 memoria corta por persona
+// Se guarda en wa_estado (clave chat_<10 dígitos>): las últimas 4 vueltas, y caduca a los 15 min.
+const MEMORIA_MIN = 15, MEMORIA_VUELTAS = 4;
+const claveChat = (numero) => `chat_${String(numero || '').replace(/\D/g, '').slice(-10)}`;
+
+async function leerHistorial(numero) {
+  if (String(numero || '').replace(/\D/g, '').length < 10) return [];
+  const h = await leerEstado(claveChat(numero));
+  if (!h?.t || Date.now() - h.t > MEMORIA_MIN * 60000) return [];
+  return Array.isArray(h.msgs) ? h.msgs : [];
+}
+
+async function recordar(numero, historial, pregunta, respuesta) {
+  if (String(numero || '').replace(/\D/g, '').length < 10 || !respuesta) return;
+  const msgs = [
+    ...historial,
+    { role: 'user', content: String(pregunta).slice(0, 800) },
+    { role: 'assistant', content: String(respuesta).slice(0, 1500) },
+  ].slice(-MEMORIA_VUELTAS * 2);
+  await guardarEstado(claveChat(numero), { t: Date.now(), msgs });
+}
+
+async function modoBot(req) {
+  let body = {};
+  try { body = await req.json(); } catch { /* vacío */ }
+  const numero = String(body.numero || '').replace(/\D/g, '');
+  // Mensaje desde el GRUPO: se contesta en el grupo, mencionando a quien preguntó.
+  const grupo = /@g\.us$/.test(String(body.grupo || '')) ? String(body.grupo) : null;
+  const tag = grupo ? mencion(numero) : null;
+  // 🧠 Memoria corta: lo que esta persona platicó con Robotina en los últimos 15 min
+  const historial = await leerHistorial(numero);
+  // Respuesta con datos recién actualizados (la pide el robot al terminar): lleva un aviso arriba
+  let avisoFresco = '';
+  const responder = async (extra0) => {
+    let extra = extra0;
+    if (avisoFresco && extra.tipo !== 'ninguno') {
+      extra = {
+        ...extra,
+        ...(extra.texto ? { texto: `${avisoFresco}\n\n${extra.texto}` } : {}),
+        ...(extra.caption ? { caption: `${avisoFresco}\n\n${extra.caption}` } : {}),
+      };
+    }
+    if (extra.tipo !== 'ninguno' && body.texto) {
+      await recordar(numero, historial, body.texto, extra.texto || extra.caption || '');
+    }
+    if (!grupo || extra.tipo === 'ninguno') {
+      const { mencionados: _m, ...resto } = extra;
+      // En privado no hay menciones: @521… se cambia por el nombre que viene entre paréntesis
+      const limpiar = (t) => (typeof t === 'string' ? t.replace(/@521\d{10}\s*/g, '') : t);
+      return json({ numero, ...resto, ...(resto.texto ? { texto: limpiar(resto.texto) } : {}) });
+    }
+    const pre = `@${tag} `;
+    return json({
+      ...extra,
+      numero: grupo,
+      mencionados: [...new Set([tag, ...(extra.mencionados || [])])],
+      ...(extra.texto ? { texto: pre + extra.texto } : {}),
+      ...(extra.caption ? { caption: pre + extra.caption } : {}),
+    });
+  };
+  const cfg = await configBot();
+
+  const c = await contactoPorTelefono(numero, cfg);
+  // En el grupo, a quien no está dado de alta simplemente no se le contesta.
+  if (!c && grupo) return responder({ tipo: 'ninguno' });
+  if (!c) {
+    return responder({
+      tipo: 'texto',
+      texto: 'Hola 👋 Este número no está registrado en SMART-TRACK. Pídele a tu supervisor que te dé de alta.',
+    });
+  }
+
+  const cmd = comando(body.texto);
+
+  // 🔄 Jefe / supervisores piden un avance → primero se actualiza PowerStreet en silencio
+  //    (sin tarjetas ni mensajes al equipo) y al terminar el robot vuelve a preguntar con fresco=1.
+  if (c.tipo === 'equipo' && cmd !== 'actualizar' && cmd !== 'menu') {
+    if (body.fresco) {
+      const hora = new Date().toLocaleTimeString('es-MX', { timeZone: 'America/Mexico_City', hour: '2-digit', minute: '2-digit' });
+      avisoFresco = body.sin_refresco
+        ? `⚠️ ${tratoDe(c)}, no pude actualizar PowerStreet; te paso lo último que tengo cargado:`
+        : `🔄 Listo, ${tratoDe(c)}: información actualizada a las ${hora}.`;
+    } else if (pideAvance(body.texto, cmd)) {
+      // Fresco si el robot avisó hace poco o si el avance se cargó hace poco (por el ciclo de cada hora)
+      const [ult, snap] = await Promise.all([
+        leerEstado('refresco_hecho'),
+        sb('resumen_vendedores?select=actualizado_en&order=actualizado_en.desc.nullslast&limit=1').catch(() => []),
+      ]);
+      const tSnap = snap?.[0]?.actualizado_en ? Date.parse(snap[0].actualizado_en) : 0;
+      const tUlt = Math.max(ult?.t || 0, tSnap || 0);
+      const reciente = tUlt && Date.now() - tUlt < MIN_FRESCO * 60000;
+      if (!reciente) {
+        return responder({
+          tipo: 'refrescar',
+          texto: `Ok, ${tratoDe(c)} 🫡 déjame actualizar y en cuanto tenga la información fresca te la paso.`,
+          refrescar: { numero, texto: body.texto, grupo: grupo || null },
+        });
+      }
     }
   }
 
-  function descargarExcel() {
-    if (!renglones.length) return;
-    const filas = renglones.map((r) => ({
-      Folio: r.folio, Fecha: r.fecha, "Código FA": r.codigo, Descripción: r.descripcion, EAN: r.ean,
-      "Clave PM": r.clave, Cajetillas: r.cajetillas, Paquetes: r.paquetes,
-    }));
-    const ws = XLSX.utils.json_to_sheet(filas);
-    ws["!cols"] = [10, 11, 11, 34, 11, 13, 11, 10].map((wch) => ({ wch }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Remisión");
-    XLSX.writeFile(wb, `REMISION_${fechaDoc || hoyISO()}.xlsx`);
+  // 🖐️ "¿Quiénes son candidatos a la Tercera Mano del Pachuco?"
+  if (pideTerceraMano(body.texto)) {
+    const r = await respuestaTerceraMano(c, cfg, { historial, pregunta: body.texto });
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: grupo ? r.mencionados : [] });
+  }
+  // 🔄 "Robotina actualiza": solo jefe / supervisores. n8n reinicia el robot de PowerStreet al ver tipo 'actualizar'.
+  if (cmd === 'actualizar') {
+    if (c.tipo !== 'equipo') {
+      return responder({ tipo: 'texto', texto: '🔒 Solo el jefe o un supervisor me pueden pedir que actualice. Pídeselo a tu supervisor.' });
+    }
+    return responder({
+      tipo: 'actualizar',
+      texto: `A la orden, ${tratoDe(c)} 🫡\n\n🔄 Ya arranqué la actualización: entro a PowerStreet y cargo Avance y OTC en SMART-TRACK. En unos minutos llegan las tarjetas.`,
+    });
+  }
+  // Cualquier cosa que no sea un comando corto → la contesta la IA con los números reales.
+  if (cmd === 'nada') {
+    const r = await respuestaIA(c, body.texto, cfg, { historial, grupo });
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: r.mencionados });
+  }
+  if (cmd === 'reto') {
+    const hoy = fechaMX();
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    const filas = fecha ? await filasDeFecha(fecha) : [];
+    const reto = await retoDe(hoy, cfg, fecha ? { [fecha]: filas } : {});
+    if (!reto) return responder({ tipo: 'texto', texto: 'Hoy no hay reto activo.' });
+    const av = fecha === hoy ? avanceReto(reto, filas, await listaContactos(cfg)) : null;
+    const texto = c.tipo === 'equipo'
+      ? (av ? textoRetoTabla(av) : textoRetoAnuncio(reto))
+      : (av ? textoRetoVendedor(av, c.ruta) : textoRetoVendedor(reto, c.ruta, 'anuncio')) || textoRetoAnuncio(reto);
+    return responder({ tipo: 'texto', texto: c.tipo === 'equipo' ? `A la orden, ${tratoDe(c)} 🫡\n\n${texto}` : texto });
+  }
+  if (c.tipo === 'equipo') {
+    // Respuestas fijas al jefe / supervisores: con "A la orden, jefe/supervisor" al inicio
+    const saludo = `A la orden, ${tratoDe(c)} 🫡`;
+    const alJefe = (extra) => responder({
+      ...extra,
+      ...(extra.texto ? { texto: `${saludo}\n\n${extra.texto}` } : {}),
+      ...(extra.caption ? { caption: `${saludo}\n\n${extra.caption}` } : {}),
+    });
+    return botEquipo(req, c, cmd, cfg, alJefe);
+  }
+  if (cmd === 'riesgo') {
+    const r = await respuestaIA(c, body.texto, cfg);
+    return responder({ tipo: 'texto', texto: r.texto, mencionados: r.mencionados });
+  }
+  if (cmd === 'menu') return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
+
+  const hoy = fechaMX();
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return responder({ tipo: 'texto', texto: 'Todavía no hay datos cargados para tu ruta. Intenta más tarde.' });
+
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsVendedor(fila, m, c);
+  const nombre = v.nombre;
+  const aviso = fila.fecha === hoy ? '' : `\n\n_Los datos de hoy aún no se cargan; esto es del ${fechaCorta(fila.fecha)}._`;
+
+  if (cmd === 'avance') {
+    const texto = llenarPlantilla(plantilla(cfg, 'matutino'), v)
+      .replace(/^☀️.*\n/, ''); // sin el "Buenos días" cuando lo piden a cualquier hora
+    return responder({
+      tipo: 'imagen',
+      caption: texto,
+      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
+    });
   }
 
-  const total = renglones.reduce((a, r) => ({ caj: a.caj + (r.cajetillas || 0), paq: a.paq + (r.paquetes || 0) }), { caj: 0, paq: 0 });
+  if (cmd === 'hoy') {
+    if (m.pctDia === null) return responder({ tipo: 'texto', texto: `No tengo tu avance del día todavía.${aviso}` });
+    const falta = Math.max(0, (m.objDia || 0) - (m.ventaDia || 0));
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `📦 *${nombre}*, en el día llevas:`,
+        `${cantidad(m.ventaDia, m.unidad)} de ${cantidad(m.objDia, m.unidad)} (*${pct(m.pctDia)}*)`,
+        falta > 0 ? `Te faltan ${cantidad(falta, m.unidad)} para la meta.` : '¡Meta del día cumplida! 🎉',
+      ].join('\n') + aviso,
+    });
+  }
 
-  return (
-    <div>
-      <div style={S.card}>
-        <div style={S.cardTitulo}>🧾 Remisiones con código</div>
-        <div style={S.nota}>
-          Sube las fotos de la remisión (o el PDF escaneado). La app lee cada renglón por su EAN, le pone el
-          <b> código FA</b> y lo escribe en la foto a la derecha de la cantidad, como se hace con pluma. Las facturas se leen pero no se marcan.
-        </div>
-        <div style={S.botones}>
-          {puedeEditar && (
-            <button style={S.btnPrimario} disabled={trabajando} onClick={() => fileRef.current?.click()}>
-              {trabajando ? "Leyendo…" : "📷 Subir fotos / PDF"}
-            </button>
-          )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple style={{ display: "none" }} onChange={subir} />
-          {paginas.length > 0 && <button style={S.btnSec} disabled={trabajando} onClick={() => { setPaginas([]); setEstado(""); }}>Limpiar</button>}
-        </div>
-        {estado && <div style={{ fontSize: 12.5, color: estado.startsWith("❌") ? "#f87171" : "#cbd5e1" }}>{estado}</div>}
-      </div>
+  if (cmd === 'marcas') {
+    return responder({
+      tipo: 'texto',
+      texto: v.marcas ? `🏷️ *${nombre}*, tus marcas OPEN:\n\n${v.marcas}${aviso}` : `No tengo datos de marcas todavía.${aviso}`,
+    });
+  }
 
-      {renglones.length > 0 && (
-        <div style={S.card}>
-          <div style={S.cardTitulo}>Renglones leídos</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={S.tabla}>
-              <thead>
-                <tr>
-                  <th style={S.th}>Folio</th>
-                  <th style={S.th}>Descripción</th>
-                  <th style={S.th}>EAN</th>
-                  <th style={S.thR}>Cajetillas</th>
-                  <th style={S.thR}>Paquetes</th>
-                  <th style={S.thR}>Código FA</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginas.map((p, ip) => p.esRemision && p.renglones.map((r, ir) => (
-                  <tr key={`${ip}-${ir}`} style={S.tr}>
-                    <td style={{ ...S.td, fontSize: 12, color: "#94a3b8" }}>{p.folio || "—"}</td>
-                    <td style={S.td}>{r.descripcion || r.clave}</td>
-                    <td style={{ ...S.td, fontSize: 12, color: "#94a3b8" }}>{r.ean}</td>
-                    <td style={{ ...S.tdR, color: r.revisar ? "#f59e0b" : undefined }}>{r.cajetillas?.toLocaleString("es-MX") ?? "—"}</td>
-                    <td style={{ ...S.tdR, color: r.revisar ? "#f59e0b" : undefined }}>{r.paquetes?.toLocaleString("es-MX") ?? "—"}{r.revisar && " ⚠️"}</td>
-                    <td style={S.tdR}>
-                      <input
-                        style={{ ...S.inputCelda, width: 90, borderColor: r.codigo ? "#334155" : "#f59e0b" }}
-                        defaultValue={r.codigo} placeholder="FA0…" disabled={!puedeEditar}
-                        onBlur={(e) => { if (aFA(e.target.value) !== r.codigo) cambiarCodigo(ip, ir, e.target.value); }}
-                      />
-                      <div style={{ fontSize: 10, color: "#64748b" }}>{r.origen}</div>
-                    </td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
-          </div>
-          <div style={S.resumen}>
-            <span>📦 {renglones.length} renglones</span>
-            <span>Total cajetillas: <b>{total.caj.toLocaleString("es-MX")}</b></span>
-            <span>Total paquetes: <b>{total.paq.toLocaleString("es-MX")}</b></span>
-          </div>
-          {paginas.filter((p) => p.esRemision && p.totalImpreso?.paquetes).map((p, k) => {
-            const suma = p.renglones.reduce((a, r) => a + (r.paquetes || 0), 0);
-            const ok = suma === p.totalImpreso.paquetes;
-            return (
-              <div key={k} style={{ fontSize: 12.5, color: ok ? "#4ade80" : "#f59e0b" }}>
-                {ok ? "✅" : "⚠️"} Remisión {p.folio}: la lista suma {suma.toLocaleString("es-MX")} paq y la remisión dice {p.totalImpreso.paquetes.toLocaleString("es-MX")} paq{ok ? "" : " — revisa los renglones en naranja"}
-              </div>
-            );
-          })}
-          <div style={S.nota}>Compara los totales con "Total CAJ / Total PAQ" de la remisión. Si un código está mal, corrígelo: la app lo recuerda para la próxima.</div>
-          <div style={S.barra}>
-            {puedeEditar && <button style={S.btnPrimario} disabled={guardando} onClick={guardar}>{guardando ? "Guardando…" : "Guardar"}</button>}
-            <button style={S.btnExcel} disabled={trabajando} onClick={descargarPDF}>⬇️ PDF con códigos</button>
-            <button style={{ ...S.btnSec, borderStyle: "solid" }} onClick={descargarExcel}>⬇️ Excel</button>
-          </div>
-        </div>
-      )}
+  if (cmd === 'ranking') {
+    if (!m.ranking) return responder({ tipo: 'texto', texto: `Aún no hay ranking disponible.${aviso}` });
+    const top = m.rankingLista.slice(0, 3)
+      .map((r, i) => `${medalla(i + 1)} ${claveRuta(r.ruta)} – ${pct(r.p * 100)}`).join('\n');
+    return responder({
+      tipo: 'texto',
+      texto: `🏁 *${nombre}*, vas en el lugar *${m.ranking} de ${m.totalRutas}* (${pct(m.pctMes)} del mes).\n\nTop 3:\n${top}${aviso}`,
+    });
+  }
 
-      {paginas.map((p, i) => (
-        <div key={i} style={S.card}>
-          <div style={{ fontSize: 12.5, color: "#94a3b8" }}>
-            Página {i + 1} · {p.esRemision ? `Remisión ${p.folio}` : p.esFactura ? `Factura ${p.folio}` : "Otro documento"} {p.fecha && `· ${p.fecha}`}
-            {p.esRemision && !p.renglones.length && <span style={{ color: "#f59e0b" }}> · no encontré renglones (¿foto borrosa o chueca?)</span>}
-          </div>
-          <img src={p.marcada || p.url} alt={`Página ${i + 1}`} style={{ width: "100%", borderRadius: 10, background: "#fff" }} />
-        </div>
-      ))}
-    </div>
-  );
+  if (cmd === 'clientes') {
+    if (m.efectividad === null && m.vis === null) return responder({ tipo: 'texto', texto: `No tengo datos de visitas todavía.${aviso}` });
+    const pendientes = m.prog ? Math.max(0, m.prog - (m.vis || 0)) : null;
+    return responder({
+      tipo: 'texto',
+      texto: [
+        `🎯 *${nombre}*, efectividad del día: *${pct(m.efectividad)}*`,
+        m.prog ? `Visitas efectivas: ${m.vis ?? 0} de ${m.prog}` : m.vis !== null ? `Visitas efectivas hoy: ${m.vis}` : null,
+        pendientes ? `Te quedan ${pendientes} clientes por visitar.` : null,
+      ].filter(Boolean).join('\n') + aviso,
+    });
+  }
+
+  return responder({ tipo: 'texto', texto: MENU_VENDEDOR });
+}
+
+// Llamada a OpenAI con tiempo límite: si tarda más de 15 s se cancela y se usa el texto
+// de respaldo, para que Vercel no corte la función (límite de ~25 s en Edge).
+async function fetchIA(opciones, ms = 15000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch('https://api.openai.com/v1/chat/completions', { ...opciones, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ------------------------------------------------------------------ IA (conversación libre)
+const TONOS = {
+  normal: 'Habla en español mexicano, amable y profesional. Nada de groserías.',
+  compa: 'Habla como compa de ruta: informal, con carrilla y frases mexicanas (qué onda, échale ganas, ¿cómo ves?), pero SIN groserías.',
+  picante: 'Habla como vendedor de ruta mexicano bien entrón: directo, con carrilla pesada, albures ligeros y groserías comunes (güey, cabrón, chingón, a huevo, no mames, ponte las pilas). Si el vendedor te insulta, regrésale la carrilla con humor y llévalo a sus números.',
+};
+
+// Cómo se le dice a cada contacto de tipo Equipo (por los últimos 4 dígitos de su teléfono).
+// Quien no esté en la lista y sea Equipo recibe "supervisor".
+const TRATO_EQUIPO = { '1493': 'jefe', '8737': 'supervisor' };
+const tratoDe = (c) => TRATO_EQUIPO[String(c?.telefono || '').slice(-4)] || 'supervisor';
+
+const tonoEquipo = (titulo) => [
+  `Le hablas a tu ${titulo.toUpperCase()}. Trátalo con mucho respeto y disposición, como un asistente leal.`,
+  `Empieza SIEMPRE con "Sí, ${titulo}." o "A la orden, ${titulo}." y dile "${titulo}" (nunca por su nombre de pila ni "güey/compa").`,
+  'CERO groserías, cero albures y cero carrilla hacia él. Español mexicano formal pero cálido.',
+].join(' ');
+
+async function contextoDatos(c) {
+  const hoy = fechaMX();
+  if (c.tipo === 'equipo') {
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    if (!fecha) return { sin_datos: true };
+    const filas = await filasDeFecha(fecha);
+    const cfg = await configBot();
+    const todos = await listaContactos(cfg);
+    const v = varsEquipo(calcularEquipo(filas, todos));
+    const d = varsEquipoDia(calcularEquipoDia(filas, todos));
+    const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
+    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
+      rallies_otc: resumenRallies(filas, todos, true),
+      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, cierran_en_meta_100: rk.rutas_ok || 'ninguna', buen_avance_pero_sin_100: rk.rutas_cerca, nota: 'Solo 100% o más se considera bien; abajo de 100 es buen avance pero no cumple.' },
+      indicadores_por_ruta: await indicadoresParaIA(fecha, cfg, { filas, todos, equipo: true }) };
+  }
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return { sin_datos: true };
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsDia(fila, m, companeras, c);
+  const cfgV = await configBot();
+  const inds = await indicadoresParaIA(fila.fecha, cfgV, { filas: companeras, todos: await listaContactos(cfgV), equipo: false });
+  return {
+    rol: 'vendedor', ruta: v.ruta, corte: fila.fecha, datos_de_hoy: fila.fecha === hoy,
+    indicadores_hoy: inds[v.ruta] || {},
+    rallies_otc: resumenRallies(companeras, await listaContactos(cfgV), false),
+    mes: { avance: v.pct_mes, ritmo_esperado: v.esperado, vendido: v.venta_mes, objetivo: v.objetivo_mes, necesita_por_dia: v.necesita, dias_restantes: v.dias_restantes, lugar: v.lugar, de_rutas: v.total_rutas },
+    dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
+    marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
+  };
+}
+
+// ------------------------------------------------------------------ 🔄 REFRESCO ANTES DE CONTESTAR
+// Si el robot actualizó hace menos de MIN_FRESCO minutos, se contesta directo sin volver a refrescar.
+const MIN_FRESCO = Number(process.env.REFRESCO_MIN || 10);
+function pideAvance(texto, cmd) {
+  if (['avance', 'hoy', 'marcas', 'ranking', 'reto', 'clientes', 'riesgo'].includes(cmd)) return true;
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(avance|avances|como va|como vamos|como van|como voy|cuanto|cuantos|llevan?|llevamos|venta|ventas|vendid\w*|otc|rally|reto|vuala|marcas?|indicador\w*|ranking|proyecc\w*|meta|metas|objetivo\w*|resultado\w*|numeros|tercera\s*mano|pachuco|candidat\w*|quien va|quienes van|abajo|arriba|lider)\b/.test(t);
+}
+
+// ------------------------------------------------------------------ 🖐️ TERCERA MANO (bajo pedido)
+// Se calcula con TODOS los indicadores que Robotina conoce (columna "Robotina lo conoce" del panel):
+// del día contra su meta y los del periodo contra el ritmo esperado. Los 3 con el índice más bajo
+// son los candidatos. A vendedores nunca se les muestran rallies exclusivos de Supervisor-1.
+function pideTerceraMano(texto) {
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /tercera\s*mano|pachuco|candidat/.test(t);
+}
+
+async function candidatosTercera(cfg, equipo) {
+  const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+  if (!fecha) return null;
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const inds = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, valores }) => {
+    const c = vend[ruta];
+    const lista = inds
+      .map((i) => {
+        const v = valores[i.clave];
+        if (!v) return null;
+        const comp = v.comp ?? v.pct;
+        if (comp === null || comp === undefined) return null;
+        return { indicador: i.nombre, unidad: i.unidad, avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
+      })
+      .filter(Boolean);
+    const indice = lista.length ? Math.round(lista.reduce((s, x) => s + Math.min(100, x.comp), 0) / lista.length) : null;
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      indice,
+      indicadores_medidos: lista.length,
+      cumplidos: lista.filter((x) => x.comp >= 100).length,
+      // Donde más le falta (lo que lo hace candidato)
+      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => a.comp - b.comp).slice(0, 6),
+    };
+  }).filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice);
+  const candidatos = rutas.slice(0, 3);
+  const corte = rutas[3] || null; // el 4° lugar desde abajo: a ese nivel hay que llegar para salir
+  return {
+    fecha,
+    regla: 'índice = promedio del cumplimiento de cada indicador (tope 100%); del día contra su meta, del periodo contra el ritmo esperado',
+    candidatos,
+    para_salir_superar_a: corte ? { ruta: corte.ruta, nombre: corte.nombre, indice: corte.indice } : null,
+    ranking_desde_abajo: rutas.map((r) => ({ ruta: r.ruta, nombre: r.nombre, indice: r.indice })),
+  };
+}
+
+function textoTerceraFijo(d, saludo) {
+  const fmtU2 = (v, u) => (u === '$' ? `$${Math.round(v || 0).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v || 0)} ${u}`);
+  const L = [saludo ? `${saludo}\n` : '', `🖐️ *Candidatos a La Tercera Mano del Pachuco* · corte ${fechaCorta(d.fecha)}`].filter(Boolean);
+  d.candidatos.forEach((c, i) => {
+    L.push('', `${i + 1}. @${c.mencion} (${c.ruta} ${c.nombre}) · rendimiento *${c.indice}%* · cumple ${c.cumplidos} de ${c.indicadores_medidos} indicadores`);
+    for (const x of c.debajo.slice(0, 4)) {
+      L.push(`   • ${x.indicador}: ${fmtU2(x.avance, x.unidad)} de ${fmtU2(x.meta, x.unidad)}${x.falta ? ` (le faltan ${fmtU2(x.falta, x.unidad)})` : ''}`);
+    }
+  });
+  if (d.para_salir_superar_a) L.push('', `👉 Para salir tienen que subir de *${d.para_salir_superar_a.indice}%* (${d.para_salir_superar_a.ruta} ${d.para_salir_superar_a.nombre}), cerrando lo que les falta arriba.`);
+  return L.join('\n');
+}
+
+async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = {}) {
+  const esJefe = c.tipo === 'equipo';
+  const titulo = tratoDe(c);
+  const d = await candidatosTercera(cfg, esJefe);
+  if (!d || !d.candidatos.length) return { texto: 'Todavía no hay datos cargados para calcular candidatos.', mencionados: [] };
+  const mencionados = d.candidatos.map((x) => x.mencion).filter(Boolean);
+  const saludo = esJefe ? `A la orden, ${titulo} 🫡` : '';
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { texto: textoTerceraFijo(d, saludo), mencionados };
+  const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Te piden los candidatos a "La Tercera Mano del Pachuco": las 3 rutas con el rendimiento más bajo considerando TODOS los indicadores (ver "regla").',
+    'Para CADA uno de los 3 candidatos, en este orden:',
+    '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento (índice %).',
+    '  b) POR QUÉ es candidato: sus 2 a 4 indicadores más débiles de "debajo", con números exactos (avance de meta, lo que falta, unidad). En los del periodo usa "ritmo" y "necesita_por_dia".',
+    '  c) CÓMO DEJAR DE SERLO: acciones concretas y medibles (cuánto vender de qué, cubrir Sin Vuala, qué marca empujar) para superar el índice de "para_salir_superar_a".',
+    'Formato WhatsApp, *negritas*, sin tablas, máximo 22 líneas en total. Al final una línea corta que motive.',
+    'Usa SOLO los números del JSON; no inventes cifras ni premios. paq = paquetes, pz = piezas, $ = pesos. No felicites a nadie.',
+    'Límites: nada humillante ni sobre físico, familia, género, orientación, religión u origen.',
+    `Datos (JSON): ${JSON.stringify(d)}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.6,
+        max_tokens: 900,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(pregunta || 'Dame los candidatos a la Tercera Mano').slice(0, 500) }],
+      }),
+    });
+    if (!r.ok) throw new Error('openai');
+    const j = await r.json();
+    const texto = (j.choices?.[0]?.message?.content || '').trim();
+    if (!texto) throw new Error('vacío');
+    return { texto, mencionados: mencionados.filter((m) => texto.includes(`@${m}`)) };
+  } catch {
+    return { texto: textoTerceraFijo(d, saludo), mencionados };
+  }
+}
+
+// ------------------------------------------------------------------ 🏁 RALLIES OTC para la IA
+// Ranking ya calculado por rally (Robotina solo lo lee, no hace cuentas):
+//   { nombre, unidad, vigencia, totales, ranking: [{ lugar, ruta, nombre, hoy, meta_hoy, pct_hoy, acumulado, meta_final, pct_final }] }
+// El lugar 1 es el que va MEJOR. A vendedores nunca se les dan los exclusivos de Supervisor-1.
+function resumenRallies(filas, todos, equipo) {
+  const nombres = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = primerNombre(c.nombre || '', claveRuta(c.ruta));
+  const porRally = {};
+  for (const f of filas || []) {
+    const ruta = claveRuta(f.ruta);
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (!r?.id || (r.exclusivo && !equipo)) continue;
+      const R = porRally[r.id] || (porRally[r.id] = {
+        nombre: r.nombre || 'Rally OTC',
+        unidad: r.unidad === 'piezas' ? 'piezas' : 'pesos',
+        vigencia: `${r.fechaInicio || '¿?'} a ${r.fechaFin || '¿?'}`,
+        ...(r.exclusivo ? { exclusivo_supervisor1: true } : {}),
+        filas: [],
+      });
+      const hoy = r0(n(r.avanceDia) || 0), metaHoy = n(r.objetivoDia) ? r0(n(r.objetivoDia)) : null;
+      const acum = r0(n(r.avanceTotal) || 0), metaFin = n(r.objetivoFinal) ? r0(n(r.objetivoFinal)) : null;
+      R.filas.push({
+        ruta, nombre: nombres[ruta] || f.nombre || ruta,
+        hoy, meta_hoy: metaHoy, pct_hoy: metaHoy ? Math.round((hoy / metaHoy) * 100) : null,
+        falta_hoy: metaHoy ? Math.max(0, metaHoy - hoy) : null,
+        acumulado: acum, meta_final: metaFin, pct_final: metaFin ? Math.round((acum / metaFin) * 100) : null,
+        falta_final: metaFin ? Math.max(0, metaFin - acum) : null,
+      });
+    }
+  }
+  return Object.values(porRally).map(({ filas: fs, ...R }) => {
+    const clave = (x) => (x.pct_hoy ?? x.pct_final ?? -1);
+    const ranking = fs.sort((a, b) => clave(b) - clave(a) || b.hoy - a.hoy || b.acumulado - a.acumulado)
+      .map((x, i) => ({ lugar: i + 1, ...x }));
+    const suma = (k) => fs.reduce((s, x) => s + (x[k] || 0), 0);
+    return {
+      ...R,
+      participantes: ranking.length,
+      ordenado_por: fs.some((x) => x.meta_hoy) ? '% de la meta de HOY (lugar 1 = el mejor)' : '% de la meta final (lugar 1 = el mejor)',
+      totales: { hoy: suma('hoy'), meta_hoy: suma('meta_hoy') || null, acumulado: suma('acumulado'), meta_final: suma('meta_final') || null },
+      cumplieron_hoy: ranking.filter((x) => x.pct_hoy !== null && x.pct_hoy >= 100).map((x) => x.ruta),
+      ranking,
+    };
+  });
+}
+
+// La IA menciona por ruta (@J203); aquí se cambia por el @número real de esa persona
+// y se arma la lista de mencionados. Cualquier número que la IA invente se borra.
+function aplicarMenciones(texto, todos) {
+  const tel = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor' && c.telefono) tel[claveRuta(c.ruta)] = mencion(c.telefono);
+  const validos = new Set(Object.values(tel));
+  const mencionados = new Set();
+  let t = String(texto || '')
+    .replace(/@\+?(\d{10,13})\b/g, (m, d) => (validos.has(d) ? m : ''))           // números inventados fuera
+    .replace(/@\s?(J\s?-?\d{3})\b/gi, (m, r) => {
+      const k = claveRuta(r);
+      return tel[k] ? `@${tel[k]}` : k;
+    });
+  for (const m of t.match(/@(\d{10,13})\b/g) || []) mencionados.add(m.slice(1));
+  t = t.replace(/[ \t]{2,}/g, ' ');
+  return { texto: t, mencionados: [...mencionados] };
+}
+
+// ------------------------------------------------------------------ 🔎 VENTA POR PRODUCTO
+// Cuando preguntan por un producto en específico ("¿cuánto se vendió de Switch?"), se busca en
+// el detalle del día que carga el robot (data.avanceDia = paquetes por artículo y cliente;
+// data.otcDia = OTC por artículo). Así Robotina no tiene que adivinar con las marcas generales.
+const NO_PRODUCTO = new Set(`robotina bot jefe supervisor hola buenos buenas dias tardes noches gracias porfa favor
+cuanto cuanta cuantos cuantas cuantito venta ventas vendio vendieron vendido vendida vendidos vendimos vende venden vendiste
+hoy ayer dia semana mes periodo del de la el los las en que como va vamos van voy lleva llevan llevamos llevo
+producto productos articulo articulos pieza piezas paquete paquetes paq caja cajas por para ruta rutas todas todos
+me dame dime da detalle detalles sobre cual cuales quien quienes hay se ha han un una unos unas al lo le les con mas menos
+avance avances info informacion datos dato numero numeros total totales otc reto rally meta metas marca marcas indicador
+indicadores ranking lugar efectividad visitas clientes cliente mi mis tu su sus esta este esto estos estas ese esa eso nos
+tenemos tiene tienen tengo saber quiero quisiera puedes podrias ver muestra mostrar ahorita ahora bien mal ok si no tambien
+equipo vendedor vendedores supervisores jefe proyeccion objetivo objetivos lleve llevaba vuala sin tercera mano pachuco
+desglose desglosado desglosa desglosar general completo completa resumen top mejores vendidas lista listado cada uno
+porfavor necesito manda mandame pasame paso pasa dia hoyy ruta`.split(/\s+/));
+
+function palabrasProducto(texto) {
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ');
+  return [...new Set(t.split(/\s+/).filter((w) => w.length >= 3 && !NO_PRODUCTO.has(w) && !/^j\d{3}$/.test(w) && !/^\d+$/.test(w)))];
+}
+
+// Apodos que da de alta el Gerente (WhatsApp → Robotina → "Cómo le dicen a cada producto"):
+// data.whatsappBot.apodos = [{ codigo, articulo, apodos: "SWITCH, SWICH" }]
+const normTxt = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ').replace(/\s+/g, ' ').trim();
+function casiIgual(a, b) { // distancia de edición ≤ 1 (para faltas de ortografía: swich / siwch / switch)
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, dif = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++dif > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return dif + (a.length - i) + (b.length - j) <= 1;
+}
+function productosPorApodo(texto, apodos) {
+  const t = ` ${normTxt(texto)} `;
+  const palabrasT = t.trim().split(' ');
+  const hallados = [];
+  for (const a of apodos || []) {
+    for (const frase of String(a.apodos || '').split(',').map(normTxt).filter(Boolean)) {
+      // Todas las palabras del apodo deben venir en la pregunta, en cualquier orden y aunque haya
+      // palabras en medio ("vuala de vainilla" = VUALA VAINILLA). Con una letra de diferencia si es larga.
+      const esta = (fw) => palabrasT.some((w) => w === fw || (fw.length >= 5 && w.length >= 5 && casiIgual(w, fw)));
+      const ok = t.includes(` ${frase} `) || frase.split(' ').every(esta);
+      if (ok) hallados.push({ frase, codigo: String(a.codigo || '').trim(), articulo: String(a.articulo || '').trim() });
+    }
+  }
+  if (!hallados.length) return null;
+  // Si coincide "promo clipper", no se cuentan los que solo dicen "clipper"
+  const frases = [...new Set(hallados.map((h) => h.frase))].sort((x, y) => y.length - x.length);
+  const aceptadas = [];
+  for (const f of frases) if (!aceptadas.some((g) => g.includes(f))) aceptadas.push(f);
+  const elegidos = hallados.filter((h) => aceptadas.includes(h.frase));
+  // Palabras de la pregunta que ya se usaron en apodos (para buscar las demás por nombre de artículo)
+  const usadas = new Set(aceptadas.flatMap((f) => f.split(' ')));
+  return {
+    frases: aceptadas,
+    usadas,
+    codigos: new Set(elegidos.map((h) => h.codigo.toUpperCase()).filter(Boolean)),
+    articulos: new Set(elegidos.map((h) => normTxt(h.articulo)).filter(Boolean)),
+  };
+}
+
+// Apodos de base (los mismos ejemplos del panel); se suman a los que se guarden en la app
+const APODOS_BASE = [
+  { codigo: '0309', articulo: 'VLACHOCO_26', apodos: 'VUALA CHOCOLATE' },
+  { codigo: '0310', articulo: 'VLAVAINILLA_26', apodos: 'VUALA VAINILLA' },
+  { codigo: '0360', articulo: 'CP11D24+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0390', articulo: 'CP11D20+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0300', articulo: 'CPLCP11_26', apodos: 'CLIPPER' },
+  { codigo: '0316', articulo: 'SWICHC/10_26', apodos: 'SWITCH, SWICH, SIWCH' },
+  { codigo: '0372', articulo: 'CARCOOFRE_26_B', apodos: 'CARIBE, CARIBE FRESA' },
+  { codigo: '0374', articulo: 'CARCOOMANG_26_B', apodos: 'CARIBE, CARIBE MANGO' },
+  { codigo: '0375', articulo: 'CARCOOMANZ_26_B', apodos: 'CARIBE, CARIBE MANZANA' },
+  { codigo: '0371', articulo: 'CARCOODZN_26_B', apodos: 'CARIBE' },
+  { codigo: '0354', articulo: 'CARCOOTIN_26.6', apodos: 'CARIBE' },
+  { codigo: '0304', articulo: 'PAPELCP_26', apodos: 'PAPEL CLIPPER' },
+  { codigo: '0307', articulo: 'EXIS_26', apodos: 'ECONOMICO' },
+  { codigo: '0305', articulo: 'CPGAS16ML_26', apodos: 'GAS' },
+  { codigo: '0293', articulo: 'HIDRA FRESA', apodos: 'HIDRA' },
+];
+
+// "¿qué se vendió por producto?", "detalle por ruta por producto", "más vendidos"… sin nombrar un producto
+function pideDetalleProductos(texto) {
+  const t = normTxt(texto);
+  return /\b(por producto|por productos|por articulo|productos|articulos|mas vendid\w*|que se vendio|que vendio|que vendieron|que han vendido|top)\b/.test(t);
+}
+
+async function ventasPorProducto(texto, cfg) {
+  const porApodo = productosPorApodo(texto, [...(Array.isArray(cfg?.apodos) ? cfg.apodos : []), ...APODOS_BASE]);
+  const palabras = palabrasProducto(texto);
+  const general = !palabras.length && !porApodo && pideDetalleProductos(texto);
+  if (!palabras.length && !porApodo && !general) return null;
+  // Si nombran rutas (J203, j 205), solo esas
+  const rutasPedidas = new Set((normTxt(texto).match(/\bj\s?-?\d{3}\b/g) || []).map((x) => claveRuta(x.toUpperCase())));
+  let av = [], otc = [];
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia,otc:data->otcDia');
+    av = Array.isArray(r?.[0]?.av) ? r[0].av : [];
+    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+  } catch { return null; }
+  // El reporte de OTC trae todas las rutas del país: solo se cuentan las del equipo
+  // (las rutas dadas de alta en Contactos de WhatsApp y las que salen en el resumen del día).
+  const misRutas = new Set();
+  try {
+    for (const c of await listaContactos(cfg)) if (c.tipo === 'vendedor' && c.ruta) misRutas.add(claveRuta(c.ruta));
+    for (const f of await sb('resumen_vendedores?select=ruta&order=fecha.desc&limit=40')) if (f.ruta) misRutas.add(claveRuta(f.ruta));
+  } catch { /* sin filtro si no se pudo leer */ }
+  const esMia = (vendedor) => (!misRutas.size || misRutas.has(claveRuta(vendedor)))
+    && (!rutasPedidas.size || rutasPedidas.has(claveRuta(vendedor)));
+  av = av.filter((x) => esMia(x.vendedor));
+  otc = otc.filter((x) => esMia(x.vendedor));
+  const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
+  const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
+  const coincide = (...campos) => {
+    if (general) return 1;
+    if (porApodo) { // con apodo: los artículos dados de alta para ese nombre valen más
+      const [articulo, codigo] = campos;
+      if (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) return 100;
+    }
+    // Además del apodo, se busca por nombre con todas las palabras (por si el artículo vendido
+    // todavía no tiene apodo, p. ej. una presentación nueva)
+    const lista = palabras;
+    if (!lista.length) return 0;
+    const h = norm(campos.join(' '));
+    const tokens = h.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
+    // Coincide si la palabra está dentro del nombre, o si se parece a un pedazo del nombre
+    // (una letra de diferencia, o el pedazo empieza con la palabra: "swich" ~ "swichc")
+    return lista.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
+      || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2))).length;
+  };
+  const productos = {};
+  const sumar = (clave, nombre, tipo, ruta, cant, monto, puntos) => {
+    const p = productos[clave] || (productos[clave] = { producto: nombre, tipo, total_cantidad: 0, total_pesos: 0, por_ruta: {}, puntos });
+    p.total_cantidad += cant; p.total_pesos += monto;
+    const rr = p.por_ruta[ruta] || (p.por_ruta[ruta] = { cantidad: 0, pesos: 0 });
+    rr.cantidad += cant; rr.pesos += monto;
+  };
+  for (const x of av) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.marca) : 0;
+    if (!pts) continue;
+    sumar(`av:${x.articulo}`, x.articulo + (x.marca ? ` (${x.marca})` : ''), 'paquetes', claveRuta(x.vendedor), Number(x.paquetes) || 0, Number(x.monto) || 0, pts);
+  }
+  for (const x of otc) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.codigoArticulo) : 0;
+    if (!pts) continue;
+    sumar(`otc:${x.codigoArticulo || x.articulo}`, `${x.articulo}${x.codigoArticulo ? ` [${x.codigoArticulo}]` : ''} (OTC)`, 'piezas', claveRuta(x.vendedor), Number(x.unidadesVendidas) || 0, Number(x.monto) || 0, pts);
+  }
+  if (general) {
+    // Resumen: lo más vendido del equipo y, por ruta, sus artículos más vendidos
+    const todos = Object.values(productos);
+    const porRuta = {};
+    for (const p of todos) {
+      for (const [ruta, v] of Object.entries(p.por_ruta)) {
+        (porRuta[ruta] = porRuta[ruta] || []).push({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) });
+      }
+    }
+    const top = (arr, n) => arr.sort((a, b) => b.pesos - a.pesos || b.cantidad - a.cantidad).slice(0, n);
+    // Totales exactos por ruta (para que la IA no sume a mano): mismos que la tabla de la app
+    const totales = {};
+    for (const x of av) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.paquetes += Number(x.paquetes) || 0; t.venta_pesos += Number(x.monto) || 0;
+    }
+    for (const x of otc) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.otc_pesos += Number(x.monto) || 0; t.otc_piezas += Number(x.unidadesVendidas) || 0;
+    }
+    const redondear = (t) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v)]));
+    return {
+      fecha_del_detalle: fecha,
+      tipo_consulta: 'detalle general por producto',
+      rutas_del_equipo: [...misRutas].sort(),
+      ...(rutasPedidas.size ? { solo_rutas: [...rutasPedidas] } : {}),
+      encontrado: todos.length > 0,
+      mas_vendidos_equipo: top(todos.map((p) => ({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(p.total_cantidad), pesos: Math.round(p.total_pesos), rutas: Object.keys(p.por_ruta).length })), 10),
+      por_ruta: Object.fromEntries(Object.entries(porRuta).sort().map(([r, arr]) => [r, {
+        totales_del_dia: redondear(totales[r] || {}), articulos_distintos: arr.length, top: top(arr, rutasPedidas.size ? 15 : 6),
+      }])),
+      nota: 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC), ordenado por pesos. "top" por ruta son sus artículos más vendidos; si piden uno en específico, que lo pregunten por nombre.',
+    };
+  }
+  // Se quedan: los de apodo (100) y, de los demás, los que coinciden con más palabras
+  const maxPts = Math.max(0, ...Object.values(productos).filter((p) => p.puntos < 100).map((p) => p.puntos));
+  const lista = Object.values(productos)
+    .filter((p) => p.puntos >= 100 || (maxPts > 0 && p.puntos === maxPts))
+    .map(({ puntos: _p, ...p }) => ({ ...p, total_cantidad: Math.round(p.total_cantidad), total_pesos: Math.round(p.total_pesos),
+      por_ruta: Object.fromEntries(Object.entries(p.por_ruta).sort((a, b) => b[1].cantidad - a[1].cantidad)
+        .map(([k, v]) => [k, { cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) }])) }))
+    .sort((a, b) => b.total_cantidad - a.total_cantidad)
+    .slice(0, 15);
+  return {
+    fecha_del_detalle: fecha,
+    palabras_buscadas: porApodo ? porApodo.frases : palabras,
+    ...(porApodo ? { buscado_por_apodo: true } : {}),
+    encontrado: lista.length > 0,
+    productos: lista,
+    nota: lista.length
+      ? `Venta real por artículo del detalle del día, SOLO de las rutas del equipo (${[...misRutas].sort().join(', ')}). Paquetes en avance, piezas en OTC. Las rutas que no aparecen no vendieron ese producto.`
+      : `En el detalle de ventas del día NO hay ninguna venta de ese producto en las rutas del equipo (${[...misRutas].sort().join(', ')}).`,
+  };
+}
+
+async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
+  const key = process.env.OPENAI_API_KEY;
+  const fallback = { texto: 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.', mencionados: [] };
+  if (!key) return fallback;
+  try {
+    const [datos, retroPrev, todos, porProducto] = await Promise.all([
+      contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg), ventasPorProducto(texto, cfg),
+    ]);
+    if (porProducto) datos.venta_por_producto = porProducto;
+    // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
+    const rutaDeMencion = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.telefono) rutaDeMencion[mencion(x.telefono)] = claveRuta(x.ruta);
+    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX()
+      ? String(retroPrev.texto).replace(/@(\d{10,13})/g, (m, d) => (rutaDeMencion[d] ? `@${rutaDeMencion[d]}` : ''))
+      : '';
+    const vendedores = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.activo !== false) vendedores[claveRuta(x.ruta)] = primerNombre(x.nombre || '', claveRuta(x.ruta));
+    const esJefe = c.tipo === 'equipo';
+    const titulo = tratoDe(c);
+    // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
+    const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+    const sistema = [
+      'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
+      tono,
+      porProducto?.tipo_consulta
+        ? 'Reglas: formato WhatsApp (*negritas*), una sección corta por ruta (máximo 25 líneas en total), un par de emojis máximo.'
+        : 'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
+      'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
+      'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'TOTALES: nunca sumes ni restes tú. Para totales usa los ya calculados ("totales_del_dia" por ruta, o los indicadores del día como "OTC del día" y "Venta del día"). Los "top" son solo los artículos principales, NO el total de la ruta.',
+      'DETALLE POR PRODUCTO: si "venta_por_producto" trae "tipo_consulta": "detalle general por producto", da lo más vendido del equipo y por ruta sus artículos principales (cantidad con su unidad y pesos). Sí tienes ese detalle: nunca digas que no lo tienes. Si es mucho, resume y ofrece el detalle de una ruta.',
+      'PRODUCTOS: si preguntan por la venta de un producto o artículo en específico (ej. Switch, un sabor, una presentación), contesta SOLO con "venta_por_producto": es la venta real por artículo. Si "encontrado" es false o el producto no aparece ahí, di claramente que hoy no hay venta registrada de ese producto (y la fecha del detalle). NUNCA uses las marcas, metas o porcentajes de otros indicadores para responder sobre un producto, y nunca inventes ventas.',
+      'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
+      esJefe
+        ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
+        : 'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
+      'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
+      'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
+      `Te habla: ${c.nombre || 'un vendedor'} (${esJefe ? `tu ${titulo}` : 'ruta ' + claveRuta(c.ruta)}).`,
+      'Conversación: los mensajes previos (si hay) son de los últimos 15 minutos con esta misma persona. Úsalos para entender respuestas cortas como "sí", "dale", "¿y la J206?" o "¿por qué?". Si contesta que sí a algo que ofreciste, cúmplelo de inmediato con los datos.',
+      'Al final puedes ofrecer UNA sola opción de seguimiento, solo si suma información nueva que no diste (p. ej. detalle por ruta, qué clientes le faltan, qué marca empujar). Nunca ofrezcas repetir lo que ya dijiste ni preguntes por preguntar; si ya diste todo lo útil, no ofrezcas nada.',
+      ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
+      `Vendedores (ruta: nombre): ${JSON.stringify(vendedores)}`,
+      `Datos (JSON): ${JSON.stringify(datos)}`,
+    ].join('\n');
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.8,
+        max_tokens: porProducto?.tipo_consulta ? 900 : 300,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(texto || '').slice(0, 800) }],
+      }),
+    });
+    if (!r.ok) return fallback;
+    const j = await r.json();
+    const salida = (j.choices?.[0]?.message?.content || '').trim();
+    return salida ? aplicarMenciones(salida, todos) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// ------------------------------------------------------------------ 🔥 RETRO AL GRUPO (cada hora, 9 am – 8 pm)
+//   GET /api/wa-resumen?modo=retro_grupo            → solo manda si hay avance nuevo desde la última retro
+//   GET /api/wa-resumen?modo=retro_grupo&forzar=1   → manda aunque no haya avance nuevo (pruebas)
+// Señala a los más bajos en venta del día, Sin Vuala y reto del día como candidatos a
+// "La Tercera Mano del Pachuco", y a los que siguen en 0 desde que salieron del CLO.
+const GRUPO_RETRO = process.env.WA_GRUPO_RETRO || '5213221821493-1614005509@g.us';
+const RETRO_DESDE = 9, RETRO_HASTA = 20;          // 9 am a 8 pm (hora de México)
+const MIN_EN_CERO = Number(process.env.RETRO_MIN_EN_CERO || 45); // minutos desde la salida del CLO
+
+const n = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const mencion = (tel) => (tel ? `521${String(tel).replace(/\D/g, '').slice(-10)}` : null);
+
+function horaActualMX() {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(new Date());
+  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
+  return { h: g('hour') % 24, min: g('minute') };
+}
+
+// ⏱️ Hora de salida del CLO por ruta → { J201: 1760710000000, ... }
+// Sale del panel de Tiempos (su propio Supabase): tabla panel_kv, key "board-activo",
+// value = { fecha: 'YYYY-MM-DD', rutas: { J201: { areas: { salida_ruta: { ts } } } } }.
+// Si no hay dato, a los que van en 0 se les señala solo a partir de las 11 am.
+const TIEMPOS_URL = (process.env.TIEMPOS_SUPABASE_URL || 'https://nzbsmkscvzttekkwgkqz.supabase.co').replace(/\/+$/, '');
+const TIEMPOS_KEY = process.env.TIEMPOS_SUPABASE_KEY || 'sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU';
+
+async function salidasCLO(fecha) {
+  try {
+    const r = await fetch(`${TIEMPOS_URL}/rest/v1/panel_kv?key=eq.board-activo&select=value`, {
+      headers: { apikey: TIEMPOS_KEY },
+    });
+    if (!r.ok) return {};
+    const board = (await r.json())[0]?.value;
+    if (!board || board.fecha !== fecha) return {};
+    const out = {};
+    for (const [ruta, datos] of Object.entries(board.rutas || {})) {
+      const ts = datos?.areas?.salida_ruta?.ts;
+      if (ts) out[claveRuta(ruta)] = ts;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// ------------------------------------------------------------------ 📊 INDICADORES DE ROBOTINA
+// Se prenden / apagan desde SMART-TRACK (pestaña WhatsApp → data.whatsappBot.indicadores):
+//   { venta_dia: { retro, ia, tercera }, sin_vuala: {...}, 'rally_<id>': {...}, ... }
+//   retro   → aparece en la retro de cada hora al grupo
+//   ia      → Robotina lo conoce cuando le preguntan
+//   tercera → cuenta para elegir a los candidatos a La Tercera Mano del Pachuco
+// Lo que no esté configurado usa los valores por defecto de abajo.
+const INDICADORES_BASE = {
+  venta_dia:   { nombre: 'Venta del día',          unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  sin_vuala:   { nombre: 'OTC Sin Vuala',          unidad: 'pz',  def: { retro: true,  ia: true, tercera: true } },
+  reto:        { nombre: 'Reto del día',           unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  otc_dia:     { nombre: 'OTC del día',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  otc_semana:  { nombre: 'OTC semanal',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: false } },
+  // Del periodo (mes): se comparan contra el ritmo esperado a la fecha, no contra la meta completa
+  mes_max:       { nombre: 'MAX del periodo',       unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_open:      { nombre: 'OPEN del periodo',      unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_champions: { nombre: 'CHAMPIONS del periodo', unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+};
+// Por marca (se arman solas con las marcas que trae el snapshot):
+//   open_<clave>  → marca OPEN del periodo    champ_<clave> → marca CHAMPIONS del periodo
+//   dia_<clave>   → marca del avance del día
+const DEF_MARCA = { retro: false, ia: true, tercera: false };
+const nomChamp = (t) => String(t || '').replace(/^CHAM[_ ]/i, '').replace(/^CH /, '');
+const DEF_RALLY = { retro: true, ia: true, tercera: true };
+
+// Rallies OTC activos que vienen en el snapshot (extra.rallies), sin repetir.
+function ralliesDe(filas) {
+  const vistos = {};
+  for (const f of filas) {
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (r?.id && !vistos[r.id]) vistos[r.id] = r;
+    }
+  }
+  return Object.values(vistos);
+}
+
+// Lista de indicadores con su configuración final.
+function indicadoresConfig(cfg, filas) {
+  const conf = cfg?.indicadores || {};
+  const lista = Object.entries(INDICADORES_BASE).map(([clave, b]) => ({
+    clave, nombre: b.nombre, unidad: b.unidad, exclusivo: false, ...b.def, ...(conf[clave] || {}),
+  }));
+  // Marcas: OPEN, CHAMPIONS y del día
+  const marcas = { open: {}, champ: {}, dia: {} };
+  for (const f of filas) {
+    for (const x of (f.extra?.marcas || [])) if (x?.clave) marcas.open[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_champions || [])) if (x?.clave) marcas.champ[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_dia || [])) if (x?.clave) marcas.dia[x.clave] = x.nombre || x.clave;
+  }
+  const prefijo = { open: 'OPEN · ', champ: 'CHAMPIONS · ', dia: 'Hoy · ' };
+  for (const tipo of ['open', 'champ', 'dia']) {
+    for (const [k, nom] of Object.entries(marcas[tipo])) {
+      const clave = `${tipo}_${k}`;
+      lista.push({ clave, nombre: prefijo[tipo] + (tipo === 'champ' ? nomChamp(nom) : nom), unidad: 'paq', exclusivo: false, ...DEF_MARCA, ...(conf[clave] || {}) });
+    }
+  }
+  for (const r of ralliesDe(filas)) {
+    const clave = `rally_${r.id}`;
+    lista.push({
+      clave, nombre: `Rally ${r.nombre || 'OTC'}`, unidad: r.unidad === 'piezas' ? 'pz' : '$', exclusivo: !!r.exclusivo,
+      ...DEF_RALLY, ...(conf[clave] || {}),
+    });
+  }
+  return lista;
+}
+
+const r0 = (v) => (v === null || v === undefined ? null : Math.round(v)); // enteros, igual que la tabla de la app
+const medida = (avance, meta, extra = {}) => {
+  const a = n(avance), o = n(meta);
+  if (a === null && !o) return null;
+  return { avance: r0(a || 0), meta: o ? r0(o) : null, falta: o ? r0(Math.max(0, o - (a || 0))) : null, pct: o ? Math.round(((a || 0) / o) * 100) : null, ...extra };
+};
+
+// Indicador del periodo: además del % de la meta trae "ritmo" (% contra lo esperado a la fecha).
+// "comp" es el número con el que se compara entre rutas (ritmo en el periodo, % en el día).
+const medidaPeriodo = (avance, meta, porDia, esperado) => {
+  const x = medida(avance, meta);
+  if (!x || x.pct === null) return x;
+  const ritmo = esperado ? Math.round((x.pct / esperado) * 100) : null;
+  return { ...x, ritmo, comp: ritmo ?? x.pct, necesita_por_dia: n(porDia) === null ? null : r0(n(porDia)) };
+};
+
+// Valor de cada indicador para una ruta.
+function valorIndicador(clave, f, m, rt) {
+  const ex = f.extra || {};
+  const t = ex.tabs || {};
+  if (clave === 'mes_max') return medidaPeriodo(t.max?.avance ?? f.venta_mes, t.max?.objetivo ?? f.objetivo_mes, t.max?.por_dia ?? ex.necesita_diario, m.esperado);
+  if (clave === 'mes_open') return medidaPeriodo(t.open?.avance, t.open?.objetivo, t.open?.por_dia, m.esperado);
+  if (clave === 'mes_champions') return medidaPeriodo(t.champions?.avance, t.champions?.objetivo, t.champions?.por_dia, m.esperado);
+  if (clave.startsWith('open_')) {
+    const x = (ex.marcas || []).find((y) => `open_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, x.por_dia, m.esperado) : null;
+  }
+  if (clave.startsWith('champ_')) {
+    const x = (ex.marcas_champions || []).find((y) => `champ_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, null, m.esperado) : null;
+  }
+  if (clave.startsWith('dia_')) {
+    const x = (ex.marcas_dia || []).find((y) => `dia_${y.clave}` === clave);
+    return x ? medida(x.vendido, x.objetivo) : null;
+  }
+  if (clave === 'venta_dia') return medida(m.ventaDia, m.objDia);
+  if (clave === 'sin_vuala') { const sv = sinVualaDe(f); return sv ? medida(sv.piezas, sv.minimo) : null; }
+  if (clave === 'reto') return rt ? medida(rt.v, rt.meta, { lugar: rt.lugar }) : null;
+  if (clave === 'otc_dia') return medida(ex.otc_dia, ex.otc_dia_objetivo);
+  if (clave === 'otc_semana') return medida(ex.otc_semana?.vendido, ex.otc_semana?.objetivo);
+  if (clave === 'efectividad') return m.efectividad === null ? null : { avance: Math.round(m.efectividad), meta: 100, falta: null, pct: Math.round(m.efectividad) };
+  if (clave.startsWith('rally_')) {
+    const r = (ex.rallies || []).find((x) => `rally_${x.id}` === clave);
+    if (!r) return null; // la ruta no participa
+    const dia = medida(r.avanceDia, r.objetivoDia);
+    const total = medida(r.avanceTotal, r.objetivoFinal);
+    // Para comparar se usa el objetivo del día; si el rally no tiene, el total.
+    const base = dia?.meta ? dia : total;
+    return base ? { ...base, dia, total, cubierto_total: !!(total?.meta && total.avance >= total.meta) } : null;
+  }
+  return null;
+}
+
+// Indicadores por ruta para una fecha (lo usan la retro y la IA).
+async function tablaIndicadores(fecha, cfg, { filas = null, todos = null } = {}) {
+  filas = filas || await filasDeFecha(fecha);
+  todos = todos || await listaContactos(cfg);
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const retoPorRuta = Object.fromEntries((av?.tabla || []).map((r, i) => [r.ruta, { ...r, lugar: i + 1 }]));
+  const inds = indicadoresConfig(cfg, filas);
+  const rutas = filas.map((f) => {
+    const ruta = claveRuta(f.ruta);
+    const m = calcular(f, filas);
+    const valores = {};
+    for (const i of inds) {
+      const v = valorIndicador(i.clave, f, m, retoPorRuta[ruta]);
+      if (v) valores[i.clave] = v;
+    }
+    return { ruta, f, m, valores };
+  });
+  return { filas, todos, av, inds, rutas };
+}
+
+// Indicadores que Robotina conoce para contestar ({ J201: { 'Venta del día': {...}, ... } }).
+// A vendedores nunca se les dan los rallies exclusivos de Supervisor-1.
+async function indicadoresParaIA(fecha, cfg, { filas, todos, equipo }) {
+  try {
+    const t = await tablaIndicadores(fecha, cfg, { filas, todos });
+    const usar = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+    const out = {};
+    for (const r of t.rutas) {
+      const x = {};
+      for (const i of usar) {
+        if (r.valores[i.clave]) x[i.nombre + (i.exclusivo ? ' (exclusivo Supervisor-1)' : '')] = { ...r.valores[i.clave], unidad: i.unidad };
+      }
+      out[r.ruta] = x;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+async function datosRetro(fecha, cfg) {
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const salidas = await salidasCLO(fecha);
+  const ahora = Date.now();
+  // En el grupo nunca se exponen los rallies exclusivos de Supervisor-1
+  const enRetro = t.inds.filter((i) => i.retro && !i.exclusivo);
+  const enTercera = t.inds.filter((i) => i.tercera && !i.exclusivo);
+
+  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, m, valores }) => {
+    const c = vend[ruta];
+    const salida = salidas[ruta] ? new Date(salidas[ruta]) : null;
+    const minSalida = salida && !Number.isNaN(salida.getTime()) ? Math.round((ahora - salida.getTime()) / 60000) : null;
+    const cmp = (v) => (v ? (v.comp ?? v.pct) : null);
+    const partes = enTercera.map((i) => cmp(valores[i.clave])).filter((p) => p !== null && p !== undefined).map((p) => Math.min(100, p));
+    const indicadores = {};
+    for (const i of enRetro) if (valores[i.clave]) indicadores[i.nombre] = { ...valores[i.clave], unidad: i.unidad };
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      venta_dia: Math.round(n(m.ventaDia) || 0),
+      pct_dia: m.pctDia === null ? null : Math.round(m.pctDia),
+      indicadores,
+      salida_clo: salida ? horaMXCorta(salida) : null,
+      min_desde_salida: minSalida,
+      indice: partes.length ? Math.round(partes.reduce((s, x) => s + x, 0) / partes.length) : null,
+    };
+  });
+
+  const { h } = horaActualMX();
+  const conDia = rutas.filter((r) => r.pct_dia !== null).sort((a, b) => a.pct_dia - b.pct_dia);
+  // En cero: ya salió del CLO hace ≥ 45 min y no ha vendido; sin dato de salida, solo desde las 11 am.
+  const enCero = rutas.filter((r) => r.venta_dia === 0 && (
+    r.min_desde_salida !== null ? r.min_desde_salida >= MIN_EN_CERO : (r.salida_clo === null && h >= 11)
+  ));
+  // Los 3 más bajos de cada indicador de la retro (solo los que no lo han cumplido)
+  const abajo_por_indicador = {};
+  for (const i of enRetro) {
+    const cv = (r) => { const v = r.indicadores[i.nombre]; return v ? (v.comp ?? v.pct) : null; };
+    const lista = rutas
+      .filter((r) => cv(r) !== null && cv(r) !== undefined && cv(r) < 100)
+      .sort((a, b) => cv(a) - cv(b))
+      .slice(0, 3)
+      .map((r) => ({ ruta: r.ruta, nombre: r.nombre, mencion: r.mencion, ...r.indicadores[i.nombre] }));
+    if (lista.length) abajo_por_indicador[i.nombre] = lista;
+  }
+  const quita = ({ min_desde_salida, ...r }) => r;
+  // Agrega si ya cubrió su meta del día y cuánto le falta
+  const conMeta = (r) => {
+    const v = r?.indicadores?.['Venta del día'];
+    const falta = v?.falta ?? null;
+    return { ...r, cumple_meta_dia: r.pct_dia !== null && r.pct_dia >= 100, falta_meta_dia: falta };
+  };
+  return {
+    fecha,
+    hora: `${h}:00`,
+    indicadores_activos: enRetro.map((i) => `${i.nombre} (${i.unidad})`),
+    reto: t.av ? { marca: t.av.nombre, equipo: t.av.total, meta_equipo: t.av.metaTotal } : null,
+    // Líder = quien más paquetes lleva hoy (como la tabla "POR RUTA · VENDIDO HOY" de la app)
+    lider_dia: rutas.length ? conMeta(quita([...rutas].sort((a, b) => b.venta_dia - a.venta_dia)[0])) : null,
+    // Quien va más alto contra SU meta del día (puede ser otra ruta)
+    mejor_pct_dia: conDia.length ? conMeta(quita(conDia[conDia.length - 1])) : null,
+    // Los únicos a los que se puede felicitar: ya cubrieron su meta de venta del día
+    cumplieron_meta_dia: rutas.filter((r) => r.pct_dia !== null && r.pct_dia >= 100).map((r) => ({ ruta: r.ruta, nombre: r.nombre, mencion: r.mencion, venta_dia: r.venta_dia, pct_dia: r.pct_dia })),
+    tercera_mano: rutas.filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice).slice(0, 3).map(quita),
+    abajo_por_indicador,
+    en_cero: enCero.map(quita),
+    rutas,
+  };
+}
+
+function horaMXCorta(d) {
+  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+}
+
+const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${Math.round(v).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${r0(v)} ${u}`);
+
+// Texto sin IA (respaldo si OpenAI falla)
+function textoRetroFijo(d) {
+  const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
+  const L = [`🔥 *RETRO ${d.hora}* · ¿Quién se lleva La Tercera Mano del Pachuco? 🖐️`];
+  if (d.lider_dia) {
+    const l = d.lider_dia;
+    L.push(l.cumple_meta_dia
+      ? `🏆 ${l.ruta} ${l.nombre} va al frente con ${Math.round(l.venta_dia)} paq y ya cubrió su meta del día. ¡Felicidades!`
+      : `🥇 ${l.ruta} ${l.nombre} va al frente con ${Math.round(l.venta_dia)} paq, pero todavía le faltan ${l.falta_meta_dia ?? '—'} paq para su meta.`);
+  }
+  if (d.mejor_pct_dia && d.mejor_pct_dia.ruta !== d.lider_dia?.ruta) L.push(`🎯 Más cerca de su meta: ${d.mejor_pct_dia.ruta} ${d.mejor_pct_dia.nombre} (${d.mejor_pct_dia.pct_dia}%)${d.mejor_pct_dia.cumple_meta_dia ? ' ✅' : `, le faltan ${d.mejor_pct_dia.falta_meta_dia ?? '—'} paq`}.`);
+  if (d.en_cero.length) {
+    L.push('', '🥶 *Siguen en CERO:*');
+    for (const r of d.en_cero) L.push(`• ${tag(r)}${r.salida_clo ? ` salió del CLO a las ${r.salida_clo}` : ''} y no ha vendido nada. ¡Primer cliente YA!`);
+  }
+  if (d.tercera_mano.length) {
+    L.push('', '🖐️ *Candidatos a la Tercera Mano:*');
+    for (const r of d.tercera_mano) {
+      const det = Object.entries(r.indicadores)
+        .filter(([, v]) => (v.comp ?? v.pct) !== null && (v.comp ?? v.pct) < 100)
+        .map(([nom, v]) => `${nom} ${fmtU(v.avance, v.unidad)}/${fmtU(v.meta, v.unidad)}`)
+        .join(' · ');
+      L.push(`• ${tag(r)}${det ? ` – ${det}` : ''}`);
+    }
+  }
+  return L.join('\n');
+}
+
+async function textoRetroIA(d, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK, y escribes en el GRUPO de WhatsApp de los vendedores de ruta de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Cada hora das retro del AVANCE DEL DÍA. La "Tercera Mano del Pachuco" es el castigo/burla para los 3 más bajos del día; los de "tercera_mano" son los candidatos.',
+    `Indicadores que se siguen hoy: ${d.indicadores_activos.join(', ') || 'venta del día'}. Solo habla de esos.`,
+    'Estructura (formato WhatsApp, *negritas*, máximo 16 líneas):',
+    '1) Una línea de arranque con la hora y quién va al frente: "lider_dia" (más paquetes hoy, di sus paquetes) y, si es otra ruta, "mejor_pct_dia" (la más cerca de su meta, con su %).',
+    'REGLA DE RECONOCIMIENTO: solo puedes FELICITAR (felicidades, bien hecho, aplauso, chingón, crack, etc.) a quien aparece en "cumplieron_meta_dia", porque ya cubrió su meta. A quien va al frente pero NO ha cubierto su meta ("cumple_meta_dia": false) solo reconoce que va adelante y recuérdale cuánto le falta ("falta_meta_dia"): acercarse no es suficiente. Nunca digas "ritmo" para el % del día; es el % de su meta de hoy.',
+    '2) Si hay "en_cero": señálalos primero, di a qué hora salieron del CLO si viene el dato, y exígeles su primera venta ya.',
+    '3) Los candidatos a la Tercera Mano: a cada uno dile en una línea qué le falta en cada indicador donde va abajo (usa el nombre del indicador y los números exactos con su unidad) y un consejo concreto y corto.',
+    '4) Si hay un Rally activo, una línea con quién va más abajo en el rally (de "abajo_por_indicador").',
+    '5) Cierra con una frase corta que prenda al equipo.',
+    'Para mencionar a alguien escribe EXACTAMENTE su campo "mencion" precedido de @ (ej. @5213221234567). Si no tiene mencion, usa ruta y nombre.',
+    'Usa SOLO los números del JSON; nunca inventes cifras, premios ni castigos distintos. Unidades: paq = paquetes, pz = piezas, $ = pesos.',
+    'Indicadores del periodo (MAX/OPEN/CHAMPIONS y sus marcas): "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = va en ritmo) y "necesita_por_dia" lo que debe vender diario para llegar; úsalos en vez del % de la meta completa.',
+    'Límites: la carrilla es sobre los números y el trabajo, nunca sobre físico, familia, género, orientación, religión u origen; nada sexual; nada de amenazas.',
+    `Datos (JSON): ${JSON.stringify({ ...d, rutas: undefined })}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.9,
+        max_tokens: 700,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro de esta hora para el grupo.' }],
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function modoRetroGrupo(req) {
+  const url = new URL(req.url);
+  const forzar = url.searchParams.get('forzar') === '1';
+  const cfg = await configBot();
+  if (cfg?.retroGrupoActivo === false) return json({ total: 0, mensajes: [], nota: 'retro del grupo desactivada' });
+  const { h } = horaActualMX();
+  if (!forzar && (h < RETRO_DESDE || h > RETRO_HASTA)) return json({ total: 0, mensajes: [], nota: `fuera de horario (${h} h)` });
+
+  const hoy = fechaMX();
+  const filasHoy = await filasDeFecha(hoy);
+  if (!filasHoy.length) return json({ total: 0, mensajes: [], nota: 'sin avance de hoy todavía' });
+
+  // Solo una retro por cada avance nuevo
+  const ultimo = filasHoy.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || '';
+  const previo = await leerEstado('retro_grupo');
+  if (!forzar && previo?.fecha === hoy && previo?.actualizado === ultimo) {
+    return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
+  }
+
+  const d = await datosRetro(hoy, cfg);
+  if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
+  const texto = (await textoRetroIA(d, cfg)) || textoRetroFijo(d);
+  // Solo se mencionan los números que de verdad aparecen en el texto
+  const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
+
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
+  return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
+}
+
+// ------------------------------------------------------------------ diagnóstico
+async function modoDiag() {
+  const hoy = fechaMX();
+  const cfg = await configBot();
+  const [lista, resumen, previos] = await Promise.all([
+    listaContactos(cfg),
+    sb('resumen_vendedores?select=ruta,fecha&order=fecha.desc&limit=30'),
+    ultimosPorRuta({ antesDe: hoy }),
+  ]);
+  const llave = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return json({
+    version: 'diag-3',
+    hoy,
+    origen_contactos: Array.isArray(cfg?.contactos) ? 'SMART-TRACK (pestaña WhatsApp)' : 'tabla vendedores_whatsapp',
+    plantillas_editadas: Object.keys(cfg?.plantillas || {}),
+    supabase_url: (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/^https:\/\/([a-z0-9]{6}).*/, '$1…'),
+    tipo_llave: llave.startsWith('sb_secret') ? 'sb_secret' : llave.startsWith('eyJ') ? 'jwt' : llave ? 'otra' : 'VACÍA',
+    contactos: lista.map((c) => ({ ruta: c.ruta, clave: claveRuta(c.ruta), tipo: c.tipo, activo: c.activo, matutino: c.matutino, alerta: c.alerta, tel: '…' + c.telefono.slice(-4) })),
+    resumen_ultimas: resumen.slice(0, 10),
+    claves_antes_de_hoy: Object.keys(previos),
+  });
+}
+
+// ------------------------------------------------------------------ handler
+export default async function handler(req) {
+  if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
+  const modo = new URL(req.url).searchParams.get('modo');
+  try {
+    if (modo === 'matutino') return await modoMatutino(req);
+    if (modo === 'alerta') return await modoAlerta(req);
+    if (modo === 'dia') return await modoDia(req);
+    if (modo === 'diag') return await modoDiag();
+    if (modo === 'riesgo') {
+      const cfg = await configBot();
+      const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+      if (!fecha) return json({ texto: 'sin datos' });
+      const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
+      return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
+    }
+    if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
+    // El robot de PowerStreet avisa que terminó de cargar datos (para no volver a refrescar enseguida)
+    if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
+    if (modo === 'retro_grupo') return await modoRetroGrupo(req);
+    return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
+  } catch (e) {
+    return json({ error: String(e.message || e) }, 500);
+  }
 }
