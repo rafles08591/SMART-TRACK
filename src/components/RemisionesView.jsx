@@ -204,8 +204,8 @@ export async function marcarPagina(pagina) {
     if (!r.codigo || r.yaEscrito) continue;
     const texto = codigoCorto(r.codigo);
     const fuente = (t) => `bold ${t}px "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive`;
-    // Grande, como cuando se escribe con pluma: ~2.8 veces la altura del renglón
-    let tam = Math.max(34, Math.round(r.pos.h * 2.8));
+    // Grande, como cuando se escribe con pluma: ~2.4 veces la altura del renglón
+    let tam = Math.max(30, Math.round(r.pos.h * 2.4));
     const x = r.pos.x !== null ? r.pos.x + r.pos.h * 0.4 : c.width * 0.78;
     // Solo se achica si se saldría de la hoja
     ctx.font = fuente(tam);
