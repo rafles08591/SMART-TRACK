@@ -282,7 +282,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
       for (const p of nuevas) for (const r of p.renglones) if (r.yaEscrito && r.codigo && !equiv[r.ean]) aprendidas[r.ean] = r.codigo;
       if (Object.keys(aprendidas).length) setEquiv((q) => ({ ...q, ...aprendidas }));
       for (const p of nuevas) p.marcada = p.esRemision && p.renglones.length ? await marcarPagina(p) : null;
-      setPaginas((prev) => [...prev, ...nuevas]);
+      setPaginas(nuevas); // una carga nueva reemplaza a la anterior en pantalla
       const rem = nuevas.filter((p) => p.esRemision);
       const sinCod = rem.reduce((s, p) => s + p.renglones.filter((r) => !r.codigo).length, 0);
       setEstado(`✅ ${nuevas.length} páginas leídas: ${rem.length} remisiones con ${rem.reduce((s, p) => s + p.renglones.length, 0)} renglones`
@@ -290,7 +290,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
         + (sinCod ? ` · ⚠️ ${sinCod} sin código: escríbelo abajo` : ""));
     } catch (err) {
       setEstado("❌ " + (err?.message || err));
-      if (nuevas.length) setPaginas((prev) => [...prev, ...nuevas]);
+      if (nuevas.length) setPaginas(nuevas);
     } finally {
       setTrabajando(false);
     }
