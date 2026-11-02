@@ -206,7 +206,55 @@ function textoRiesgo(cfg, rk, c) {
   }
   return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
 }
+async function textoOTCDesglose(fecha, todos, soloRuta = null) {
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
+    const otc = (r[0]?.otc || []).filter(x => x.fecha === fecha);
+    if (!otc.length) return '';
 
+    const porVend = {};
+    for (const x of otc) {
+      const ruta = claveRuta(x.vendedor);
+      if (soloRuta && ruta !== claveRuta(soloRuta)) continue;
+      if (!porVend[ruta]) porVend[ruta] = { piezas: 0, pesos: 0, arts: {} };
+      const art = x.articulo || 'Sin nombre';
+      porVend[ruta].piezas += Number(x.unidadesVendidas) || 0;
+      porVend[ruta].pesos += Number(x.monto) || 0;
+      if (!porVend[ruta].arts[art]) porVend[ruta].arts[art] = { pz: 0, pesos: 0 };
+      porVend[ruta].arts[art].pz += Number(x.unidadesVendidas) || 0;
+      porVend[ruta].arts[art].pesos += Number(x.monto) || 0;
+    }
+
+    const nombres = {};
+    for (const c of todos) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = primerNombre(c.nombre, c.ruta);
+
+    const lineas = [];
+    let totalPz = 0, totalPesos = 0;
+
+    const rutas = Object.keys(porVend).sort();
+    for (const ruta of rutas) {
+      const v = porVend[ruta];
+      totalPz += v.piezas;
+      totalPesos += v.pesos;
+      const nom = nombres[ruta] || ruta;
+      lineas.push(`\n${ruta} ${nom} · $${Math.round(v.pesos).toLocaleString('es-MX')} · ${Math.round(v.piezas)} pz`);
+      const arts = Object.entries(v.arts).sort((a, b) => b[1].pz - a[1].pz);
+      for (const [art, d] of arts) {
+        lineas.push(`• ${art}: ${Math.round(d.pz)} pz · $${Math.round(d.pesos).toLocaleString('es-MX')}`);
+      }
+    }
+
+    if (!lineas.length) return '';
+
+    const encabezado = soloRuta
+      ? `📦 *Tu OTC del día*\nTotal: $${Math.round(totalPesos).toLocaleString('es-MX')} · ${Math.round(totalPz)} pz`
+      : `📦 *OTC del día*\nTotal equipo: $${Math.round(totalPesos).toLocaleString('es-MX')} · ${Math.round(totalPz)} pz`;
+
+    return encabezado + '\n' + lineas.join('\n');
+  } catch {
+    return '';
+  }
+}
 // ------------------------------------------------------------------ avance del día
 // Lo dispara la app cada vez que Gerente / Supervisor cargan el Avance del día.
 async function modoDia(req) {
