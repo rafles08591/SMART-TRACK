@@ -9,7 +9,7 @@ export const RUTAS = ["J201","J202","J203","J204","J205","J206","J207"].map((n) 
 
 export const NOMBRES = {
   "RUTA J201": "Francisco Javier",
-  "RUTA J202": "Riqui Martín",
+  "RUTA J202": "Christian Velazco",
   "RUTA J203": "Ana Paola",
   "RUTA J204": "Noema Natalia",
   "RUTA J205": "Riqui Martin",
