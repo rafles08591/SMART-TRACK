@@ -201,6 +201,7 @@ function textoRiesgo(cfg, rk, c) {
 
 async function textoOTCDesglose(fecha, todos, soloRuta = null) {
   try {
+    const RUTAS_LOCALES = new Set(['J201', 'J202', 'J203', 'J204', 'J205', 'J206', 'J207']);
     const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
     const otc = (r[0]?.otc || []).filter(x => x.fecha === fecha);
     if (!otc.length) return '';
@@ -208,6 +209,7 @@ async function textoOTCDesglose(fecha, todos, soloRuta = null) {
     const porVend = {};
     for (const x of otc) {
       const ruta = claveRuta(x.vendedor);
+      if (!RUTAS_LOCALES.has(ruta)) continue;
       if (soloRuta && ruta !== claveRuta(soloRuta)) continue;
       if (!porVend[ruta]) porVend[ruta] = { piezas: 0, pesos: 0, arts: {} };
       const art = x.articulo || 'Sin nombre';
