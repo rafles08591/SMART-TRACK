@@ -153,30 +153,34 @@ async function modoMatutino(req) {
       });
       continue;
     }
-    if (c.tipo === 'equipo') {
-      if (!fechaEq) continue;
-      const filas = await companerasDe(fechaEq, cache);
-      if (!filas.length) continue;
-      const eq = calcularEquipo(filas, todos);
-      mensajes.push({
-        ruta: 'EQUIPO',
-        tipo: 'equipo',
-        numero: destino(c),
-        caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'equipo'), { ...varsEquipo(eq), nombre: primerNombre(c.nombre, '') }), anuncio), cfg),
-        tarjeta_url: await urlTarjeta(req, 'EQUIPO', fechaEq),
-      });
-      continue;
+   if (c.tipo === 'grupo') {
+  // Al cargar avance: SOLO indicadores del día, en paquetes / piezas / pesos (sin %)
+  const g = calcularGrupoDia(filas, todos);
+  if (!g.rutas.length) continue;
+  mensajes.push({
+    ruta: 'GRUPO', tipo: 'grupo', numero: destino(c),
+    caption: junta(
+      llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)),
+      tablaReto,
+      await textoOTCDesglose(fecha, todos)
+    ),
+    tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
+  });
+  continue;
+}
     }
     const fila = ultimos[claveRuta(c.ruta)];
     if (!fila) continue;
     const m = calcular(fila, await companerasDe(fila.fecha, cache));
     mensajes.push({
-      ruta: c.ruta,
-      tipo: 'vendedor',
-      numero: destino(c),
-      caption: conAviso(junta(llenarPlantilla(plantilla(cfg, 'matutino'), varsVendedor(fila, m, c)), textoRetoVendedor(retoHoy, c.ruta, 'anuncio')), cfg),
-      tarjeta_url: await urlTarjeta(req, fila.ruta, fila.fecha, fila.actualizado_en),
-    });
+  ruta: c.ruta, tipo: 'vendedor', numero: destino(c),
+  caption: junta(
+    llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)),
+    textoRetoVendedor(av, c.ruta),
+    await textoOTCDesglose(fecha, todos, c.ruta)
+  ),
+  tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
+});
   }
   // 🚨 Rutas en riesgo → solo texto, a Supervisor / Gerente
   if (cfg?.riesgoActivo !== false && fechaEq) {
