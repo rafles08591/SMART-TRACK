@@ -206,7 +206,7 @@ const EJEMPLO = {
   top: "🥇 J202 Luis – 72%\n🥈 J204 Ana – 66%\n🥉 J201 Francisco – 62%",
   abajo: "🔻 J205 Pedro – 48%\n🔻 J207 Raúl – 51%\n🔻 J206 Mario – 55%",
   ranking: "🥇 J202 Luis – 72%\n🥈 J204 Ana – 66%\n…",
-  hora: "1:35 pm", lugar_dia: "4", medalla_dia: "", otc_dia: "$1,450", otc_objetivo: "$2,000",
+  hora: "1:35 pm", lugar_dia: "4", medalla_dia: "", otc_dia: "$1,450",
   frase_dia: "Vas a la mitad. Te faltan 33 paq, ¡a darle!",
   marcas_dia: "• ICE MIX: 30 paq de 40 paq\n• BLOSSOM MIX: ✅ 12 paq",
   dia_vendido_equipo: "500 paq", dia_objetivo_equipo: "742 paq", rutas_meta_dia: "1",
