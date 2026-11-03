@@ -719,8 +719,19 @@ async function datosRetro(fecha, cfg) {
   const filas = await filasDeFecha(fecha);
   const todos = await listaContactos(cfg);
   const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
-  const rutas = [];
 
+  let otcPorRuta = {};
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
+    const otc = (r[0]?.otc || []).filter(x => x.fecha === fecha);
+    for (const x of otc) {
+      const ruta = claveRuta(x.vendedor);
+      if (!otcPorRuta[ruta]) otcPorRuta[ruta] = 0;
+      otcPorRuta[ruta] += Number(x.monto) || 0;
+    }
+  } catch {}
+
+  const rutas = [];
   for (const c of todos) {
     if (c.tipo !== 'vendedor' || !c.activo) continue;
     const fila = porRuta[claveRuta(c.ruta)];
@@ -737,7 +748,7 @@ async function datosRetro(fecha, cfg) {
       obj: Math.round(m.objDia || 0),
       falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
       sinVuala: sv ? { piezas: sv.piezas || 0, minimo: sv.minimo || 2 } : null,
-      otc: Math.round(fila.otc_dia || 0),
+      otc: Math.round(otcPorRuta[claveRuta(c.ruta)] || 0),
       switch: Math.round(marcas.switch || 0),
       vuala_vainilla: Math.round(marcas.vuala_vainilla || 0),
       ice: Math.round(marcas.ice_mix || 0),
@@ -751,33 +762,37 @@ async function datosRetro(fecha, cfg) {
   const { h } = horaActualMX();
   const lider = rutas[0] || null;
   const enCero = rutas.filter(r => r.venta_dia === 0);
-  const abajo = rutas.filter(r => r.pct_dia !== null && r.pct_dia < 100 && r.ruta !== lider?.ruta).slice(0, 3);
+  const pachuco = rutas.filter(r => r.ruta !== lider?.ruta).slice(-3).reverse();
 
-  return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, mas_abajo: abajo, rutas };
+  return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, pachuco, rutas };
 }
 
 function textoRetroFijo(d) {
   const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
+  const ok = (v, meta) => v >= meta ? '✅' : (v === 0 ? '❌' : `${v}/${meta}`);
   const L = [];
+
   if (d.lider_dia) {
-    L.push(`Buenos días equipo, son las ${d.hora} y la líder del día es ${tag(d.lider_dia)} de ${d.lider_dia.ruta} con ${d.lider_dia.venta_dia} paq (${d.lider_dia.pct_dia ?? '—'}%).`);
+    L.push(`¡Buenos días equipo! Son las ${d.hora} y la líder del día es ${tag(d.lider_dia)} de ${d.lider_dia.ruta} con ${d.lider_dia.venta_dia} paq (${d.lider_dia.pct_dia ?? '—'}%).`);
   }
 
   if (d.en_cero.length) {
     L.push('', '🥶 *Rutas en cero:*');
     for (const r of d.en_cero) L.push(`• ${tag(r)}`);
+  } else {
+    L.push('', 'No tenemos rutas en cero hasta este momento.');
   }
 
-  if (d.mas_abajo.length) {
-    L.push('', '⚠️ *Las 3 rutas más bajas:*');
-    for (const r of d.mas_abajo) L.push(`• ${r.ruta} (${r.nombre}): le faltan ${r.falta} paq`);
+  if (d.pachuco.length) {
+    L.push('', '🖐️ *Candidatos para la mano del pachuco:*');
+    for (const r of d.pachuco) L.push(`• ${tag(r)} · ${r.venta_dia} paq, le faltan ${r.falta} paq`);
   }
 
   L.push('', '📦 *Resumen por ruta:*');
   for (const r of d.rutas) {
-    const sv = r.sinVuala ? ` · Sin Vuala ${r.sinVuala.piezas}/${r.sinVuala.minimo}` : '';
-    L.push(`• ${r.ruta} ${tag(r)}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
-    L.push(`  Switch ${r.switch}/5 · Vuala Vainilla ${r.vuala_vainilla}/5 · ICE ${r.ice} · SUMMER ${r.summer} · BLOSSOM ${r.blossom} · FARONET ${r.faronet}`);
+    const sv = r.sinVuala ? ` · Sin Vuala ${ok(r.sinVuala.piezas, r.sinVuala.minimo)}` : '';
+    L.push(`• ${r.ruta} (${r.nombre}): ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
+    L.push(`  Switch ${ok(r.switch, 5)} · Vuala Vainilla ${ok(r.vuala_vainilla, 5)} · ICE ${r.ice} · SUMMER ${r.summer} · BLOSSOM ${r.blossom} · FARONET ${r.faronet}`);
   }
 
   L.push('', '¡Vamos equipo, a darle con todo!');
@@ -791,12 +806,12 @@ async function textoRetroIA(d, cfg) {
   const sistema = [
     'Eres ROBOTINA. Escribe la retro del día para el grupo de WhatsApp.',
     tono,
-    'Estructura obligatoria:',
-    '1) Saludo con la hora y el líder (ruta con más paquetes).',
-    '2) Si hay rutas en cero, menciónalas.',
-    '3) Las 3 rutas más bajas (excluyendo al líder). Di cuánto les falta.',
-    '4) Resumen por ruta: paquetes (%), OTC, Sin Vuala, Switch/5, Vuala Vainilla/5, ICE, SUMMER, BLOSSOM, FARONET.',
-    '5) Cierre motivacional corto.',
+    'Estructura:',
+    '1) Saludo con hora y líder (más paquetes).',
+    '2) Si hay rutas en cero, menciónalas. Si no, di que no hay.',
+    '3) "Candidatos para la mano del pachuco": las 3 rutas más bajas (excluyendo al líder).',
+    '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala, Switch/5, Vuala Vainilla/5, ICE, SUMMER, BLOSSOM, FARONET. Usa ✅ si cumplió y ❌ si está en 0.',
+    '5) Cierre motivacional.',
     'Usa @número para mencionar. Usa solo los números del JSON.',
     `Datos: ${JSON.stringify(d)}`,
   ].join('\n');
@@ -807,7 +822,7 @@ async function textoRetroIA(d, cfg) {
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
         temperature: 0.7,
-        max_tokens: 800,
+        max_tokens: 900,
         messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro.' }],
       }),
     });
