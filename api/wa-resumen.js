@@ -704,7 +704,7 @@ async function modoDiag() {
   });
 }
 
-// ------------------------------------------------------------------ RETRO DEL GRUPO (versión detallada)
+// ------------------------------------------------------------------ RETRO DEL GRUPO
 const RETRO_DESDE = 9, RETRO_HASTA = 20;
 const GRUPO_RETRO = process.env.GRUPO_RETRO || '5213221821493-1614005509@g.us';
 const MIN_EN_CERO = 45;
@@ -714,13 +714,6 @@ function horaActualMX() {
   const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false }).format(d));
   return { h };
 }
-
-function horaMXCorta(d) {
-  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
-    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
-}
-
-const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${Math.round(v).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v)} ${u}`);
 
 async function datosRetro(fecha, cfg) {
   const filas = await filasDeFecha(fecha);
@@ -734,6 +727,7 @@ async function datosRetro(fecha, cfg) {
     if (!fila) continue;
     const m = calcular(fila, filas);
     const sv = sinVualaDe(fila);
+    const marcas = fila.marcas || {};
     rutas.push({
       ruta: c.ruta,
       nombre: primerNombre(c.nombre, c.ruta),
@@ -742,7 +736,14 @@ async function datosRetro(fecha, cfg) {
       pct_dia: m.pctDia === null ? null : Math.round(m.pctDia),
       obj: Math.round(m.objDia || 0),
       falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
-      sinVuala: sv && !sv.cumple,
+      sinVuala: sv ? { piezas: sv.piezas || 0, minimo: sv.minimo || 2 } : null,
+      otc: Math.round(fila.otc_dia || 0),
+      switch: Math.round(marcas.switch || 0),
+      vuala_vainilla: Math.round(marcas.vuala_vainilla || 0),
+      ice: Math.round(marcas.ice_mix || 0),
+      summer: Math.round(marcas.summer_mix || 0),
+      blossom: Math.round(marcas.blossom_mix || 0),
+      faronet: Math.round(marcas.faronet || 0),
     });
   }
 
@@ -750,38 +751,36 @@ async function datosRetro(fecha, cfg) {
   const { h } = horaActualMX();
   const lider = rutas[0] || null;
   const enCero = rutas.filter(r => r.venta_dia === 0);
-  const abajo = rutas.filter(r => r.pct_dia !== null && r.pct_dia < 70).slice(0, 3);
+  const abajo = rutas.filter(r => r.pct_dia !== null && r.pct_dia < 100 && r.ruta !== lider?.ruta).slice(0, 3);
 
-  return {
-    fecha,
-    hora: `${h}:00`,
-    lider_dia: lider,
-    en_cero: enCero,
-    mas_abajo: abajo,
-    rutas,
-  };
+  return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, mas_abajo: abajo, rutas };
 }
 
 function textoRetroFijo(d) {
   const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
-  const L = [`🔥 *RETRO ${d.hora}* · Avance del día`];
+  const L = [];
   if (d.lider_dia) {
-    const l = d.lider_dia;
-    L.push(`🏆 *Líder:* ${l.ruta} ${l.nombre} · ${l.venta_dia} paq (${l.pct_dia ?? '—'}%)`);
+    L.push(`Buenos días equipo, son las ${d.hora} y la líder del día es ${tag(d.lider_dia)} de ${d.lider_dia.ruta} con ${d.lider_dia.venta_dia} paq (${d.lider_dia.pct_dia ?? '—'}%).`);
   }
+
   if (d.en_cero.length) {
-    L.push('', '🥶 *En cero:*');
+    L.push('', '🥶 *Rutas en cero:*');
     for (const r of d.en_cero) L.push(`• ${tag(r)}`);
   }
+
   if (d.mas_abajo.length) {
-    L.push('', '⚠️ *Más abajo:*');
-    for (const r of d.mas_abajo) L.push(`• ${tag(r)} · ${r.venta_dia} de ${r.obj} paq (${r.pct_dia}%)`);
+    L.push('', '⚠️ *Las 3 rutas más bajas:*');
+    for (const r of d.mas_abajo) L.push(`• ${r.ruta} (${r.nombre}): le faltan ${r.falta} paq`);
   }
-  L.push('', '📦 *Por ruta:*');
+
+  L.push('', '📦 *Resumen por ruta:*');
   for (const r of d.rutas) {
-    const sv = r.sinVuala ? ' · Sin Vuala ❌' : '';
-    L.push(`• ${r.ruta} ${r.nombre}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%)${sv}`);
+    const sv = r.sinVuala ? ` · Sin Vuala ${r.sinVuala.piezas}/${r.sinVuala.minimo}` : '';
+    L.push(`• ${r.ruta} ${tag(r)}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
+    L.push(`  Switch ${r.switch}/5 · Vuala Vainilla ${r.vuala_vainilla}/5 · ICE ${r.ice} · SUMMER ${r.summer} · BLOSSOM ${r.blossom} · FARONET ${r.faronet}`);
   }
+
+  L.push('', '¡Vamos equipo, a darle con todo!');
   return L.join('\n');
 }
 
@@ -790,16 +789,15 @@ async function textoRetroIA(d, cfg) {
   if (!key) return null;
   const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
   const sistema = [
-    'Eres ROBOTINA, la bot de SMART-TRACK. Escribes la retro del día en el grupo de WhatsApp.',
+    'Eres ROBOTINA. Escribe la retro del día para el grupo de WhatsApp.',
     tono,
-    'Estructura clara y ordenada (máximo 18 líneas):',
-    '1) Línea de arranque con la hora y el líder del día (paquetes y %).',
-    '2) Si hay rutas en cero, señálalas.',
-    '3) Las 3 rutas más abajo: di qué les falta.',
-    '4) Lista breve por ruta con venta y %.',
-    '5) Cierra con una frase corta de motivación.',
-    'Usa @ seguido del número para mencionar (ej. @5213221234567).',
-    'Usa solo los números del JSON. No inventes cifras.',
+    'Estructura obligatoria:',
+    '1) Saludo con la hora y el líder (ruta con más paquetes).',
+    '2) Si hay rutas en cero, menciónalas.',
+    '3) Las 3 rutas más bajas (excluyendo al líder). Di cuánto les falta.',
+    '4) Resumen por ruta: paquetes (%), OTC, Sin Vuala, Switch/5, Vuala Vainilla/5, ICE, SUMMER, BLOSSOM, FARONET.',
+    '5) Cierre motivacional corto.',
+    'Usa @número para mencionar. Usa solo los números del JSON.',
     `Datos: ${JSON.stringify(d)}`,
   ].join('\n');
   try {
@@ -808,9 +806,9 @@ async function textoRetroIA(d, cfg) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
-        temperature: 0.8,
-        max_tokens: 600,
-        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro de esta hora.' }],
+        temperature: 0.7,
+        max_tokens: 800,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro.' }],
       }),
     });
     if (!r.ok) return null;
