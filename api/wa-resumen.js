@@ -72,6 +72,11 @@ async function retoDe(fecha, cfg, cache) {
 }
 const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
 
+function mencion(numero) {
+  const n = String(numero || '').replace(/\D/g, '');
+  return n ? n : null;
+}
+
 const MENU_VENDEDOR = [
   '🤖 *ROBOTINA · SMART-TRACK*',
   'Escríbeme una palabra:',
