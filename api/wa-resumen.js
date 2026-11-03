@@ -703,6 +703,92 @@ async function modoDiag() {
   });
 }
 
+const RETRO_DESDE = 9, RETRO_HASTA = 20;
+const GRUPO_RETRO = process.env.GRUPO_RETRO || '5213221821493-1614005509@g.us'; // cambia por tu grupo
+const MIN_EN_CERO = 45;
+
+function horaActualMX() {
+  const d = new Date();
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false }).format(d));
+  return { h };
+}
+
+async function modoRetroGrupo(req) {
+  const url = new URL(req.url);
+  const forzar = url.searchParams.get('forzar') === '1';
+  const cfg = await configBot();
+  if (cfg?.retroGrupoActivo === false) return json({ total: 0, mensajes: [], nota: 'retro del grupo desactivada' });
+  const { h } = horaActualMX();
+  if (!forzar && (h < RETRO_DESDE || h > RETRO_HASTA)) return json({ total: 0, mensajes: [], nota: `fuera de horario (${h} h)` });
+
+  const hoy = fechaMX();
+  const filasHoy = await filasDeFecha(hoy);
+  if (!filasHoy.length) return json({ total: 0, mensajes: [], nota: 'sin avance de hoy todavía' });
+
+  const ultimo = filasHoy.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || '';
+  const previo = await leerEstado('retro_grupo');
+  if (!forzar && previo?.fecha === hoy && previo?.actualizado === ultimo) {
+    return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
+  }
+
+  const todos = await listaContactos(cfg);
+  const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
+  const rutas = [];
+
+  for (const c of todos) {
+    if (c.tipo !== 'vendedor' || !c.activo) continue;
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filasHoy);
+    const sv = sinVualaDe(fila);
+    rutas.push({
+      ruta: c.ruta,
+      nombre: primerNombre(c.nombre, c.ruta),
+      mencion: mencion(c.telefono),
+      venta: Math.round(m.ventaDia || 0),
+      pct: m.pctDia === null ? null : Math.round(m.pctDia),
+      obj: Math.round(m.objDia || 0),
+      falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
+      sinVuala: sv && !sv.cumple,
+    });
+  }
+
+  rutas.sort((a, b) => (b.venta - a.venta));
+
+  const lineas = [`🔥 *RETRO ${h}:00* · Avance del día`];
+  if (rutas.length) {
+    const lider = rutas[0];
+    lineas.push(`🏆 *Líder:* ${lider.ruta} ${lider.nombre} · ${lider.venta} paq (${lider.pct ?? '—'}%)`);
+  }
+
+  const enCero = rutas.filter(r => r.venta === 0);
+  if (enCero.length) {
+    lineas.push('', '🥶 *En cero:*');
+    for (const r of enCero) lineas.push(`• ${r.mencion ? `@${r.mencion}` : r.ruta + ' ' + r.nombre}`);
+  }
+
+  const abajo = rutas.filter(r => r.pct !== null && r.pct < 70).slice(0, 3);
+  if (abajo.length) {
+    lineas.push('', '⚠️ *Más abajo:*');
+    for (const r of abajo) {
+      lineas.push(`• ${r.mencion ? `@${r.mencion}` : r.ruta + ' ' + r.nombre} · ${r.venta} de ${r.obj} paq (${r.pct}%)`);
+    }
+  }
+
+  lineas.push('', '📦 *Por ruta:*');
+  for (const r of rutas) {
+    const sv = r.sinVuala ? ' · Sin Vuala ❌' : '';
+    lineas.push(`• ${r.ruta} ${r.nombre}: ${r.venta} paq (${r.pct ?? '—'}%)${sv}`);
+  }
+
+  const texto = lineas.join('\n');
+  const mencionados = [...new Set(rutas.map(r => r.mencion).filter(m => m && texto.includes(`@${m}`)))];
+
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
+  return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
+}
+
+
 export default async function handler(req) {
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
   const modo = new URL(req.url).searchParams.get('modo');
@@ -718,7 +804,7 @@ export default async function handler(req) {
       const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
-    if (modo === 'retro_grupo') return json({ error: 'retro_grupo no implementado' }, 501);
+    if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
     if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
