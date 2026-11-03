@@ -145,7 +145,7 @@ function comando(texto) {
 
 function pideOTC(texto) {
   const t = normalizar(texto);
-  return /\botc\b/.test(t) && !/\bavance\b.*\bgeneral\b/.test(t);
+  return /\botc\b/.test(t);
 }
 
 async function modoMatutino(req) {
@@ -476,14 +476,14 @@ async function modoBot(req) {
         numero, 
         ...resto, 
         ...(resto.texto ? { texto: limpiar(resto.texto) } : {}),
-        mencionados: []
       });
     }
     const pre = `@${tag} `;
+    const mencionados = [...new Set([tag, ...(extra.mencionados || [])].filter(Boolean))];
     return json({
       ...extra,
       numero: grupo,
-      mencionados: [...new Set([tag, ...(extra.mencionados || [])].filter(Boolean))],
+      ...(mencionados.length ? { mencionados } : {}),
       ...(extra.texto ? { texto: pre + extra.texto } : {}),
       ...(extra.caption ? { caption: pre + extra.caption } : {}),
     });
@@ -502,7 +502,6 @@ async function modoBot(req) {
   const cmd = comando(body.texto);
   const textoOriginal = body.texto || '';
 
-  // Si pide OTC específicamente
   if (pideOTC(textoOriginal)) {
     const hoy = fechaMX();
     const fecha = await fechaUltimoCorte({ hasta: hoy });
