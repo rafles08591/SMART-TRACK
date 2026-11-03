@@ -266,7 +266,8 @@ async function textoOTCDesglose(fecha, todos, soloRuta = null) {
       totalPz += v.piezas;
       totalPesos += v.pesos;
       const nom = nombres[ruta] || ruta;
-      lineas.push(`\n${ruta} ${nom} · $${Math.round(v.pesos).toLocaleString('es-MX')} · ${Math.round(v.piezas)} pz`);
+      lineas.push(`\n📦 *${ruta} ${nom}*`);
+      lineas.push(`$${Math.round(v.pesos).toLocaleString('es-MX')} · ${Math.round(v.piezas)} pz`);
       const arts = Object.entries(v.arts).sort((a, b) => b[1].pz - a[1].pz);
       for (const [art, d] of arts) {
         lineas.push(`• ${art}: ${Math.round(d.pz)} pz · $${Math.round(d.pesos).toLocaleString('es-MX')}`);
@@ -277,7 +278,7 @@ async function textoOTCDesglose(fecha, todos, soloRuta = null) {
 
     const encabezado = soloRuta
       ? `📦 *Tu OTC del día*\nTotal: $${Math.round(totalPesos).toLocaleString('es-MX')} · ${Math.round(totalPz)} pz`
-      : `📦 *OTC del día*\nTotal equipo: $${Math.round(totalPesos).toLocaleString('es-MX')} · ${Math.round(totalPz)} pz`;
+      : `📦 *OTC del día · Equipo*\nTotal: $${Math.round(totalPesos).toLocaleString('es-MX')} · ${Math.round(totalPz)} pz`;
 
     return encabezado + '\n' + lineas.join('\n');
   } catch {
@@ -703,14 +704,121 @@ async function modoDiag() {
   });
 }
 
+// ------------------------------------------------------------------ RETRO DEL GRUPO (versión detallada)
 const RETRO_DESDE = 9, RETRO_HASTA = 20;
-const GRUPO_RETRO = process.env.GRUPO_RETRO || '5213221821493-1614005509@g.us'; // cambia por tu grupo
+const GRUPO_RETRO = process.env.GRUPO_RETRO || '5213221821493-1614005509@g.us';
 const MIN_EN_CERO = 45;
 
 function horaActualMX() {
   const d = new Date();
   const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false }).format(d));
   return { h };
+}
+
+function horaMXCorta(d) {
+  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+}
+
+const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${Math.round(v).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v)} ${u}`);
+
+async function datosRetro(fecha, cfg) {
+  const filas = await filasDeFecha(fecha);
+  const todos = await listaContactos(cfg);
+  const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
+  const rutas = [];
+
+  for (const c of todos) {
+    if (c.tipo !== 'vendedor' || !c.activo) continue;
+    const fila = porRuta[claveRuta(c.ruta)];
+    if (!fila) continue;
+    const m = calcular(fila, filas);
+    const sv = sinVualaDe(fila);
+    rutas.push({
+      ruta: c.ruta,
+      nombre: primerNombre(c.nombre, c.ruta),
+      mencion: mencion(c.telefono),
+      venta_dia: Math.round(m.ventaDia || 0),
+      pct_dia: m.pctDia === null ? null : Math.round(m.pctDia),
+      obj: Math.round(m.objDia || 0),
+      falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
+      sinVuala: sv && !sv.cumple,
+    });
+  }
+
+  rutas.sort((a, b) => b.venta_dia - a.venta_dia);
+  const { h } = horaActualMX();
+  const lider = rutas[0] || null;
+  const enCero = rutas.filter(r => r.venta_dia === 0);
+  const abajo = rutas.filter(r => r.pct_dia !== null && r.pct_dia < 70).slice(0, 3);
+
+  return {
+    fecha,
+    hora: `${h}:00`,
+    lider_dia: lider,
+    en_cero: enCero,
+    mas_abajo: abajo,
+    rutas,
+  };
+}
+
+function textoRetroFijo(d) {
+  const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
+  const L = [`🔥 *RETRO ${d.hora}* · Avance del día`];
+  if (d.lider_dia) {
+    const l = d.lider_dia;
+    L.push(`🏆 *Líder:* ${l.ruta} ${l.nombre} · ${l.venta_dia} paq (${l.pct_dia ?? '—'}%)`);
+  }
+  if (d.en_cero.length) {
+    L.push('', '🥶 *En cero:*');
+    for (const r of d.en_cero) L.push(`• ${tag(r)}`);
+  }
+  if (d.mas_abajo.length) {
+    L.push('', '⚠️ *Más abajo:*');
+    for (const r of d.mas_abajo) L.push(`• ${tag(r)} · ${r.venta_dia} de ${r.obj} paq (${r.pct_dia}%)`);
+  }
+  L.push('', '📦 *Por ruta:*');
+  for (const r of d.rutas) {
+    const sv = r.sinVuala ? ' · Sin Vuala ❌' : '';
+    L.push(`• ${r.ruta} ${r.nombre}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%)${sv}`);
+  }
+  return L.join('\n');
+}
+
+async function textoRetroIA(d, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const tono = TONOS[cfg?.tonoBot] || TONOS.picante;
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK. Escribes la retro del día en el grupo de WhatsApp.',
+    tono,
+    'Estructura clara y ordenada (máximo 18 líneas):',
+    '1) Línea de arranque con la hora y el líder del día (paquetes y %).',
+    '2) Si hay rutas en cero, señálalas.',
+    '3) Las 3 rutas más abajo: di qué les falta.',
+    '4) Lista breve por ruta con venta y %.',
+    '5) Cierra con una frase corta de motivación.',
+    'Usa @ seguido del número para mencionar (ej. @5213221234567).',
+    'Usa solo los números del JSON. No inventes cifras.',
+    `Datos: ${JSON.stringify(d)}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.8,
+        max_tokens: 600,
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la retro de esta hora.' }],
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.choices?.[0]?.message?.content || '').trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 async function modoRetroGrupo(req) {
@@ -731,63 +839,14 @@ async function modoRetroGrupo(req) {
     return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
   }
 
-  const todos = await listaContactos(cfg);
-  const porRuta = Object.fromEntries(filasHoy.map((f) => [claveRuta(f.ruta), f]));
-  const rutas = [];
-
-  for (const c of todos) {
-    if (c.tipo !== 'vendedor' || !c.activo) continue;
-    const fila = porRuta[claveRuta(c.ruta)];
-    if (!fila) continue;
-    const m = calcular(fila, filasHoy);
-    const sv = sinVualaDe(fila);
-    rutas.push({
-      ruta: c.ruta,
-      nombre: primerNombre(c.nombre, c.ruta),
-      mencion: mencion(c.telefono),
-      venta: Math.round(m.ventaDia || 0),
-      pct: m.pctDia === null ? null : Math.round(m.pctDia),
-      obj: Math.round(m.objDia || 0),
-      falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
-      sinVuala: sv && !sv.cumple,
-    });
-  }
-
-  rutas.sort((a, b) => (b.venta - a.venta));
-
-  const lineas = [`🔥 *RETRO ${h}:00* · Avance del día`];
-  if (rutas.length) {
-    const lider = rutas[0];
-    lineas.push(`🏆 *Líder:* ${lider.ruta} ${lider.nombre} · ${lider.venta} paq (${lider.pct ?? '—'}%)`);
-  }
-
-  const enCero = rutas.filter(r => r.venta === 0);
-  if (enCero.length) {
-    lineas.push('', '🥶 *En cero:*');
-    for (const r of enCero) lineas.push(`• ${r.mencion ? `@${r.mencion}` : r.ruta + ' ' + r.nombre}`);
-  }
-
-  const abajo = rutas.filter(r => r.pct !== null && r.pct < 70).slice(0, 3);
-  if (abajo.length) {
-    lineas.push('', '⚠️ *Más abajo:*');
-    for (const r of abajo) {
-      lineas.push(`• ${r.mencion ? `@${r.mencion}` : r.ruta + ' ' + r.nombre} · ${r.venta} de ${r.obj} paq (${r.pct}%)`);
-    }
-  }
-
-  lineas.push('', '📦 *Por ruta:*');
-  for (const r of rutas) {
-    const sv = r.sinVuala ? ' · Sin Vuala ❌' : '';
-    lineas.push(`• ${r.ruta} ${r.nombre}: ${r.venta} paq (${r.pct ?? '—'}%)${sv}`);
-  }
-
-  const texto = lineas.join('\n');
-  const mencionados = [...new Set(rutas.map(r => r.mencion).filter(m => m && texto.includes(`@${m}`)))];
+  const d = await datosRetro(hoy, cfg);
+  if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
+  const texto = (await textoRetroIA(d, cfg)) || textoRetroFijo(d);
+  const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
 
   await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
   return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
 }
-
 
 export default async function handler(req) {
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
@@ -804,7 +863,7 @@ export default async function handler(req) {
       const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
-    if (modo === 'retro_grupo') return await modoRetroGrupo(req);
+    if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
     if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
     if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
