@@ -76,6 +76,37 @@ function mencion(numero) {
   const n = String(numero || '').replace(/\D/g, '');
   return n ? n : null;
 }
+function mencion(numero) {
+  const n = String(numero || '').replace(/\D/g, '');
+  return n ? n : null;
+}
+
+async function respuestaIA(c, texto, cfg, { historial = [], grupo = false } = {}) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { texto: "No tengo conexión con la IA en este momento.", mencionados: [] };
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || "gpt-4.1-mini",
+        temperature: 0.7,
+        max_tokens: 600,
+        messages: [
+          { role: "system", content: "Eres Robotina, el bot de SMART-TRACK. Responde en español mexicano, breve y útil." },
+          ...historial,
+          { role: "user", content: texto },
+        ],
+      }),
+    });
+    if (!r.ok) return { texto: "No pude consultar la IA. Intenta de nuevo.", mencionados: [] };
+    const j = await r.json();
+    const resp = (j.choices?.[0]?.message?.content || "").trim();
+    return { texto: resp || "No entendí la pregunta.", mencionados: [] };
+  } catch {
+    return { texto: "Error al consultar la IA.", mencionados: [] };
+  }
+}
 
 const MENU_VENDEDOR = [
   '🤖 *ROBOTINA · SMART-TRACK*',
