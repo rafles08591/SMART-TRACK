@@ -202,13 +202,14 @@ export async function marcarPagina(pagina) {
     const x = r.pos.x !== null ? r.pos.x + r.pos.h * 0.4 : c.width * 0.78;
     ctx.font = fuente(tam);
     while (tam > 18 && x + ctx.measureText(texto).width > c.width * 0.99) { tam -= 1; ctx.font = fuente(tam); }
-    ctx.textBaseline = "middle";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(3, tam * 0.12);
-    ctx.strokeStyle = "rgba(255,255,255,0.95)";
-    ctx.strokeText(texto, x, r.pos.cy);
-    ctx.fillStyle = "#0a0a0a";
-    ctx.fillText(texto, x, r.pos.cy);
+  ctx.textBaseline = "middle";
+ctx.lineJoin = "round";
+ctx.lineWidth = 0.8; // contorno muy mínimo
+ctx.strokeStyle = "rgba(255,255,255,0.7)";
+ctx.strokeText(texto, x, r.pos.cy);
+ctx.fillStyle = "#111111"; // negro firme
+ctx.font = `bold ${tam}px Arial, "Helvetica Neue", sans-serif`; // fuente similar a la impresa
+ctx.fillText(texto, x, r.pos.cy);
   }
   return c.toDataURL("image/jpeg", 0.85);
 }
