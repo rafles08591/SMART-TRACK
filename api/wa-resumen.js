@@ -1,17 +1,14 @@
 // api/wa-resumen.js — arma los mensajes que n8n envía por Evolution API.
 //
-//   GET  /api/wa-resumen?modo=matutino   → tarjeta + texto para cada contacto (corte más reciente antes de hoy)
-//                                          vendedores: su tarjeta · equipo (Supervisor/Gerente): tarjeta del equipo
-//   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA (la dispara la app al cargar el avance)
-//   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde solo a vendedores que van abajo hoy
-//   GET  /api/wa-resumen?modo=riesgo     → (prueba) texto de Rutas en riesgo para supervisores
-//   POST /api/wa-resumen?modo=bot        → body { numero, texto, grupo? }  → respuesta del bot
-//                                          (con grupo = …@g.us contesta en el grupo mencionando a quien preguntó)
-//   GET  /api/wa-resumen?modo=retro_grupo → retro de cada hora al grupo (9 am – 8 pm), candidatos a la Tercera Mano
+//   GET  /api/wa-resumen?modo=matutino   → tarjeta + texto para cada contacto
+//   GET  /api/wa-resumen?modo=dia        → tarjeta del AVANCE DEL DÍA
+//   GET  /api/wa-resumen?modo=alerta     → aviso de la tarde
+//   GET  /api/wa-resumen?modo=riesgo     → texto de Rutas en riesgo
+//   POST /api/wa-resumen?modo=bot        → body { numero, texto, grupo? }
+//   GET  /api/wa-resumen?modo=retro_grupo → retro de cada hora
 //   GET  /api/wa-resumen?modo=diag       → diagnóstico
 //
-// Todas requieren el header  x-bot-token: <BOT_TOKEN>
-// Contactos y textos se editan en SMART-TRACK (pestaña WhatsApp) → data.whatsappBot
+// Todas requieren el header x-bot-token: <BOT_TOKEN>
 
 import {
   autorizado, firmar, fechaMX, fechaCorta, cantidad, pct, primerNombre, numeroEnvio,
@@ -72,10 +69,6 @@ async function retoDe(fecha, cfg, cache) {
 }
 const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
 
-function mencion(numero) {
-  const n = String(numero || '').replace(/\D/g, '');
-  return n ? n : null;
-}
 function mencion(numero) {
   const n = String(numero || '').replace(/\D/g, '');
   return n ? n : null;
@@ -148,6 +141,11 @@ function comando(texto) {
   if (/\b(ranking|lugar|posicion|tabla)\b/.test(t)) return 'ranking';
   if (/\b(clientes|visitas|efectividad)\b/.test(t)) return 'clientes';
   return 'nada';
+}
+
+function pideOTC(texto) {
+  const t = normalizar(texto);
+  return /\botc\b/.test(t) && !/\bavance\b.*\bgeneral\b/.test(t);
 }
 
 async function modoMatutino(req) {
@@ -397,7 +395,6 @@ async function modoAlerta() {
   return json({ fecha: hoy, umbral, total: mensajes.length, mensajes });
 }
 
-// ------------------------------------------------------------------ bot
 async function botEquipo(req, c, cmd, cfg, responder) {
   if (cmd === 'menu' || cmd === 'clientes' || cmd === 'marcas') return responder({ tipo: 'texto', texto: MENU_EQUIPO });
   const hoy = fechaMX();
@@ -475,13 +472,18 @@ async function modoBot(req) {
     if (!grupo || extra.tipo === 'ninguno') {
       const { mencionados: _m, ...resto } = extra;
       const limpiar = (t) => (typeof t === 'string' ? t.replace(/@521\d{10}\s*/g, '') : t);
-      return json({ numero, ...resto, ...(resto.texto ? { texto: limpiar(resto.texto) } : {}) });
+      return json({ 
+        numero, 
+        ...resto, 
+        ...(resto.texto ? { texto: limpiar(resto.texto) } : {}),
+        mencionados: []
+      });
     }
     const pre = `@${tag} `;
     return json({
       ...extra,
       numero: grupo,
-      mencionados: [...new Set([tag, ...(extra.mencionados || [])])],
+      mencionados: [...new Set([tag, ...(extra.mencionados || [])].filter(Boolean))],
       ...(extra.texto ? { texto: pre + extra.texto } : {}),
       ...(extra.caption ? { caption: pre + extra.caption } : {}),
     });
@@ -498,6 +500,21 @@ async function modoBot(req) {
   }
 
   const cmd = comando(body.texto);
+  const textoOriginal = body.texto || '';
+
+  // Si pide OTC específicamente
+  if (pideOTC(textoOriginal)) {
+    const hoy = fechaMX();
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    if (!fecha) return responder({ tipo: 'texto', texto: 'Todavía no hay datos de OTC cargados.' });
+    const todos = await listaContactos(cfg);
+    const soloRuta = c.tipo === 'vendedor' ? c.ruta : null;
+    const textoOTC = await textoOTCDesglose(fecha, todos, soloRuta);
+    return responder({
+      tipo: 'texto',
+      texto: textoOTC || 'No hay OTC registrado hoy para las rutas locales.',
+    });
+  }
 
   if (c.tipo === 'equipo' && cmd !== 'actualizar' && cmd !== 'menu') {
     if (body.fresco) {
@@ -664,9 +681,6 @@ function pideTerceraMano(texto) {
   const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /tercera\s*mano|pachuco|candidat/.test(t);
 }
-
-// El resto de funciones de IA, retro, diagnóstico y handler se mantienen igual que en tu archivo original.
-// Copia desde aquí hasta el final del archivo que ya tenías funcionando.
 
 async function modoDiag() {
   const hoy = fechaMX();
