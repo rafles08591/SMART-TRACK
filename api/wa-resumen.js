@@ -718,7 +718,7 @@ export default async function handler(req) {
       const rk = calcularRiesgo(await filasDeFecha(fecha), await listaContactos(cfg), umbralRiesgo(cfg));
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
-    if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
+    if (modo === 'retro_grupo') return json({ error: 'retro_grupo no implementado' }, 501);
     if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
     if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
