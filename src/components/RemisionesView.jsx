@@ -205,9 +205,9 @@ export async function marcarPagina(pagina) {
     ctx.textBaseline = "middle";
     ctx.lineJoin = "round";
     ctx.lineWidth = Math.max(3, tam * 0.12);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.strokeText(texto, x, r.pos.cy);
-    ctx.fillStyle = "#1f3fbf";
+    ctx.fillStyle = "#0a0a0a";
     ctx.fillText(texto, x, r.pos.cy);
   }
   return c.toDataURL("image/jpeg", 0.85);
