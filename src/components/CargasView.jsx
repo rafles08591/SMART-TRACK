@@ -133,29 +133,10 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     onUpload(e, diaParaSubir);
   }
 
-async function descargarLista() {
-  if (!cargaActiva?.items?.length) return;
-  const XLSX = await import("xlsx");
-  const wb = XLSX.utils.book_new();
-  
-  const rutas = RUTAS;
-  const filas = [["Ruta", "FA", "Cantidad"]];
-  for (const it of cargaActiva.items) {
-    for (const ruta of rutas) {
-      const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
-      if (qty > 0) filas.push([ruta, it.fa, qty]);
-    }
-  }
-  const ws = XLSX.utils.aoa_to_sheet(filas);
-  XLSX.utils.book_append_sheet(wb, ws, "Lista");
-  
-  XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  
-  // Bloquear la carga después de descargar
-  if (esGerente && !cargaActiva.bloqueado) {
-    await persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }));
-  }
-}
+  async function descargarLista() {
+    if (!cargaActiva?.items?.length) return;
+    const XLSX = await import("xlsx");
+    const wb = XLSX.utils.book_new();
     
     const rutas = RUTAS;
     const filas = [["Ruta", "FA", "Cantidad"]];
@@ -167,20 +148,12 @@ async function descargarLista() {
     }
     const ws = XLSX.utils.aoa_to_sheet(filas);
     XLSX.utils.book_append_sheet(wb, ws, "Lista");
-
-    {!cargaActiva.bloqueado && esGerente && (
-  <div style={{ marginTop: 10, marginBottom: 10 }}>
-    <button 
-      className="btn" 
-      onClick={() => persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }))}
-      style={{ background: "#FF6B6B", borderColor: "#FF6B6B" }}
-    >
-      🔒 Cerrar carga (bloquear edición)
-    </button>
-  </div>
-)}
     
     XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    
+    if (esGerente && !cargaActiva.bloqueado) {
+      await persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }));
+    }
   }
 
   const diasGuardados = DIAS_ORDEN.filter((dia) => cargasPorDia[dia]);
