@@ -738,7 +738,7 @@ async function datosRetro(fecha, cfg) {
     if (!fila) continue;
     const m = calcular(fila, filas);
     const sv = sinVualaDe(fila);
-    const marcas = fila.marcas || {};
+    const v = varsDia(fila, m, filas, c);
     rutas.push({
       ruta: c.ruta,
       nombre: primerNombre(c.nombre, c.ruta),
@@ -749,12 +749,10 @@ async function datosRetro(fecha, cfg) {
       falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
       sinVuala: sv ? { piezas: sv.piezas || 0, minimo: sv.minimo || 2 } : null,
       otc: Math.round(otcPorRuta[claveRuta(c.ruta)] || 0),
-      switch: Math.round(marcas.switch || 0),
-      vuala_vainilla: Math.round(marcas.vuala_vainilla || 0),
-      ice: Math.round(marcas.ice_mix || 0),
-      summer: Math.round(marcas.summer_mix || 0),
-      blossom: Math.round(marcas.blossom_mix || 0),
-      faronet: Math.round(marcas.faronet || 0),
+      ice: v.ice || 0,
+      blossom: v.blossom || 0,
+      summer: v.summer || 0,
+      faronet: v.faronet || 0,
     });
   }
 
@@ -769,7 +767,7 @@ async function datosRetro(fecha, cfg) {
 
 function textoRetroFijo(d) {
   const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
-  const ok = (v, meta) => v >= meta ? '✅' : (v === 0 ? '❌' : `${v}/${meta}`);
+  const svIcon = (sv) => !sv ? '' : (sv.piezas >= 2 ? '✅' : '❌');
   const L = [];
 
   if (d.lider_dia) {
@@ -790,9 +788,9 @@ function textoRetroFijo(d) {
 
   L.push('', '📦 *Resumen por ruta:*');
   for (const r of d.rutas) {
-    const sv = r.sinVuala ? ` · Sin Vuala ${ok(r.sinVuala.piezas, r.sinVuala.minimo)}` : '';
-    L.push(`• ${r.ruta} (${r.nombre}): ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
-    L.push(`  Switch ${ok(r.switch, 5)} · Vuala Vainilla ${ok(r.vuala_vainilla, 5)} · ICE ${r.ice} · SUMMER ${r.summer} · BLOSSOM ${r.blossom} · FARONET ${r.faronet}`);
+    const sv = r.sinVuala ? ` · SV ${svIcon(r.sinVuala)}` : '';
+    L.push(`• ${r.ruta} ${r.nombre}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
+    L.push(`  ICE ${r.ice} · BLOSS ${r.blossom} · SUMM ${r.summer} · FARO ${r.faronet}`);
   }
 
   L.push('', '¡Vamos equipo, a darle con todo!');
@@ -810,7 +808,7 @@ async function textoRetroIA(d, cfg) {
     '1) Saludo con hora y líder (más paquetes).',
     '2) Si hay rutas en cero, menciónalas. Si no, di que no hay.',
     '3) "Candidatos para la mano del pachuco": las 3 rutas más bajas (excluyendo al líder).',
-    '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala, Switch/5, Vuala Vainilla/5, ICE, SUMMER, BLOSSOM, FARONET. Usa ✅ si cumplió y ❌ si está en 0.',
+    '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala (✅ si 2 o más, ❌ si menos), ICE, BLOSSOM, SUMMER, FARONET.',
     '5) Cierre motivacional.',
     'Usa @número para mencionar. Usa solo los números del JSON.',
     `Datos: ${JSON.stringify(d)}`,
