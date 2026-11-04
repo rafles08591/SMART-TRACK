@@ -133,10 +133,29 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     onUpload(e, diaParaSubir);
   }
 
-  async function descargarLista() {
-    if (!cargaActiva?.items?.length) return;
-    const XLSX = await import("xlsx");
-    const wb = XLSX.utils.book_new();
+async function descargarLista() {
+  if (!cargaActiva?.items?.length) return;
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  
+  const rutas = RUTAS;
+  const filas = [["Ruta", "FA", "Cantidad"]];
+  for (const it of cargaActiva.items) {
+    for (const ruta of rutas) {
+      const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+      if (qty > 0) filas.push([ruta, it.fa, qty]);
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  XLSX.utils.book_append_sheet(wb, ws, "Lista");
+  
+  XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  
+  // Bloquear la carga después de descargar
+  if (esGerente && !cargaActiva.bloqueado) {
+    await persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }));
+  }
+}
     
     const rutas = RUTAS;
     const filas = [["Ruta", "FA", "Cantidad"]];
