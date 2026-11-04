@@ -148,6 +148,18 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     }
     const ws = XLSX.utils.aoa_to_sheet(filas);
     XLSX.utils.book_append_sheet(wb, ws, "Lista");
+
+    {!cargaActiva.bloqueado && esGerente && (
+  <div style={{ marginTop: 10, marginBottom: 10 }}>
+    <button 
+      className="btn" 
+      onClick={() => persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }))}
+      style={{ background: "#FF6B6B", borderColor: "#FF6B6B" }}
+    >
+      🔒 Cerrar carga (bloquear edición)
+    </button>
+  </div>
+)}
     
     XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
