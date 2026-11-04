@@ -134,12 +134,11 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
 
   async function descargarPivote() {
     if (!cargaActiva?.items?.length) return;
-    const ExcelJS = (await import("exceljs")).default;
-    const wb = new ExcelJS.Workbook();
+    const XLSX = await import("xlsx");
+    const wb = XLSX.utils.book_new();
     
-    const ws1 = wb.addWorksheet("Pivote");
     const rutas = RUTAS;
-    ws1.addRow(["FA", "Marca", ...rutas, "Total"]);
+    const filas1 = [["FA", "Marca", ...rutas, "Total"]];
     for (const it of cargaActiva.items) {
       const row = [it.fa, it.marca];
       let total = 0;
@@ -149,24 +148,22 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
         total += Number(qty) || 0;
       }
       row.push(total || "");
-      ws1.addRow(row);
+      filas1.push(row);
     }
+    const ws1 = XLSX.utils.aoa_to_sheet(filas1);
+    XLSX.utils.book_append_sheet(wb, ws1, "Pivote");
     
-    const ws2 = wb.addWorksheet("Lista");
-    ws2.addRow(["Ruta", "FA", "Marca", "Cantidad"]);
+    const filas2 = [["Ruta", "FA", "Marca", "Cantidad"]];
     for (const it of cargaActiva.items) {
       for (const ruta of rutas) {
         const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
-        if (qty > 0) ws2.addRow([ruta, it.fa, it.marca, qty]);
+        if (qty > 0) filas2.push([ruta, it.fa, it.marca, qty]);
       }
     }
+    const ws2 = XLSX.utils.aoa_to_sheet(filas2);
+    XLSX.utils.book_append_sheet(wb, ws2, "Lista");
     
-    const buffer = await wb.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    a.click();
+    XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
   const diasGuardados = DIAS_ORDEN.filter((dia) => cargasPorDia[dia]);
