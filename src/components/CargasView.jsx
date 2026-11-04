@@ -54,6 +54,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
   const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
   const [verHistorial, setVerHistorial] = useState(false);
+  const [verPivote, setVerPivote] = useState(false);
 
   const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
   function claveBorradorCargas(ruta, dia) {
@@ -132,36 +133,21 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     onUpload(e, diaParaSubir);
   }
 
-  async function descargarPivote() {
+  async function descargarLista() {
     if (!cargaActiva?.items?.length) return;
     const XLSX = await import("xlsx");
     const wb = XLSX.utils.book_new();
     
     const rutas = RUTAS;
-    const filas1 = [["FA", "Marca", ...rutas, "Total"]];
-    for (const it of cargaActiva.items) {
-      const row = [it.fa, it.marca];
-      let total = 0;
-      for (const ruta of rutas) {
-        const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
-        row.push(qty || "");
-        total += Number(qty) || 0;
-      }
-      row.push(total || "");
-      filas1.push(row);
-    }
-    const ws1 = XLSX.utils.aoa_to_sheet(filas1);
-    XLSX.utils.book_append_sheet(wb, ws1, "Pivote");
-    
-    const filas2 = [["Ruta", "FA", "Marca", "Cantidad"]];
+    const filas = [["Ruta", "FA", "Cantidad"]];
     for (const it of cargaActiva.items) {
       for (const ruta of rutas) {
         const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
-        if (qty > 0) filas2.push([ruta, it.fa, it.marca, qty]);
+        if (qty > 0) filas.push([ruta, it.fa, qty]);
       }
     }
-    const ws2 = XLSX.utils.aoa_to_sheet(filas2);
-    XLSX.utils.book_append_sheet(wb, ws2, "Lista");
+    const ws = XLSX.utils.aoa_to_sheet(filas);
+    XLSX.utils.book_append_sheet(wb, ws, "Lista");
     
     XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
@@ -255,16 +241,20 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                 <div style={{ display: "flex", gap: 8 }}>
                   {cargaActiva.items.length > 0 && (
                     <>
-                      <button className="btn-ghost" onClick={onDescargar}>
-                        <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar modificado
+                      <button className="btn-ghost" onClick={() => setVerPivote(!verPivote)}>
+                        {verPivote ? "Ocultar" : "Ver"} pivote
                       </button>
-                      <button className="btn-ghost" onClick={descargarPivote}>
-                        <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar pivote
+                      <button className="btn-ghost" onClick={descargarLista}>
+                        <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar lista
                       </button>
                     </>
                   )}
                 </div>
               </div>
+
+              {verPivote && cargaActiva.items.length > 0 && (
+                <TablaPivote items={cargaActiva.items} />
+              )}
 
               {bloqueoPendiente && (
                 <div className="card" style={{ padding: 12, marginBottom: 10, border: "1px solid #F2B134", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -391,6 +381,46 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function TablaPivote({ items }) {
+  const rutas = RUTAS;
+  return (
+    <div style={{ overflowX: "auto", marginTop: 12, marginBottom: 16 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr style={{ background: "#1E2A42" }}>
+            <th style={{ padding: 8, textAlign: "left", color: "#9AA7BD" }}>FA</th>
+            <th style={{ padding: 8, textAlign: "left", color: "#9AA7BD" }}>Marca</th>
+            {rutas.map((r) => (
+              <th key={r} style={{ padding: 8, textAlign: "center", color: "#9AA7BD" }}>{r}</th>
+            ))}
+            <th style={{ padding: 8, textAlign: "center", color: "#E8EDF5" }}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it, i) => {
+            let total = 0;
+            const celdas = rutas.map((ruta) => {
+              const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+              total += Number(qty) || 0;
+              return qty || "";
+            });
+            return (
+              <tr key={i} style={{ borderTop: "1px solid #1E2A42" }}>
+                <td style={{ padding: 8, color: "#E8EDF5" }}>{it.fa}</td>
+                <td style={{ padding: 8, color: "#9AA7BD" }}>{it.marca}</td>
+                {celdas.map((c, j) => (
+                  <td key={j} style={{ padding: 8, textAlign: "center", color: c ? "#E8EDF5" : "#5b6478" }}>{c}</td>
+                ))}
+                <td style={{ padding: 8, textAlign: "center", color: "#3DDC97", fontWeight: 700 }}>{total || ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
