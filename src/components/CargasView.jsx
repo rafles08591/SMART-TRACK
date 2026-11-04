@@ -4,7 +4,6 @@ import { Upload, Download, CheckCircle2, RefreshCw, Zap, Clock, Trash2, AlertTri
 import { RUTAS, NOMBRES, DIAS_SEMANA_VISITAS } from "../constants";
 import { fechaHoyISO } from "../utils";
 
-// Suma días a una fecha "YYYY-MM-DD" sin problemas de zona horaria.
 function sumarDiasISO(fechaISO, dias) {
   const [y, m, d] = fechaISO.split("-").map(Number);
   const fecha = new Date(Date.UTC(y, m - 1, d));
@@ -14,14 +13,12 @@ function sumarDiasISO(fechaISO, dias) {
 
 const DIAS_SEMANA_KEYS_TODOS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
 
-// "2026-08-21" -> "viernes".
 function diaSemanaKeyDe(fechaISO) {
   const [y, m, d] = fechaISO.split("-").map(Number);
   const fecha = new Date(Date.UTC(y, m - 1, d));
   return DIAS_SEMANA_KEYS_TODOS[fecha.getUTCDay()];
 }
 
-// Día hábil siguiente a hoy (mañana), saltando domingo -> lunes.
 function siguienteDiaHabil() {
   let fecha = sumarDiasISO(fechaHoyISO(), 1);
   let dia = diaSemanaKeyDe(fecha);
@@ -32,8 +29,6 @@ function siguienteDiaHabil() {
   return { dia, fecha };
 }
 
-// "2026-08-21" -> "21 de agosto" — solo se usa como referencia informativa
-// (la identidad de la carga es el día de la semana, no esta fecha).
 function fechaCorta(fechaISO) {
   if (!fechaISO) return "";
   const [y, m, d] = fechaISO.split("-").map(Number);
@@ -46,47 +41,20 @@ function formatFechaHora(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
-// Orden fijo en el que se muestran las 6 casillas — reutiliza la misma
-// lista de días que ya usa el resto de SMART-TRACK (DIAS_SEMANA_VISITAS).
 const DIAS_ORDEN = DIAS_SEMANA_VISITAS;
 
-/* -----------------------------------------------------------------
-   Cargas por DÍA DE LA SEMANA: hay 6 casillas fijas (lunes..sábado) que
-   se reciclan cada semana — hoy jueves subo/activo la de "viernes"; la
-   semana que entra, jueves otra vez, vuelvo a usar esa misma casilla
-   "viernes", sin que importe la fecha calendario real. Pueden existir
-   varias casillas guardadas a la vez (cargasPorDia), pero solo UNA está
-   "activa" (cargaActivoDia) — esa es la que ven y editan los vendedores.
-   Activar una casilla la deja automáticamente lista para modificar
-   (desbloqueada y sin envíos previos), por si venía bloqueada o con
-   envíos de una semana anterior.
------------------------------------------------------------------- */
 export default function CargasView({ data, persist, persistCargas, puesto, rol, vendedorActual, onUpload, cargasFileInputRef, cargasStatus, onDescargar, bloqueoPendiente, onReintentarBloqueo, onActivarCarga, onEliminarCarga }) {
   const cargasPorDia = data.cargasPorDia || {};
   const cargaActivoDia = data.cargaActivoDia || null;
   const cargaActiva = cargaActivoDia ? (cargasPorDia[cargaActivoDia] || null) : null;
 
-  const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
+  const esStaffConPermiso = rol === "staff" && (puesto === "gerente" || puesto === "supervisor" || puesto === "almacen");
   const esGerente = rol === "staff" && puesto === "gerente";
   const yaEnviado = !!cargaActiva?.enviosPorRuta?.[vendedorActual];
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
   const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
   const [verHistorial, setVerHistorial] = useState(false);
 
-  // Edición 100% local (borrador): mientras se escribe, NO se guarda nada en
-  // Supabase — así una sincronización en tiempo real de otro dispositivo
-  // nunca puede "regresar" el número a medio escribir. Solo al presionar
-  // "Enviar" se manda todo de un jalón.
-  //
-  // Además, el borrador se respalda en localStorage (por ruta+día) — antes
-  // vivía solo en memoria y un `useEffect` lo vaciaba cada vez que
-  // `cargaActivoDia` cambiaba de valor; como ese valor puede "parpadear"
-  // durante cualquier refresco de datos (manual, en tiempo real, o la
-  // recarga automática de la app), eso podía borrar en silencio lo que
-  // alguien tenía a medio escribir sin haber llegado a darle "Enviar".
-  // Ahora, en vez de vaciarlo a ciegas, se CARGA lo que ya hubiera
-  // guardado en este dispositivo para esa ruta+día — así sobrevive
-  // cualquier refresco o recarga sin perder nada.
   const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
   function claveBorradorCargas(ruta, dia) {
     return `smarttrack_cargas_borrador_${ruta || "x"}_${dia || "x"}`;
@@ -102,7 +70,6 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   const [borrador, setBorradorEstado] = useState(() => leerBorradorGuardado(rutaActiva, cargaActivoDia));
   useEffect(() => {
     setBorradorEstado(leerBorradorGuardado(rutaActiva, cargaActivoDia));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rutaActiva, cargaActivoDia]);
 
   function setBorrador(actualizador) {
@@ -111,7 +78,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       try {
         window.localStorage.setItem(claveBorradorCargas(rutaActiva, cargaActivoDia), JSON.stringify(siguiente));
       } catch (err) {
-        console.error("No se pudo respaldar el borrador de la carga en este dispositivo:", err);
+        console.error("No se pudo respaldar el borrador:", err);
       }
       return siguiente;
     });
@@ -121,13 +88,6 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     setBorrador((b) => ({ ...b, [itemIndex]: valor }));
   }
 
-  // `data` (y por lo tanto `cargaActiva.enviosPorRuta`) se actualiza de
-  // forma OPTIMISTA en App.tsx (persist() llama setData(next) antes de
-  // esperar la confirmación de Supabase) — así que no basta con leer
-  // `enviosPorRuta` para saber si el envío YA se confirmó de verdad. Este
-  // estado local sí solo cambia cuando la promesa de `enviarPara` se
-  // resuelve o falla de verdad, y manda sobre lo que se muestra mientras
-  // tanto.
   const [enviando, setEnviando] = useState(false);
   const [errorEnvio, setErrorEnvio] = useState(false);
 
@@ -136,11 +96,8 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     setErrorEnvio(false);
     try {
       await enviarPara(nombreRuta);
-      // Si llegamos aquí sin que truene, Supabase ya confirmó de verdad —
-      // recién ahora `cargaActiva.enviosPorRuta` refleja un envío real, no
-      // solo optimista.
     } catch (err) {
-      console.error("No se pudo confirmar el envío de la carga:", err);
+      console.error("No se pudo confirmar el envío:", err);
       setErrorEnvio(true);
     } finally {
       setEnviando(false);
@@ -155,12 +112,6 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
         const valor = borrador[i];
         return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
       });
-      // Historial de envíos: registro de solo-agregar (nunca se edita ni se
-      // borra desde aquí) con lo que cada vendedor mandó y cuándo. Es una
-      // red de seguridad — aunque algo llegara a sobreescribir el valor
-      // "actual" de porRuta, este rastro no se toca, así que nunca se
-      // pierde qué propuso cada quien. Se guarda contra la carga FRESCA
-      // (cargasFrescas), no contra datos viejos en memoria.
       const cambiosDeEsteEnvio = Object.entries(borrador)
         .filter(([, v]) => v !== undefined)
         .map(([i, v]) => ({
@@ -171,7 +122,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
       const historialEnvios = [
         ...(cargasFrescas.historialEnvios || []),
         { fecha: new Date().toISOString(), ruta: nombreRuta, cambios: cambiosDeEsteEnvio },
-      ].slice(-300); // límite razonable para que el blob no crezca sin fin
+      ].slice(-300);
       return { ...cargasFrescas, items, historialEnvios, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
     });
     setBorrador({});
@@ -179,6 +130,43 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
 
   function subirArchivo(e) {
     onUpload(e, diaParaSubir);
+  }
+
+  async function descargarPivote() {
+    if (!cargaActiva?.items?.length) return;
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    
+    const ws1 = wb.addWorksheet("Pivote");
+    const rutas = RUTAS;
+    ws1.addRow(["FA", "Marca", ...rutas, "Total"]);
+    for (const it of cargaActiva.items) {
+      const row = [it.fa, it.marca];
+      let total = 0;
+      for (const ruta of rutas) {
+        const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+        row.push(qty || "");
+        total += Number(qty) || 0;
+      }
+      row.push(total || "");
+      ws1.addRow(row);
+    }
+    
+    const ws2 = wb.addWorksheet("Lista");
+    ws2.addRow(["Ruta", "FA", "Marca", "Cantidad"]);
+    for (const it of cargaActiva.items) {
+      for (const ruta of rutas) {
+        const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+        if (qty > 0) ws2.addRow([ruta, it.fa, it.marca, qty]);
+      }
+    }
+    
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
   }
 
   const diasGuardados = DIAS_ORDEN.filter((dia) => cargasPorDia[dia]);
@@ -213,7 +201,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                 <input ref={cargasFileInputRef} type="file" accept=".xlsx,.xls,.xlsm" style={{ display: "none" }} onChange={subirArchivo} />
               </div>
               <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 6 }}>
-                Por default es para el día hábil siguiente ({DIA_LABEL[diaSugerido]}, aprox. {fechaCorta(fechaSugerida)}) — cámbialo arriba si es para otro día. Cada día de la semana tiene su propia casilla fija: si ya había una carga guardada para {DIA_LABEL[diaParaSubir]}, se reemplaza por la nueva. Se guarda sin activar; actívala abajo cuando corresponda.
+                Por default es para el día hábil siguiente ({DIA_LABEL[diaSugerido]}, aprox. {fechaCorta(fechaSugerida)}).
               </div>
               {cargasStatus && <div style={{ fontSize: 12, color: "#9AA7BD", marginTop: 6 }}>{cargasStatus}</div>}
             </div>
@@ -234,26 +222,22 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                         {DIA_LABEL[dia]} {activa && <span style={{ color: "#3DDC97", fontWeight: 800 }}>· ACTIVA</span>}
                       </div>
                       <div style={{ fontSize: 11, color: "#9AA7BD" }}>
-                        {c.items.length} artículos · subida el {c.fechaSubida}{c.fechaReferencia ? ` (para el ${fechaCorta(c.fechaReferencia)})` : ""} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
+                        {c.items.length} artículos · subida el {c.fechaSubida} {c.bloqueado && <span style={{ color: "#FF6B6B" }}>· bloqueada</span>}
                       </div>
                     </div>
                     {esGerente && (
                       <div style={{ display: "flex", gap: 8 }}>
                         {!activa && (
                           <button className="btn-ghost" onClick={() => onActivarCarga(dia)}>
-                            <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar esta carga
+                            <Zap size={13} style={{ verticalAlign: "-2px" }} /> Activar
                           </button>
                         )}
                         <button
                           className="btn-ghost"
                           onClick={() => {
-                            const confirmado = window.confirm(
-                              `¿Eliminar la carga de ${DIA_LABEL[dia]} (${c.items.length} artículos)?${activa ? "\n\nEsta carga está ACTIVA — al eliminarla, dejará de haber una carga activa." : ""}\n\nEsta acción no se puede deshacer.`
-                            );
-                            if (confirmado) onEliminarCarga(dia);
+                            if (window.confirm(`¿Eliminar la carga de ${DIA_LABEL[dia]}?`)) onEliminarCarga(dia);
                           }}
                           style={{ color: "#FF6B6B", borderColor: "#FF6B6B33" }}
-                          title="Eliminar esta carga"
                         >
                           <Trash2 size={13} style={{ verticalAlign: "-2px" }} />
                         </button>
@@ -269,31 +253,38 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
                 <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
-                  Editando carga activa · {DIA_LABEL[cargaActiva.dia]} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
+                  Carga activa · {DIA_LABEL[cargaActiva.dia]} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
                 </div>
-                {cargaActiva.items.length > 0 && (
-                  <button className="btn-ghost" onClick={onDescargar}>
-                    <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar archivo modificado
-                  </button>
-                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  {cargaActiva.items.length > 0 && (
+                    <>
+                      <button className="btn-ghost" onClick={onDescargar}>
+                        <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar modificado
+                      </button>
+                      <button className="btn-ghost" onClick={descargarPivote}>
+                        <Download size={14} style={{ verticalAlign: "-2px" }} /> Descargar pivote
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
+
               {bloqueoPendiente && (
                 <div className="card" style={{ padding: 12, marginBottom: 10, border: "1px solid #F2B134", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, color: "#F2B134" }}>
                     <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
-                    <span>El archivo se descargó, pero el bloqueo no se pudo confirmar con el servidor (falta de señal). Los vendedores todavía pueden modificar esta carga.</span>
+                    <span>El archivo se descargó, pero el bloqueo no se confirmó.</span>
                   </div>
-                  <button className="btn" onClick={onReintentarBloqueo} style={{ flexShrink: 0 }}>
-                    <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reintentar bloqueo
+                  <button className="btn" onClick={onReintentarBloqueo}>
+                    <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reintentar
                   </button>
                 </div>
               )}
-              {cargaActiva.bloqueado && (
+
+              {cargaActiva.bloqueado && esGerente && (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 6, marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, color: "#FF6B6B" }}>
-                    Ya se descargó el archivo final — los vendedores ya no pueden modificar sus cantidades.
-                  </div>
-                  <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: false }))}>
+                  <div style={{ fontSize: 11, color: "#FF6B6B" }}>Ya se descargó el archivo final.</div>
+                  <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: false }))}>
                     <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> Reactivar edición
                   </button>
                 </div>
@@ -301,7 +292,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
 
               {cargaActiva.items.length > 0 && (
                 <div>
-                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>ESTATUS POR RUTA · TOCA PARA VER/EDITAR SU CARGA</div>
+                  <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>ESTATUS POR RUTA</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: rutaVistaStaff ? 14 : 0 }}>
                     {RUTAS.map((nombreRuta) => {
                       const enviado = !!cargaActiva.enviosPorRuta?.[nombreRuta];
@@ -325,10 +316,9 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                             <span style={{ width: 8, height: 8, borderRadius: 4, background: enviado ? "#3DDC97" : "#5b6478", display: "inline-block" }} />
                             {nombreRuta}{NOMBRES[nombreRuta] ? ` · ${NOMBRES[nombreRuta]}` : ""}
                           </button>
-                          {enviado && (
+                          {enviado && esGerente && (
                             <button
-                              onClick={() => persistCargas(cargaActivoDia, (cargasFrescas) => ({ ...cargasFrescas, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: false } }))}
-                              title="Reactivar edición para esta ruta"
+                              onClick={() => persistCargas(cargaActivoDia, (c) => ({ ...c, enviosPorRuta: { ...(c.enviosPorRuta || {}), [nombreRuta]: false } }))}
                               style={{ display: "flex", alignItems: "center", padding: "5px 8px", border: "none", borderLeft: "1px solid #3DDC97", background: "transparent", color: "#3DDC97", cursor: "pointer" }}
                             >
                               <RefreshCw size={12} />
@@ -338,64 +328,21 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                       );
                     })}
                   </div>
-                  {rutaVistaStaff && (() => {
-                    const enviadoEstaRuta = !!cargaActiva.enviosPorRuta?.[rutaVistaStaff];
-                    return (
-                      <div>
-                        <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
-                          Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}{cargaActiva.bloqueado ? " (bloqueada, reactiva la edición para modificar)" : ""}
-                        </div>
-                        <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado || enviando} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
-                        {errorEnvio && (
-                          <div style={{ fontSize: 11.5, color: "#FF6B6B", marginTop: 8 }}>
-                            No se pudo confirmar el envío por falta de señal. Ya quedó guardado en este dispositivo y se sigue intentando solo — puedes esperar o volver a intentar.
-                          </div>
-                        )}
-                        {!cargaActiva.bloqueado && (
-                          <button
-                            className="btn"
-                            style={{
-                              marginTop: 12, width: "100%",
-                              background: enviando ? "#38bdf8" : (enviadoEstaRuta && !errorEnvio) ? "#3DDC97" : undefined,
-                              borderColor: enviando ? "#38bdf8" : (enviadoEstaRuta && !errorEnvio) ? "#3DDC97" : undefined,
-                              color: enviando || (enviadoEstaRuta && !errorEnvio) ? "#0B1220" : undefined,
-                            }}
-                            onClick={() => manejarEnviarConConfirmacion(rutaVistaStaff)}
-                            disabled={enviando}
-                          >
-                            <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} />{" "}
-                            {enviando ? "Enviando..." : errorEnvio ? "Reintentar envío" : enviadoEstaRuta ? "Carga enviada correctamente ✓" : "Enviar / confirmar esta carga"}
-                          </button>
-                        )}
+                  {rutaVistaStaff && (
+                    <div>
+                      <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 8 }}>
+                        Carga de {rutaVistaStaff}{NOMBRES[rutaVistaStaff] ? ` · ${NOMBRES[rutaVistaStaff]}` : ""}
                       </div>
-                    );
-                  })()}
-                  {(cargaActiva.historialEnvios || []).length > 0 && (
-                    <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1E2A42" }}>
-                      <button
-                        onClick={() => setVerHistorial((v) => !v)}
-                        style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#9AA7BD", cursor: "pointer", fontSize: 12, padding: 0 }}
-                      >
-                        <Clock size={13} /> Historial de envíos ({cargaActiva.historialEnvios.length}) {verHistorial ? "▲" : "▼"}
-                      </button>
-                      <div style={{ fontSize: 10.5, color: "#5b6478", marginTop: 4 }}>
-                        Registro de solo-lectura de cada envío — no se puede editar ni borrar, es tu respaldo por si algo raro pasa con los valores actuales.
-                      </div>
-                      {verHistorial && (
-                        <div style={{ maxHeight: 260, overflowY: "auto", marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                          {[...cargaActiva.historialEnvios].reverse().map((h, idx) => (
-                            <div key={idx} style={{ background: "#141b2c", borderRadius: 8, padding: "8px 10px", fontSize: 11.5 }}>
-                              <div style={{ color: "#E8EDF5", fontWeight: 600, marginBottom: 2 }}>
-                                {h.ruta}{NOMBRES[h.ruta] ? ` · ${NOMBRES[h.ruta]}` : ""} <span style={{ color: "#9AA7BD", fontWeight: 400 }}>— {formatFechaHora(h.fecha)}</span>
-                              </div>
-                              <div style={{ color: "#9AA7BD" }}>
-                                {(h.cambios || []).map((c, i2) => (
-                                  <span key={i2}>{c.marca || c.fa}: <span className="mono" style={{ color: "#E8EDF5" }}>{c.valor ?? "—"}</span>{i2 < h.cambios.length - 1 ? " · " : ""}</span>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                      <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado || !esGerente} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
+                      {esGerente && !cargaActiva.bloqueado && (
+                        <button
+                          className="btn"
+                          style={{ marginTop: 12, width: "100%" }}
+                          onClick={() => manejarEnviarConConfirmacion(rutaVistaStaff)}
+                          disabled={enviando}
+                        >
+                          <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Guardar cambios
+                        </button>
                       )}
                     </div>
                   )}
@@ -408,9 +355,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
 
       {!cargaActiva ? (
         <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-          {rol === "vendedor"
-            ? "Todavía no hay una carga activa para hoy."
-            : "No hay ninguna carga activa por el momento."}
+          {rol === "vendedor" ? "Todavía no hay una carga activa." : "No hay ninguna carga activa."}
         </div>
       ) : rol === "vendedor" ? (
         <>
@@ -423,57 +368,29 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
             </div>
           )}
           {!cargaActiva.bloqueado && (
-            <div
-              className="card"
-              style={{
-                padding: 12, marginBottom: 14,
-                border: `1px solid ${enviando ? "#38bdf8" : errorEnvio ? "#FF6B6B" : yaEnviado ? "#3DDC97" : "#F2B134"}`,
-              }}
-            >
-              <div style={{ fontSize: 12, color: enviando ? "#38bdf8" : errorEnvio ? "#FF6B6B" : yaEnviado ? "#3DDC97" : "#F2B134" }}>
-                {enviando
-                  ? "Enviando y confirmando con el servidor... no cierres la app todavía."
-                  : errorEnvio
-                  ? "No se pudo confirmar el envío por falta de señal. Tu propuesta ya quedó guardada en este dispositivo y se sigue intentando sola — puedes esperar, o volver a intentar cuando tengas mejor señal."
-                  : yaEnviado
-                  ? "Ya enviaste tus cambios correctamente — no puedes seguir editando hasta que gerente/supervisor lo reactive."
-                  : "Aún no has enviado tus cambios."}
+            <div className="card" style={{ padding: 12, marginBottom: 14, border: `1px solid ${yaEnviado ? "#3DDC97" : "#F2B134"}` }}>
+              <div style={{ fontSize: 12, color: yaEnviado ? "#3DDC97" : "#F2B134" }}>
+                {yaEnviado ? "Ya enviaste tus cambios." : "Aún no has enviado tus cambios."}
               </div>
             </div>
           )}
-          <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>
-            Escribe la cantidad que consideres — no se guarda hasta que le des "Enviar cambios". Si no cambias una cantidad, se usará la inicial tal cual viene en la carga propuesta.
-          </div>
           <TablaCargaVendedor
             items={cargaActiva.items}
             nombreRuta={vendedorActual}
-            bloqueado={cargaActiva.bloqueado || (yaEnviado && !errorEnvio) || enviando}
+            bloqueado={cargaActiva.bloqueado || yaEnviado}
             valoresLocales={borrador}
             onCambiarLocal={cambiarLocal}
           />
-          {!cargaActiva.bloqueado && (
-            <button
-              className="btn"
-              style={{
-                marginTop: 14, width: "100%",
-                background: enviando ? "#38bdf8" : (yaEnviado && !errorEnvio) ? "#3DDC97" : undefined,
-                borderColor: enviando ? "#38bdf8" : (yaEnviado && !errorEnvio) ? "#3DDC97" : undefined,
-                color: enviando || (yaEnviado && !errorEnvio) ? "#0B1220" : undefined,
-                cursor: (yaEnviado && !errorEnvio) || enviando ? "default" : "pointer",
-              }}
-              onClick={() => manejarEnviarConConfirmacion(vendedorActual)}
-              disabled={enviando || (yaEnviado && !errorEnvio)}
-            >
-              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} />{" "}
-              {enviando ? "Enviando..." : errorEnvio ? "Reintentar envío" : yaEnviado ? "Cambios enviados correctamente ✓" : "Enviar cambios"}
+          {!cargaActiva.bloqueado && !yaEnviado && (
+            <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={() => manejarEnviarConConfirmacion(vendedorActual)} disabled={enviando}>
+              <CheckCircle2 size={14} style={{ verticalAlign: "-2px" }} /> Enviar cambios
             </button>
           )}
         </>
       ) : (
         <div className="card" style={{ padding: 16 }}>
           <div style={{ fontSize: 13, color: "#9AA7BD" }}>
-            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas, activos desde {DIA_LABEL[cargaActiva.dia]}.
-            Cada vendedor ya puede entrar a su propia pestaña "CARGAS" para revisar y, si quiere, ajustar su cantidad propuesta.
+            {cargaActiva.items.length} artículos cargados para {Object.keys(cargaActiva.items[0]?.porRuta || {}).length} rutas.
           </div>
         </div>
       )}
@@ -491,7 +408,7 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCa
         return (
           <div key={i} className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 140px", minWidth: 0 }}>
-              <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.marca}</div>
+              <div style={{ fontSize: 13, color: "#E8EDF5", fontWeight: 700 }}>{it.marca}</div>
               <div style={{ fontSize: 11, color: "#9AA7BD" }}>{it.fa}</div>
             </div>
             <div style={{ textAlign: "center", minWidth: 56 }}>
@@ -499,14 +416,14 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCa
               <div className="mono" style={{ fontSize: 15, color: "#E8EDF5" }}>{porRuta.inicial}</div>
             </div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Tu propuesta</div>
+              <div style={{ fontSize: 10, color: "#9AA7BD" }}>Propuesta</div>
               <input
                 type="number"
                 value={valorMostrado}
                 onChange={(e) => onCambiarLocal(i, e.target.value)}
                 onFocus={(e) => e.target.select()}
                 disabled={bloqueado}
-                style={{ width: 80, padding: "6px 8px", textAlign: "center", fontSize: 14, boxSizing: "border-box" }}
+                style={{ width: 80, padding: "6px 8px", textAlign: "center", fontSize: 14 }}
               />
             </div>
           </div>
