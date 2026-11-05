@@ -738,7 +738,19 @@ async function datosRetro(fecha, cfg) {
     if (!fila) continue;
     const m = calcular(fila, filas);
     const sv = sinVualaDe(fila);
-    const v = varsDia(fila, m, filas, c);
+    
+    // Leer marcas del campo extra.marcas
+    const marcasArr = fila.extra?.marcas || [];
+    const marcas = marcasArr.reduce((acc, mk) => {
+      const clave = (mk.clave || "").toLowerCase();
+      const vendido = Math.round(Number(mk.vendido) || 0);
+      if (clave.includes("ice")) acc.ice = vendido;
+      if (clave.includes("bloss")) acc.blossom = vendido;
+      if (clave.includes("summ")) acc.summer = vendido;
+      if (clave.includes("faronet")) acc.faronet = vendido;
+      return acc;
+    }, { ice: 0, blossom: 0, summer: 0, faronet: 0 });
+
     rutas.push({
       ruta: c.ruta,
       nombre: primerNombre(c.nombre, c.ruta),
@@ -749,10 +761,10 @@ async function datosRetro(fecha, cfg) {
       falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
       sinVuala: sv ? { piezas: sv.piezas || 0, minimo: sv.minimo || 2 } : null,
       otc: Math.round(otcPorRuta[claveRuta(c.ruta)] || 0),
-      ice: v.ice || 0,
-      blossom: v.blossom || 0,
-      summer: v.summer || 0,
-      faronet: v.faronet || 0,
+      ice: marcas.ice,
+      blossom: marcas.blossom,
+      summer: marcas.summer,
+      faronet: marcas.faronet,
     });
   }
 
@@ -789,7 +801,7 @@ function textoRetroFijo(d) {
   L.push('', '📦 *Resumen por ruta:*');
   for (const r of d.rutas) {
     const sv = r.sinVuala ? ` · SV ${svIcon(r.sinVuala)}` : '';
-    L.push(`• ${r.ruta} ${r.nombre}: ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
+    L.push(`• ${r.ruta} (${r.nombre}): ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
     L.push(`  ICE ${r.ice} · BLOSS ${r.blossom} · SUMM ${r.summer} · FARO ${r.faronet}`);
   }
 
