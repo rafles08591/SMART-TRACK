@@ -116,26 +116,47 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     onUpload(e, diaParaSubir);
   }
 
-  async function descargarExcel(bloquear = false) {
-    if (!cargaActiva?.items?.length) return;
-    const XLSX = await import("xlsx");
-    const wb = XLSX.utils.book_new();
-    const rutas = RUTAS;
-    
-    const filas1 = [["FA", "Marca", ...rutas, "Total"]];
-    for (const it of cargaActiva.items) {
-      const row = [it.fa, it.marca];
-      let total = 0;
-      for (const ruta of rutas) {
-        const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
-        row.push(qty || "");
-        total += Number(qty) || 0;
-      }
-      row.push(total || "");
-      filas1.push(row);
+async function descargarExcel(bloquear = false) {
+  if (!cargaActiva?.items?.length) return;
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  const rutas = RUTAS;
+  
+  // Pestaña 1: Pivote
+  const filas1 = [["FA", "Marca", ...rutas, "Total"]];
+  for (const it of cargaActiva.items) {
+    const row = [it.fa, it.marca];
+    let total = 0;
+    for (const ruta of rutas) {
+      const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+      row.push(qty || "");
+      total += Number(qty) || 0;
     }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(filas1), "Pivote");
-    
+    row.push(total || "");
+    filas1.push(row);
+  }
+  const ws1 = XLSX.utils.aoa_to_sheet(filas1);
+  ws1["!cols"] = [{ wch: 12 }, { wch: 25 }, ...rutas.map(() => ({ wch: 10 })), { wch: 10 }];
+  XLSX.utils.book_append_sheet(wb, ws1, "Pivote");
+  
+  // Pestaña 2: Lista (formato Codigo_Vendedor, Codigo_Articulo, Cantidad)
+  const filas2 = [["Codigo_Vendedor", "Codigo_Articulo", "Cantidad"]];
+  for (const it of cargaActiva.items) {
+    for (const ruta of rutas) {
+      const qty = it.porRuta?.[ruta]?.modificada ?? it.porRuta?.[ruta]?.inicial ?? 0;
+    if (qty > 0) filas2.push([ruta.replace(/^RUTA\s*/i, ""), it.fa, qty]);
+    }
+  }
+  const ws2 = XLSX.utils.aoa_to_sheet(filas2);
+  ws2["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, ws2, "Lista");
+  
+  XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  
+  if (bloquear && esGerente && !cargaActiva.bloqueado) {
+    await persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }));
+  }
+}
     const filas2 = [["Ruta", "FA", "Cantidad"]];
     for (const it of cargaActiva.items) {
       for (const ruta of rutas) {
