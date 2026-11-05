@@ -116,7 +116,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     onUpload(e, diaParaSubir);
   }
 
-async function descargarExcel(bloquear = false) {
+ async function descargarExcel(bloquear = false) {
   if (!cargaActiva?.items?.length) return;
   const XLSX = await import("xlsx");
   const wb = XLSX.utils.book_new();
