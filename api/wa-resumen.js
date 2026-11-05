@@ -739,15 +739,15 @@ async function datosRetro(fecha, cfg) {
     const m = calcular(fila, filas);
     const sv = sinVualaDe(fila);
     
-    // Leer marcas del campo extra.marcas
+    // Leer marcas del día (por_dia) del campo extra.marcas
     const marcasArr = fila.extra?.marcas || [];
     const marcas = marcasArr.reduce((acc, mk) => {
       const clave = (mk.clave || "").toLowerCase();
-      const vendido = Math.round(Number(mk.vendido) || 0);
-      if (clave.includes("ice")) acc.ice = vendido;
-      if (clave.includes("bloss")) acc.blossom = vendido;
-      if (clave.includes("summ")) acc.summer = vendido;
-      if (clave.includes("faronet")) acc.faronet = vendido;
+      const porDia = Math.round(Number(mk.por_dia) || 0);
+      if (clave.includes("ice")) acc.ice = porDia;
+      if (clave.includes("bloss")) acc.blossom = porDia;
+      if (clave.includes("summ")) acc.summer = porDia;
+      if (clave.includes("faronet")) acc.faronet = porDia;
       return acc;
     }, { ice: 0, blossom: 0, summer: 0, faronet: 0 });
 
@@ -820,7 +820,7 @@ async function textoRetroIA(d, cfg) {
     '1) Saludo con hora y líder (más paquetes).',
     '2) Si hay rutas en cero, menciónalas. Si no, di que no hay.',
     '3) "Candidatos para la mano del pachuco": las 3 rutas más bajas (excluyendo al líder).',
-    '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala (✅ si 2 o más, ❌ si menos), ICE, BLOSSOM, SUMMER, FARONET.',
+    '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala (✅ si 2 o más, ❌ si menos), ICE, BLOSSOM, SUMMER, FARONET (del día).',
     '5) Cierre motivacional.',
     'Usa @número para mencionar. Usa solo los números del JSON.',
     `Datos: ${JSON.stringify(d)}`,
