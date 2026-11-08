@@ -80,6 +80,14 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg), ventasPorProducto(texto, cfg),
     ]);
     if (porProducto) datos.venta_por_producto = porProducto;
+    {
+      const fv = await fechaUltimoCorte({ hasta: fechaMX() });
+      if (fv) {
+        const vu = await vualaPorRuta(fv, todos);
+        datos.vuala_hoy = c.tipo === 'vendedor' ? (vu[claveRuta(c.ruta)] || { piezas: 0, pesos: 0 }) : vu;
+        datos.vuala_nota = 'Vuala = artículos marcados como Vuala en el catálogo (vainilla, chocolate, switch…). Rutas que no aparecen en vuala_hoy NO han vendido Vuala hoy.';
+      }
+    }
     // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
     const rutaDeMencion = {};
     for (const x of todos) if (x.tipo === 'vendedor' && x.telefono) rutaDeMencion[mencion(x.telefono)] = claveRuta(x.ruta);
@@ -98,6 +106,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       porProducto?.tipo_consulta
         ? 'Reglas: formato WhatsApp (*negritas*), una sección corta por ruta (máximo 25 líneas en total), un par de emojis máximo.'
         : 'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      'No termines preguntando si quieren más detalle ni ofreciendo otra cosa ("¿Quiere detalle por ruta?", "¿Le paso otro dato?"): da la información y cierra.',
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
@@ -328,6 +337,55 @@ async function textoOTCDesglose(fecha, todos, soloRuta = null) {
   }
 }
 
+// ------------------------------------------------------------------ 🥤 VUALA
+// Qué cuenta como Vuala lo marca el Gerente en OTC → Catálogo (data.otcVuala). Si nunca se ha guardado:
+const VUALA_DEFAULT = [
+  { codigo: '0309', articulo: 'VLACHOCO_26' }, { codigo: '0310', articulo: 'VLAVAINILLA_26' },
+  { codigo: '0316', articulo: 'SWICHC/10_26' }, { codigo: '0401', articulo: 'VLA VAINILLA SELE' },
+];
+// → { J201: { piezas, pesos, articulos: { nombre: piezas } }, ... } solo rutas del equipo
+async function vualaPorRuta(fecha, todos) {
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia,cat:data->otcVuala');
+    const cat = Array.isArray(r[0]?.cat) ? r[0].cat : VUALA_DEFAULT;
+    const codigos = new Set(cat.map((x) => String(x.codigo || '').trim()).filter(Boolean));
+    const nombres = new Set(cat.map((x) => String(x.articulo || '').trim().toUpperCase()).filter(Boolean));
+    const mias = new Set((todos || []).filter((c) => c.tipo === 'vendedor').map((c) => claveRuta(c.ruta)));
+    const out = {};
+    for (const x of (r[0]?.otc || [])) {
+      if (x.fecha !== fecha) continue;
+      const ruta = claveRuta(x.vendedor);
+      if (mias.size && !mias.has(ruta)) continue;
+      const es = codigos.has(String(x.codigoArticulo || '').trim()) || nombres.has(String(x.articulo || '').trim().toUpperCase());
+      if (!es) continue;
+      const v = out[ruta] || (out[ruta] = { piezas: 0, pesos: 0, articulos: {} });
+      const pz = Number(x.unidadesVendidas) || 0;
+      v.piezas += pz; v.pesos += Number(x.monto) || 0;
+      v.articulos[x.articulo || x.codigoArticulo] = (v.articulos[x.articulo || x.codigoArticulo] || 0) + pz;
+    }
+    for (const v of Object.values(out)) { v.piezas = Math.round(v.piezas); v.pesos = Math.round(v.pesos); }
+    return out;
+  } catch { return {}; }
+}
+function textoVualaRuta(v) {
+  if (!v || !v.piezas) return '🥤 *Vuala hoy:* ❌ todavía no vendes Vuala';
+  const arts = Object.entries(v.articulos).sort((a, b) => b[1] - a[1]).map(([a, pz]) => `${a} ${pz}`).join(' · ');
+  return `🥤 *Vuala hoy:* ✅ ${v.piezas} pz · $${v.pesos.toLocaleString('es-MX')}\n${arts}`;
+}
+function textoVualaEquipo(vu, todos) {
+  const rutas = (todos || []).filter((c) => c.tipo === 'vendedor' && c.activo !== false)
+    .map((c) => ({ ruta: claveRuta(c.ruta), nombre: primerNombre(c.nombre, claveRuta(c.ruta)) }))
+    .filter((x, i, a) => a.findIndex((y) => y.ruta === x.ruta) === i).sort((a, b) => a.ruta.localeCompare(b.ruta));
+  if (!rutas.length) return '';
+  const si = rutas.filter((r) => vu[r.ruta]?.piezas);
+  const L = [`🥤 *¿Vendieron Vuala hoy?* ${si.length}/${rutas.length} rutas`];
+  for (const r of rutas) {
+    const v = vu[r.ruta];
+    L.push(v?.piezas ? `✅ ${r.ruta} ${r.nombre}: ${v.piezas} pz · $${v.pesos.toLocaleString('es-MX')}` : `❌ ${r.ruta} ${r.nombre}`);
+  }
+  return L.join('\n');
+}
+
 async function modoDia(req) {
   const hoy = fechaMX();
   const cfg = await configBot();
@@ -337,6 +395,7 @@ async function modoDia(req) {
   const [lista, filas, todos] = await Promise.all([
     contactos({ campo: 'dia', cfg }), filasDeFecha(fecha), listaContactos(cfg),
   ]);
+  const vuala = await vualaPorRuta(fecha, todos);
   const porRuta = Object.fromEntries(filas.map((f) => [claveRuta(f.ruta), f]));
   const mensajes = [];
   const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
@@ -350,6 +409,7 @@ async function modoDia(req) {
         caption: junta(
           llenarPlantilla(plantilla(cfg, 'grupo_dia'), varsGrupoDia(g)),
           tablaReto,
+          textoVualaEquipo(vuala, todos),
           await textoOTCDesglose(fecha, todos)
         ),
         tarjeta_url: await urlTarjeta(req, 'GRUPO', fecha, g.actualizado, 'dia'),
@@ -361,7 +421,7 @@ async function modoDia(req) {
       if (!eq.rutasDia.length) continue;
       mensajes.push({
         ruta: 'EQUIPO', tipo: 'equipo', numero: destino(c),
-        caption: junta(llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }), tablaReto),
+        caption: junta(llenarPlantilla(plantilla(cfg, 'equipo_dia'), { ...varsEquipoDia(eq), nombre: primerNombre(c.nombre, '') }), tablaReto, textoVualaEquipo(vuala, todos)),
         tarjeta_url: await urlTarjeta(req, 'EQUIPO', fecha, eq.actualizado, 'dia'),
       });
       continue;
@@ -375,6 +435,7 @@ async function modoDia(req) {
       caption: junta(
         llenarPlantilla(plantilla(cfg, 'dia'), varsDia(fila, m, filas, c)),
         textoRetoVendedor(av, c.ruta),
+        textoVualaRuta(vuala[claveRuta(c.ruta)]),
         await textoOTCDesglose(fecha, todos, c.ruta)
       ),
       tarjeta_url: await urlTarjeta(req, fila.ruta, fecha, fila.actualizado_en, 'dia'),
@@ -778,6 +839,7 @@ async function datosRetro(fecha, cfg) {
     }
   } catch {}
 
+  const vuala = await vualaPorRuta(fecha, todos);
   const rutas = [];
   for (const c of todos) {
     if (c.tipo !== 'vendedor' || !c.activo) continue;
@@ -786,17 +848,18 @@ async function datosRetro(fecha, cfg) {
     const m = calcular(fila, filas);
     const sv = sinVualaDe(fila);
     
-    // Leer marcas del día (por_dia) del campo extra.marcas
-    const marcasArr = fila.extra?.marcas || [];
-    const marcas = marcasArr.reduce((acc, mk) => {
-      const clave = (mk.clave || "").toLowerCase();
-      const porDia = Math.round(Number(mk.por_dia) || 0);
-      if (clave.includes("ice")) acc.ice = porDia;
-      if (clave.includes("bloss")) acc.blossom = porDia;
-      if (clave.includes("summ")) acc.summer = porDia;
-      if (clave.includes("faronet")) acc.faronet = porDia;
-      return acc;
-    }, { ice: 0, blossom: 0, summer: 0, faronet: 0 });
+    // Marcas DEL DÍA: lo vendido hoy y su meta del día (extra.marcas_dia, igual que la tabla de la app).
+    // OJO: extra.marcas[].por_dia es lo que NECESITAN vender por día (un objetivo), no el avance.
+    const marcas = { ice: null, blossom: null, summer: null, faronet: null };
+    for (const mk of (fila.extra?.marcas_dia || [])) {
+      const k = `${mk.clave || ''} ${mk.nombre || ''}`.toLowerCase();
+      const v = { vendido: Math.round(Number(mk.vendido) || 0), meta: Number(mk.objetivo) > 0 ? Math.round(Number(mk.objetivo)) : null };
+      if (k.includes('ice')) marcas.ice = v;
+      else if (k.includes('bloss')) marcas.blossom = v;
+      else if (k.includes('summ')) marcas.summer = v;
+      else if (k.includes('faro')) marcas.faronet = v;
+    }
+    const otcApp = Number(fila.extra?.otc_dia);
 
     rutas.push({
       ruta: c.ruta,
@@ -807,7 +870,10 @@ async function datosRetro(fecha, cfg) {
       obj: Math.round(m.objDia || 0),
       falta: Math.max(0, (m.objDia || 0) - (m.ventaDia || 0)),
       sinVuala: sv ? { piezas: sv.piezas || 0, minimo: sv.minimo || 2 } : null,
-      otc: Math.round(otcPorRuta[claveRuta(c.ruta)] || 0),
+      // OTC del día: el mismo dato de la app; si no viene, la suma del detalle de OTC
+      otc: Math.round(Number.isFinite(otcApp) && fila.extra?.otc_dia !== null && fila.extra?.otc_dia !== undefined ? otcApp : (otcPorRuta[claveRuta(c.ruta)] || 0)),
+      vuala: vuala[claveRuta(c.ruta)]?.piezas || 0,
+      otc_meta: Number(fila.extra?.otc_dia_objetivo) > 0 ? Math.round(Number(fila.extra.otc_dia_objetivo)) : null,
       ice: marcas.ice,
       blossom: marcas.blossom,
       summer: marcas.summer,
@@ -819,40 +885,43 @@ async function datosRetro(fecha, cfg) {
   const { h } = horaActualMX();
   const lider = rutas[0] || null;
   const enCero = rutas.filter(r => r.venta_dia === 0);
-  const pachuco = rutas.filter(r => r.ruta !== lider?.ruta).slice(-3).reverse();
+  // Candidatos: los 3 con menor % de su meta del día (sin contar al líder)
+  const pachuco = rutas.filter((r) => r.ruta !== lider?.ruta)
+    .sort((a, b) => (a.pct_dia ?? 999) - (b.pct_dia ?? 999) || a.venta_dia - b.venta_dia).slice(0, 3);
 
   return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, pachuco, rutas };
 }
 
+// Retro en formato "tarjetas" por ruta: lo VENDIDO HOY / meta del día, con semáforo como la app
+// (🟢 ya cubrió la meta del día · 🟡 80% o más · 🔴 abajo).
 function textoRetroFijo(d) {
-  const tag = (r) => (r.mencion ? `@${r.mencion}` : `${r.ruta} ${r.nombre}`);
-  const svIcon = (sv) => !sv ? '' : (sv.piezas >= 2 ? '✅' : '❌');
+  const tag = (r) => (r.mencion ? `@${r.mencion}` : r.nombre);
+  const ruta = (r) => claveRuta(r.ruta);
+  const miles = (x) => Math.round(Number(x) || 0).toLocaleString('es-MX');
+  const dinero = (x) => (x >= 1000 ? `$${(x / 1000).toFixed(1).replace(/\.0$/, '')}k` : `$${miles(x)}`);
+  const sem = (v, meta) => (!meta ? '⚪' : v >= meta ? '🟢' : v >= meta * 0.8 ? '🟡' : '🔴');
+  const vm = (v, meta) => `${miles(v)}${meta ? `/${miles(meta)}` : ''}`;
+  const mk = (nom, x) => (x ? `${nom} ${vm(x.vendido, x.meta)}${x.meta && x.vendido >= x.meta ? '✓' : ''}` : null);
   const L = [];
-
-  if (d.lider_dia) {
-    L.push(`¡Buenos días equipo! Son las ${d.hora} y la líder del día es ${tag(d.lider_dia)} de ${d.lider_dia.ruta} con ${d.lider_dia.venta_dia} paq (${d.lider_dia.pct_dia ?? '—'}%).`);
-  }
-
-  if (d.en_cero.length) {
-    L.push('', '🥶 *Rutas en cero:*');
-    for (const r of d.en_cero) L.push(`• ${tag(r)}`);
-  } else {
-    L.push('', 'No tenemos rutas en cero hasta este momento.');
-  }
-
+  L.push(`📊 *AVANCE DEL DÍA · ${d.hora} h*`);
+  L.push('_vendido hoy / meta del día_');
+  if (d.lider_dia) L.push('', `🏆 Líder: ${tag(d.lider_dia)} (${ruta(d.lider_dia)}) con *${miles(d.lider_dia.venta_dia)} paq* (${d.lider_dia.pct_dia ?? '—'}%)`);
+  L.push(d.en_cero.length ? `🥶 En cero: ${d.en_cero.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '✅ Ninguna ruta en cero');
+  const sinVuala = d.rutas.filter((r) => !r.vuala);
+  L.push(sinVuala.length ? `🥤 Sin vender Vuala: ${sinVuala.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '🥤 ¡Todas las rutas ya vendieron Vuala!');
   if (d.pachuco.length) {
-    L.push('', '🖐️ *Candidatos para la mano del pachuco:*');
-    for (const r of d.pachuco) L.push(`• ${tag(r)} · ${r.venta_dia} paq, le faltan ${r.falta} paq`);
+    L.push('', '🖐️ *Candidatos a la Tercera Mano del Pachuco:*');
+    d.pachuco.forEach((r, i) => L.push(`${i + 1}. ${tag(r)} (${ruta(r)}) · ${r.pct_dia ?? '—'}% · le faltan ${miles(r.falta)} paq`));
   }
-
-  L.push('', '📦 *Resumen por ruta:*');
+  L.push('', '━━━━━━━━━━━━━━━');
   for (const r of d.rutas) {
-    const sv = r.sinVuala ? ` · SV ${svIcon(r.sinVuala)}` : '';
-    L.push(`• ${r.ruta} (${r.nombre}): ${r.venta_dia} paq (${r.pct_dia ?? '—'}%) · OTC $${r.otc}${sv}`);
-    L.push(`  ICE ${r.ice} · BLOSS ${r.blossom} · SUMM ${r.summer} · FARO ${r.faronet}`);
+    L.push('', `${sem(r.venta_dia, r.obj)} *${ruta(r)} ${r.nombre}* · *${vm(r.venta_dia, r.obj)} paq* (${r.pct_dia ?? '—'}%)`);
+    const marcas = [mk('ICE', r.ice), mk('BLOSS', r.blossom), mk('SUMM', r.summer), mk('FARO', r.faronet)].filter(Boolean);
+    if (marcas.length) L.push(`   ${marcas.join(' · ')}`);
+    const sv = r.sinVuala ? `S/Vuala ${r.sinVuala.piezas}/${r.sinVuala.minimo} ${r.sinVuala.piezas >= r.sinVuala.minimo ? '✅' : '❌'}` : null;
+    L.push(`   OTC ${dinero(r.otc)}${r.otc_meta ? `/${dinero(r.otc_meta)}` : ''}${sv ? ` · ${sv}` : ''} · Vuala ${r.vuala ? `${r.vuala} pz ✅` : '❌'}`);
   }
-
-  L.push('', '¡Vamos equipo, a darle con todo!');
+  L.push('', '━━━━━━━━━━━━━━━', '🟢 meta del día cubierta · 🟡 80% o más · 🔴 abajo', '¡Vamos equipo, a cerrar fuerte! 💪');
   return L.join('\n');
 }
 
@@ -911,7 +980,8 @@ async function modoRetroGrupo(req) {
 
   const d = await datosRetro(hoy, cfg);
   if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
-  const texto = (await textoRetroIA(d, cfg)) || textoRetroFijo(d);
+  // Formato fijo (tabla por ruta): los números salen directo de los datos, sin pasar por la IA
+  const texto = textoRetroFijo(d);
   const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
 
   await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
