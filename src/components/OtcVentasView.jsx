@@ -330,6 +330,73 @@ function CatalogoSinVualaPanel({ data, persistFresco }) {
   );
 }
 
+// =========================================================================
+// CatalogoVualaPanel — qué artículos cuentan como VUALA (vainilla, chocolate,
+// switch…). Lo usa Robotina para el indicador "¿vendió Vuala?" en la retro,
+// las tarjetas del día y sus respuestas. Se guarda en data.otcVuala
+// (array de { codigo, articulo }). Si nunca se ha guardado, se usa VUALA_BASE.
+// =========================================================================
+export const VUALA_BASE = [
+  { codigo: "0309", articulo: "VLACHOCO_26" },
+  { codigo: "0310", articulo: "VLAVAINILLA_26" },
+  { codigo: "0316", articulo: "SWICHC/10_26" },
+  { codigo: "0401", articulo: "VLA VAINILLA SELE" },
+];
+
+function CatalogoVualaPanel({ data, persistFresco }) {
+  const [codigoNuevo, setCodigoNuevo] = useState("");
+  const [articuloNuevo, setArticuloNuevo] = useState("");
+  const lista = Array.isArray(data?.otcVuala) ? data.otcVuala : VUALA_BASE;
+
+  function guardar(nueva) {
+    persistFresco(() => ({ otcVuala: nueva }));
+  }
+  function agregar() {
+    const codigo = codigoNuevo.trim();
+    if (!codigo) return;
+    if (lista.some((e) => e.codigo === codigo)) { alert(`El código ${codigo} ya cuenta como Vuala.`); return; }
+    guardar([...lista, { codigo, articulo: articuloNuevo.trim() || null }]);
+    setCodigoNuevo("");
+    setArticuloNuevo("");
+  }
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 4 }}>
+        CATÁLOGO · QUÉ CUENTA COMO VUALA
+      </div>
+      <div style={{ fontSize: 11, color: COLOR_MUTED, marginBottom: 14 }}>
+        Robotina usa esta lista para decir si cada ruta vendió Vuala (en la retro, las tarjetas del día y cuando le preguntan). Agrega o quita códigos cuando salga una presentación nueva.
+      </div>
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input type="text" value={codigoNuevo} onChange={(e) => setCodigoNuevo(e.target.value)} placeholder="Código (ej. 0310)"
+            style={{ flex: "1 1 140px", padding: "9px 10px", borderRadius: 8, border: `1px solid ${COLOR_BORDE}`, background: "#0F172A", color: "#E8EDF5", fontSize: 13, fontFamily: "monospace" }} />
+          <input type="text" value={articuloNuevo} onChange={(e) => setArticuloNuevo(e.target.value)} placeholder="Nombre del artículo (ej. VLAVAINILLA_26)"
+            style={{ flex: "2 1 220px", padding: "9px 10px", borderRadius: 8, border: `1px solid ${COLOR_BORDE}`, background: "#0F172A", color: "#E8EDF5", fontSize: 13 }} />
+          <button onClick={agregar} disabled={!codigoNuevo.trim()} className="btn"
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, opacity: !codigoNuevo.trim() ? 0.5 : 1 }}>
+            <Plus size={14} /> Agregar
+          </button>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {lista.map((e) => (
+          <div key={e.codigo} style={{ display: "flex", alignItems: "center", fontSize: 12.5, padding: "8px 10px", borderRadius: 8, background: "#0F172A", borderLeft: `3px solid ${COLOR_VERDE}` }}>
+            <span style={{ flex: "0 0 70px", color: COLOR_MUTED, fontFamily: "monospace" }}>{e.codigo}</span>
+            <span style={{ flex: 1, color: "#E8EDF5" }}>{e.articulo || "—"}</span>
+            <button onClick={() => guardar(lista.filter((x) => x.codigo !== e.codigo))} title="Quitar de Vuala"
+              style={{ background: "none", border: "none", color: COLOR_ROJO, cursor: "pointer", display: "flex", alignItems: "center", padding: 4 }}>
+              <Trash2 size={15} />
+            </button>
+          </div>
+        ))}
+        {!lista.length && <div style={{ fontSize: 12.5, color: COLOR_MUTED, textAlign: "center", padding: 16 }}>Sin artículos de Vuala.</div>}
+      </div>
+    </div>
+  );
+}
+
 export default function OtcVentasView({ data, rol, rutaPropia, identidad, persistFresco, puesto }) {
   const [modoStaff, setModoStaff] = useState("rutas"); // "rutas" | "productos" | "hoy" | "catalogo"
   const [rutaStaffSeleccionada, setRutaStaffSeleccionada] = useState(null);
@@ -486,7 +553,10 @@ export default function OtcVentasView({ data, rol, rutaPropia, identidad, persis
       </div>
 
       {modoStaff === "catalogo" && puesto === "gerente" && (
-        <CatalogoSinVualaPanel data={data} persistFresco={persistFresco} />
+        <>
+          <CatalogoSinVualaPanel data={data} persistFresco={persistFresco} />
+          <CatalogoVualaPanel data={data} persistFresco={persistFresco} />
+        </>
       )}
 
       {modoStaff === "hoy" && (
