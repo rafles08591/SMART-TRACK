@@ -69,37 +69,79 @@ async function retoDe(fecha, cfg, cache) {
 }
 const junta = (...partes) => partes.filter((x) => x && String(x).trim()).join('\n\n');
 
-function mencion(numero) {
-  const n = String(numero || '').replace(/\D/g, '');
-  return n ? n : null;
-}
+const mencion = (tel) => (tel ? `521${String(tel).replace(/\D/g, '').slice(-10)}` : null);
 
-async function respuestaIA(c, texto, cfg, { historial = [], grupo = false } = {}) {
+async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {}) {
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return { texto: "No tengo conexión con la IA en este momento.", mencionados: [] };
+  const fallback = { texto: 'No te entendí 🤔 Escríbeme *menu* para ver qué te puedo decir.', mencionados: [] };
+  if (!key) return fallback;
   try {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    const [datos, retroPrev, todos, porProducto] = await Promise.all([
+      contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg), ventasPorProducto(texto, cfg),
+    ]);
+    if (porProducto) datos.venta_por_producto = porProducto;
+    // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
+    const rutaDeMencion = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.telefono) rutaDeMencion[mencion(x.telefono)] = claveRuta(x.ruta);
+    const ultimaRetro = retroPrev?.texto && retroPrev?.fecha === fechaMX()
+      ? String(retroPrev.texto).replace(/@(\d{10,13})/g, (m, d) => (rutaDeMencion[d] ? `@${rutaDeMencion[d]}` : ''))
+      : '';
+    const vendedores = {};
+    for (const x of todos) if (x.tipo === 'vendedor' && x.activo !== false) vendedores[claveRuta(x.ruta)] = primerNombre(x.nombre || '', claveRuta(x.ruta));
+    const esJefe = c.tipo === 'equipo';
+    const titulo = tratoDe(c);
+    // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
+    const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+    const sistema = [
+      'Eres ROBOTINA, la bot de SMART-TRACK (así te dicen los vendedores), la compa por WhatsApp de los vendedores de JMD, distribuidora de cigarros y bebidas en Puerto Vallarta.',
+      tono,
+      porProducto?.tipo_consulta
+        ? 'Reglas: formato WhatsApp (*negritas*), una sección corta por ruta (máximo 25 líneas en total), un par de emojis máximo.'
+        : 'Reglas: respuestas cortas (máximo 5 líneas), formato WhatsApp (*negritas*), un par de emojis máximo.',
+      'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
+      'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
+      'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
+      'TOTALES: nunca sumes ni restes tú. Para totales usa los ya calculados ("totales_del_dia" por ruta, o los indicadores del día como "OTC del día" y "Venta del día"). Los "top" son solo los artículos principales, NO el total de la ruta.',
+      'DETALLE POR PRODUCTO: si "venta_por_producto" trae "tipo_consulta": "detalle general por producto", da lo más vendido del equipo y por ruta sus artículos principales (cantidad con su unidad y pesos). Sí tienes ese detalle: nunca digas que no lo tienes. Si es mucho, resume y ofrece el detalle de una ruta.',
+      'PRODUCTOS: si preguntan por la venta de un producto o artículo en específico (ej. Switch, un sabor, una presentación), contesta SOLO con "venta_por_producto": es la venta real por artículo. Si "encontrado" es false o el producto no aparece ahí, di claramente que hoy no hay venta registrada de ese producto (y la fecha del detalle). NUNCA uses las marcas, metas o porcentajes de otros indicadores para responder sobre un producto, y nunca inventes ventas.',
+      'MENCIONES: para nombrar a un vendedor escribe @ + su ruta y luego su nombre, ej. "@J203 Ana" (el sistema lo convierte en mención). Usa la ruta correcta de la lista "vendedores". NUNCA escribas números de teléfono.',
+      esJefe
+        ? `Te habla tu ${titulo}: dale la información clara y directa, como un reporte para tu superior. Puedes señalar quién va abajo y quién va arriba con sus números.`
+        : 'Siempre empújalo a vender y dile qué le falta para su meta cuando venga al caso.',
+      'Límites: la carrilla nunca es humillante ni sobre físico, familia, género, orientación, religión u origen; nada sexual explícito; nada de amenazas.',
+      'Si menciona algo serio (accidente, asalto, choque, salud, problema personal o renuncia), deja la carrilla, contesta con respeto y pídele que avise a su supervisor de inmediato.',
+      `Te habla: ${c.nombre || 'un vendedor'} (${esJefe ? `tu ${titulo}` : 'ruta ' + claveRuta(c.ruta)}).`,
+      'Conversación: los mensajes previos (si hay) son de los últimos 15 minutos con esta misma persona. Úsalos para entender respuestas cortas como "sí", "dale", "¿y la J206?" o "¿por qué?". Si contesta que sí a algo que ofreciste, cúmplelo de inmediato con los datos.',
+      'Al final puedes ofrecer UNA sola opción de seguimiento, solo si suma información nueva que no diste (p. ej. detalle por ruta, qué clientes le faltan, qué marca empujar). Nunca ofrezcas repetir lo que ya dijiste ni preguntes por preguntar; si ya diste todo lo útil, no ofrezcas nada.',
+      ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
+      `Vendedores (ruta: nombre): ${JSON.stringify(vendedores)}`,
+      `Datos (JSON): ${JSON.stringify(datos)}`,
+    ].join('\n');
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL_BOT || "gpt-4.1-mini",
-        temperature: 0.7,
-        max_tokens: 600,
-        messages: [
-          { role: "system", content: "Eres Robotina, el bot de SMART-TRACK. Responde en español mexicano, breve y útil." },
-          ...historial,
-          { role: "user", content: texto },
-        ],
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.8,
+        max_tokens: porProducto?.tipo_consulta ? 900 : 300,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(texto || '').slice(0, 800) }],
       }),
     });
-    if (!r.ok) return { texto: "No pude consultar la IA. Intenta de nuevo.", mencionados: [] };
+    if (!r.ok) return fallback;
     const j = await r.json();
-    const resp = (j.choices?.[0]?.message?.content || "").trim();
-    return { texto: resp || "No entendí la pregunta.", mencionados: [] };
+    const salida = (j.choices?.[0]?.message?.content || '').trim();
+    return salida ? aplicarMenciones(salida, todos) : fallback;
   } catch {
-    return { texto: "Error al consultar la IA.", mencionados: [] };
+    return fallback;
   }
 }
+
+// ------------------------------------------------------------------ 🔥 RETRO AL GRUPO (cada hora, 9 am – 8 pm)
+//   GET /api/wa-resumen?modo=retro_grupo            → solo manda si hay avance nuevo desde la última retro
+//   GET /api/wa-resumen?modo=retro_grupo&forzar=1   → manda aunque no haya avance nuevo (pruebas)
+// Señala a los más bajos en venta del día, Sin Vuala y reto del día como candidatos a
+// "La Tercera Mano del Pachuco", y a los que siguen en 0 desde que salieron del CLO.
 
 const MENU_VENDEDOR = [
   '🤖 *ROBOTINA · SMART-TRACK*',
@@ -710,10 +752,15 @@ const GRUPO_RETRO = process.env.GRUPO_RETRO || '5213221821493-1614005509@g.us';
 const MIN_EN_CERO = 45;
 
 function horaActualMX() {
-  const d = new Date();
-  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hour12: false }).format(d));
-  return { h };
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(new Date());
+  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
+  return { h: g('hour') % 24, min: g('minute') };
 }
+
+// ⏱️ Hora de salida del CLO por ruta → { J201: 1760710000000, ... }
+// Sale del panel de Tiempos (su propio Supabase): tabla panel_kv, key "board-activo",
+// value = { fecha: 'YYYY-MM-DD', rutas: { J201: { areas: { salida_ruta: { ts } } } } }.
+// Si no hay dato, a los que van en 0 se les señala solo a partir de las 11 am.
 
 async function datosRetro(fecha, cfg) {
   const filas = await filasDeFecha(fecha);
@@ -870,6 +917,634 @@ async function modoRetroGrupo(req) {
   await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
   return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
 }
+
+// ------------------------------------------------------------------ 🧠 FUNCIONES DE ROBOTINA (recuperadas de la versión anterior)
+// Indicadores, Tercera Mano, venta por producto con apodos, rallies y menciones.
+
+const tonoEquipo = (titulo) => [
+  `Le hablas a tu ${titulo.toUpperCase()}. Trátalo con mucho respeto y disposición, como un asistente leal.`,
+  `Empieza SIEMPRE con "Sí, ${titulo}." o "A la orden, ${titulo}." y dile "${titulo}" (nunca por su nombre de pila ni "güey/compa").`,
+  'CERO groserías, cero albures y cero carrilla hacia él. Español mexicano formal pero cálido.',
+].join(' ');
+
+async function contextoDatos(c) {
+  const hoy = fechaMX();
+  if (c.tipo === 'equipo') {
+    const fecha = await fechaUltimoCorte({ hasta: hoy });
+    if (!fecha) return { sin_datos: true };
+    const filas = await filasDeFecha(fecha);
+    const cfg = await configBot();
+    const todos = await listaContactos(cfg);
+    const v = varsEquipo(calcularEquipo(filas, todos));
+    const d = varsEquipoDia(calcularEquipoDia(filas, todos));
+    const rk = varsRiesgo(calcularRiesgo(filas, todos, 95));
+    return { rol: 'supervisor/gerente', corte: fecha, mes_equipo: v, dia_equipo: d,
+      rallies_otc: resumenRallies(filas, todos, true),
+      rutas_en_riesgo: { proyeccion_equipo: rk.proyeccion_equipo, detalle: rk.rutas_riesgo, cierran_en_meta_100: rk.rutas_ok || 'ninguna', buen_avance_pero_sin_100: rk.rutas_cerca, nota: 'Solo 100% o más se considera bien; abajo de 100 es buen avance pero no cumple.' },
+      indicadores_por_ruta: await indicadoresParaIA(fecha, cfg, { filas, todos, equipo: true }) };
+  }
+  const ultimos = await ultimosPorRuta({ hasta: hoy });
+  const fila = ultimos[claveRuta(c.ruta)];
+  if (!fila) return { sin_datos: true };
+  const companeras = await filasDeFecha(fila.fecha);
+  const m = calcular(fila, companeras);
+  const v = varsDia(fila, m, companeras, c);
+  const cfgV = await configBot();
+  const inds = await indicadoresParaIA(fila.fecha, cfgV, { filas: companeras, todos: await listaContactos(cfgV), equipo: false });
+  return {
+    rol: 'vendedor', ruta: v.ruta, corte: fila.fecha, datos_de_hoy: fila.fecha === hoy,
+    indicadores_hoy: inds[v.ruta] || {},
+    rallies_otc: resumenRallies(companeras, await listaContactos(cfgV), false),
+    mes: { avance: v.pct_mes, ritmo_esperado: v.esperado, vendido: v.venta_mes, objetivo: v.objetivo_mes, necesita_por_dia: v.necesita, dias_restantes: v.dias_restantes, lugar: v.lugar, de_rutas: v.total_rutas },
+    dia: { avance: v.pct_dia, vendido: v.dia_vendido, meta: v.dia_objetivo, falta: v.falta_dia, efectividad: v.efectividad, visitas_efectivas: v.visitas, lugar_hoy: v.lugar_dia, otc_hoy: v.otc_dia, meta_otc: v.otc_objetivo },
+    marcas_mes: v.marcas, marcas_hoy: v.marcas_dia,
+  };
+}
+
+// ------------------------------------------------------------------ 🔄 REFRESCO ANTES DE CONTESTAR
+// Si el robot actualizó hace menos de MIN_FRESCO minutos, se contesta directo sin volver a refrescar.
+
+async function candidatosTercera(cfg, equipo) {
+  const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+  if (!fecha) return null;
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const inds = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, valores }) => {
+    const c = vend[ruta];
+    const lista = inds
+      .map((i) => {
+        const v = valores[i.clave];
+        if (!v) return null;
+        const comp = v.comp ?? v.pct;
+        if (comp === null || comp === undefined) return null;
+        return { indicador: i.nombre, unidad: i.unidad, avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
+      })
+      .filter(Boolean);
+    const indice = lista.length ? Math.round(lista.reduce((s, x) => s + Math.min(100, x.comp), 0) / lista.length) : null;
+    return {
+      ruta,
+      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
+      mencion: mencion(c?.telefono),
+      indice,
+      indicadores_medidos: lista.length,
+      cumplidos: lista.filter((x) => x.comp >= 100).length,
+      // Donde más le falta (lo que lo hace candidato)
+      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => a.comp - b.comp).slice(0, 6),
+    };
+  }).filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice);
+  const candidatos = rutas.slice(0, 3);
+  const corte = rutas[3] || null; // el 4° lugar desde abajo: a ese nivel hay que llegar para salir
+  return {
+    fecha,
+    regla: 'índice = promedio del cumplimiento de cada indicador (tope 100%); del día contra su meta, del periodo contra el ritmo esperado',
+    candidatos,
+    para_salir_superar_a: corte ? { ruta: corte.ruta, nombre: corte.nombre, indice: corte.indice } : null,
+    ranking_desde_abajo: rutas.map((r) => ({ ruta: r.ruta, nombre: r.nombre, indice: r.indice })),
+  };
+}
+
+function textoTerceraFijo(d, saludo) {
+  const fmtU2 = (v, u) => (u === '$' ? `$${Math.round(v || 0).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v || 0)} ${u}`);
+  const L = [saludo ? `${saludo}\n` : '', `🖐️ *Candidatos a La Tercera Mano del Pachuco* · corte ${fechaCorta(d.fecha)}`].filter(Boolean);
+  d.candidatos.forEach((c, i) => {
+    L.push('', `${i + 1}. @${c.mencion} (${c.ruta} ${c.nombre}) · rendimiento *${c.indice}%* · cumple ${c.cumplidos} de ${c.indicadores_medidos} indicadores`);
+    for (const x of c.debajo.slice(0, 4)) {
+      L.push(`   • ${x.indicador}: ${fmtU2(x.avance, x.unidad)} de ${fmtU2(x.meta, x.unidad)}${x.falta ? ` (le faltan ${fmtU2(x.falta, x.unidad)})` : ''}`);
+    }
+  });
+  if (d.para_salir_superar_a) L.push('', `👉 Para salir tienen que subir de *${d.para_salir_superar_a.indice}%* (${d.para_salir_superar_a.ruta} ${d.para_salir_superar_a.nombre}), cerrando lo que les falta arriba.`);
+  return L.join('\n');
+}
+
+async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = {}) {
+  const esJefe = c.tipo === 'equipo';
+  const titulo = tratoDe(c);
+  const d = await candidatosTercera(cfg, esJefe);
+  if (!d || !d.candidatos.length) return { texto: 'Todavía no hay datos cargados para calcular candidatos.', mencionados: [] };
+  const mencionados = d.candidatos.map((x) => x.mencion).filter(Boolean);
+  const saludo = esJefe ? `A la orden, ${titulo} 🫡` : '';
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return { texto: textoTerceraFijo(d, saludo), mencionados };
+  const tono = esJefe ? tonoEquipo(titulo) : (TONOS[cfg?.tonoBot] || TONOS.picante);
+  const sistema = [
+    'Eres ROBOTINA, la bot de SMART-TRACK de JMD (cigarros y bebidas, Puerto Vallarta).',
+    tono,
+    'Te piden los candidatos a "La Tercera Mano del Pachuco": las 3 rutas con el rendimiento más bajo considerando TODOS los indicadores (ver "regla").',
+    'Para CADA uno de los 3 candidatos, en este orden:',
+    '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento (índice %).',
+    '  b) POR QUÉ es candidato: sus 2 a 4 indicadores más débiles de "debajo", con números exactos (avance de meta, lo que falta, unidad). En los del periodo usa "ritmo" y "necesita_por_dia".',
+    '  c) CÓMO DEJAR DE SERLO: acciones concretas y medibles (cuánto vender de qué, cubrir Sin Vuala, qué marca empujar) para superar el índice de "para_salir_superar_a".',
+    'Formato WhatsApp, *negritas*, sin tablas, máximo 22 líneas en total. Al final una línea corta que motive.',
+    'Usa SOLO los números del JSON; no inventes cifras ni premios. paq = paquetes, pz = piezas, $ = pesos. No felicites a nadie.',
+    'Límites: nada humillante ni sobre físico, familia, género, orientación, religión u origen.',
+    `Datos (JSON): ${JSON.stringify(d)}`,
+  ].join('\n');
+  try {
+    const r = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.6,
+        max_tokens: 900,
+        messages: [{ role: 'system', content: sistema }, ...historial, { role: 'user', content: String(pregunta || 'Dame los candidatos a la Tercera Mano').slice(0, 500) }],
+      }),
+    });
+    if (!r.ok) throw new Error('openai');
+    const j = await r.json();
+    const texto = (j.choices?.[0]?.message?.content || '').trim();
+    if (!texto) throw new Error('vacío');
+    return { texto, mencionados: mencionados.filter((m) => texto.includes(`@${m}`)) };
+  } catch {
+    return { texto: textoTerceraFijo(d, saludo), mencionados };
+  }
+}
+
+// ------------------------------------------------------------------ 🏁 RALLIES OTC para la IA
+// Ranking ya calculado por rally (Robotina solo lo lee, no hace cuentas):
+//   { nombre, unidad, vigencia, totales, ranking: [{ lugar, ruta, nombre, hoy, meta_hoy, pct_hoy, acumulado, meta_final, pct_final }] }
+// El lugar 1 es el que va MEJOR. A vendedores nunca se les dan los exclusivos de Supervisor-1.
+
+function resumenRallies(filas, todos, equipo) {
+  const nombres = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor') nombres[claveRuta(c.ruta)] = primerNombre(c.nombre || '', claveRuta(c.ruta));
+  const porRally = {};
+  for (const f of filas || []) {
+    const ruta = claveRuta(f.ruta);
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (!r?.id || (r.exclusivo && !equipo)) continue;
+      const R = porRally[r.id] || (porRally[r.id] = {
+        nombre: r.nombre || 'Rally OTC',
+        unidad: r.unidad === 'piezas' ? 'piezas' : 'pesos',
+        vigencia: `${r.fechaInicio || '¿?'} a ${r.fechaFin || '¿?'}`,
+        ...(r.exclusivo ? { exclusivo_supervisor1: true } : {}),
+        filas: [],
+      });
+      const hoy = r0(n(r.avanceDia) || 0), metaHoy = n(r.objetivoDia) ? r0(n(r.objetivoDia)) : null;
+      const acum = r0(n(r.avanceTotal) || 0), metaFin = n(r.objetivoFinal) ? r0(n(r.objetivoFinal)) : null;
+      R.filas.push({
+        ruta, nombre: nombres[ruta] || f.nombre || ruta,
+        hoy, meta_hoy: metaHoy, pct_hoy: metaHoy ? Math.round((hoy / metaHoy) * 100) : null,
+        falta_hoy: metaHoy ? Math.max(0, metaHoy - hoy) : null,
+        acumulado: acum, meta_final: metaFin, pct_final: metaFin ? Math.round((acum / metaFin) * 100) : null,
+        falta_final: metaFin ? Math.max(0, metaFin - acum) : null,
+      });
+    }
+  }
+  return Object.values(porRally).map(({ filas: fs, ...R }) => {
+    const clave = (x) => (x.pct_hoy ?? x.pct_final ?? -1);
+    const ranking = fs.sort((a, b) => clave(b) - clave(a) || b.hoy - a.hoy || b.acumulado - a.acumulado)
+      .map((x, i) => ({ lugar: i + 1, ...x }));
+    const suma = (k) => fs.reduce((s, x) => s + (x[k] || 0), 0);
+    return {
+      ...R,
+      participantes: ranking.length,
+      ordenado_por: fs.some((x) => x.meta_hoy) ? '% de la meta de HOY (lugar 1 = el mejor)' : '% de la meta final (lugar 1 = el mejor)',
+      totales: { hoy: suma('hoy'), meta_hoy: suma('meta_hoy') || null, acumulado: suma('acumulado'), meta_final: suma('meta_final') || null },
+      cumplieron_hoy: ranking.filter((x) => x.pct_hoy !== null && x.pct_hoy >= 100).map((x) => x.ruta),
+      ranking,
+    };
+  });
+}
+
+// La IA menciona por ruta (@J203); aquí se cambia por el @número real de esa persona
+// y se arma la lista de mencionados. Cualquier número que la IA invente se borra.
+
+function aplicarMenciones(texto, todos) {
+  const tel = {};
+  for (const c of todos || []) if (c.tipo === 'vendedor' && c.telefono) tel[claveRuta(c.ruta)] = mencion(c.telefono);
+  const validos = new Set(Object.values(tel));
+  const mencionados = new Set();
+  let t = String(texto || '')
+    .replace(/@\+?(\d{10,13})\b/g, (m, d) => (validos.has(d) ? m : ''))           // números inventados fuera
+    .replace(/@\s?(J\s?-?\d{3})\b/gi, (m, r) => {
+      const k = claveRuta(r);
+      return tel[k] ? `@${tel[k]}` : k;
+    });
+  for (const m of t.match(/@(\d{10,13})\b/g) || []) mencionados.add(m.slice(1));
+  t = t.replace(/[ \t]{2,}/g, ' ');
+  return { texto: t, mencionados: [...mencionados] };
+}
+
+// ------------------------------------------------------------------ 🔎 VENTA POR PRODUCTO
+// Cuando preguntan por un producto en específico ("¿cuánto se vendió de Switch?"), se busca en
+// el detalle del día que carga el robot (data.avanceDia = paquetes por artículo y cliente;
+// data.otcDia = OTC por artículo). Así Robotina no tiene que adivinar con las marcas generales.
+
+const NO_PRODUCTO = new Set(`robotina bot jefe supervisor hola buenos buenas dias tardes noches gracias porfa favor
+cuanto cuanta cuantos cuantas cuantito venta ventas vendio vendieron vendido vendida vendidos vendimos vende venden vendiste
+hoy ayer dia semana mes periodo del de la el los las en que como va vamos van voy lleva llevan llevamos llevo
+producto productos articulo articulos pieza piezas paquete paquetes paq caja cajas por para ruta rutas todas todos
+me dame dime da detalle detalles sobre cual cuales quien quienes hay se ha han un una unos unas al lo le les con mas menos
+avance avances info informacion datos dato numero numeros total totales otc reto rally meta metas marca marcas indicador
+indicadores ranking lugar efectividad visitas clientes cliente mi mis tu su sus esta este esto estos estas ese esa eso nos
+tenemos tiene tienen tengo saber quiero quisiera puedes podrias ver muestra mostrar ahorita ahora bien mal ok si no tambien
+equipo vendedor vendedores supervisores jefe proyeccion objetivo objetivos lleve llevaba vuala sin tercera mano pachuco
+desglose desglosado desglosa desglosar general completo completa resumen top mejores vendidas lista listado cada uno
+porfavor necesito manda mandame pasame paso pasa dia hoyy ruta`.split(/\s+/));
+
+function palabrasProducto(texto) {
+  const t = String(texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ');
+  return [...new Set(t.split(/\s+/).filter((w) => w.length >= 3 && !NO_PRODUCTO.has(w) && !/^j\d{3}$/.test(w) && !/^\d+$/.test(w)))];
+}
+
+// Apodos que da de alta el Gerente (WhatsApp → Robotina → "Cómo le dicen a cada producto"):
+// data.whatsappBot.apodos = [{ codigo, articulo, apodos: "SWITCH, SWICH" }]
+
+const normTxt = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9&\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+function casiIgual(a, b) { // distancia de edición ≤ 1 (para faltas de ortografía: swich / siwch / switch)
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, dif = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++dif > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return dif + (a.length - i) + (b.length - j) <= 1;
+}
+
+function productosPorApodo(texto, apodos) {
+  const t = ` ${normTxt(texto)} `;
+  const palabrasT = t.trim().split(' ');
+  const hallados = [];
+  for (const a of apodos || []) {
+    for (const frase of String(a.apodos || '').split(',').map(normTxt).filter(Boolean)) {
+      // Todas las palabras del apodo deben venir en la pregunta, en cualquier orden y aunque haya
+      // palabras en medio ("vuala de vainilla" = VUALA VAINILLA). Con una letra de diferencia si es larga.
+      const esta = (fw) => palabrasT.some((w) => w === fw || (fw.length >= 5 && w.length >= 5 && casiIgual(w, fw)));
+      const ok = t.includes(` ${frase} `) || frase.split(' ').every(esta);
+      if (ok) hallados.push({ frase, codigo: String(a.codigo || '').trim(), articulo: String(a.articulo || '').trim() });
+    }
+  }
+  if (!hallados.length) return null;
+  // Si coincide "promo clipper", no se cuentan los que solo dicen "clipper"
+  const frases = [...new Set(hallados.map((h) => h.frase))].sort((x, y) => y.length - x.length);
+  const aceptadas = [];
+  for (const f of frases) if (!aceptadas.some((g) => g.includes(f))) aceptadas.push(f);
+  const elegidos = hallados.filter((h) => aceptadas.includes(h.frase));
+  // Palabras de la pregunta que ya se usaron en apodos (para buscar las demás por nombre de artículo)
+  const usadas = new Set(aceptadas.flatMap((f) => f.split(' ')));
+  return {
+    frases: aceptadas,
+    usadas,
+    codigos: new Set(elegidos.map((h) => h.codigo.toUpperCase()).filter(Boolean)),
+    articulos: new Set(elegidos.map((h) => normTxt(h.articulo)).filter(Boolean)),
+  };
+}
+
+// Apodos de base (los mismos ejemplos del panel); se suman a los que se guarden en la app
+
+const APODOS_BASE = [
+  { codigo: '0309', articulo: 'VLACHOCO_26', apodos: 'VUALA CHOCOLATE' },
+  { codigo: '0310', articulo: 'VLAVAINILLA_26', apodos: 'VUALA VAINILLA' },
+  { codigo: '0360', articulo: 'CP11D24+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0390', articulo: 'CP11D20+EXIS20', apodos: 'PROMO CLIPPER' },
+  { codigo: '0300', articulo: 'CPLCP11_26', apodos: 'CLIPPER' },
+  { codigo: '0316', articulo: 'SWICHC/10_26', apodos: 'SWITCH, SWICH, SIWCH' },
+  { codigo: '0372', articulo: 'CARCOOFRE_26_B', apodos: 'CARIBE, CARIBE FRESA' },
+  { codigo: '0374', articulo: 'CARCOOMANG_26_B', apodos: 'CARIBE, CARIBE MANGO' },
+  { codigo: '0375', articulo: 'CARCOOMANZ_26_B', apodos: 'CARIBE, CARIBE MANZANA' },
+  { codigo: '0371', articulo: 'CARCOODZN_26_B', apodos: 'CARIBE' },
+  { codigo: '0354', articulo: 'CARCOOTIN_26.6', apodos: 'CARIBE' },
+  { codigo: '0304', articulo: 'PAPELCP_26', apodos: 'PAPEL CLIPPER' },
+  { codigo: '0307', articulo: 'EXIS_26', apodos: 'ECONOMICO' },
+  { codigo: '0305', articulo: 'CPGAS16ML_26', apodos: 'GAS' },
+  { codigo: '0293', articulo: 'HIDRA FRESA', apodos: 'HIDRA' },
+];
+
+// "¿qué se vendió por producto?", "detalle por ruta por producto", "más vendidos"… sin nombrar un producto
+
+function pideDetalleProductos(texto) {
+  const t = normTxt(texto);
+  return /\b(por producto|por productos|por articulo|productos|articulos|mas vendid\w*|que se vendio|que vendio|que vendieron|que han vendido|top)\b/.test(t);
+}
+
+async function ventasPorProducto(texto, cfg) {
+  const porApodo = productosPorApodo(texto, [...(Array.isArray(cfg?.apodos) ? cfg.apodos : []), ...APODOS_BASE]);
+  const palabras = palabrasProducto(texto);
+  const general = !palabras.length && !porApodo && pideDetalleProductos(texto);
+  if (!palabras.length && !porApodo && !general) return null;
+  // Si nombran rutas (J203, j 205), solo esas
+  const rutasPedidas = new Set((normTxt(texto).match(/\bj\s?-?\d{3}\b/g) || []).map((x) => claveRuta(x.toUpperCase())));
+  let av = [], otc = [];
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia,otc:data->otcDia');
+    av = Array.isArray(r?.[0]?.av) ? r[0].av : [];
+    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+  } catch { return null; }
+  // El reporte de OTC trae todas las rutas del país: solo se cuentan las del equipo
+  // (las rutas dadas de alta en Contactos de WhatsApp y las que salen en el resumen del día).
+  const misRutas = new Set();
+  try {
+    for (const c of await listaContactos(cfg)) if (c.tipo === 'vendedor' && c.ruta) misRutas.add(claveRuta(c.ruta));
+    for (const f of await sb('resumen_vendedores?select=ruta&order=fecha.desc&limit=40')) if (f.ruta) misRutas.add(claveRuta(f.ruta));
+  } catch { /* sin filtro si no se pudo leer */ }
+  const esMia = (vendedor) => (!misRutas.size || misRutas.has(claveRuta(vendedor)))
+    && (!rutasPedidas.size || rutasPedidas.has(claveRuta(vendedor)));
+  av = av.filter((x) => esMia(x.vendedor));
+  otc = otc.filter((x) => esMia(x.vendedor));
+  const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
+  const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
+  const coincide = (...campos) => {
+    if (general) return 1;
+    if (porApodo) { // con apodo: los artículos dados de alta para ese nombre valen más
+      const [articulo, codigo] = campos;
+      if (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) return 100;
+    }
+    // Además del apodo, se busca por nombre con todas las palabras (por si el artículo vendido
+    // todavía no tiene apodo, p. ej. una presentación nueva)
+    const lista = palabras;
+    if (!lista.length) return 0;
+    const h = norm(campos.join(' '));
+    const tokens = h.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
+    // Coincide si la palabra está dentro del nombre, o si se parece a un pedazo del nombre
+    // (una letra de diferencia, o el pedazo empieza con la palabra: "swich" ~ "swichc")
+    return lista.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
+      || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2))).length;
+  };
+  const productos = {};
+  const sumar = (clave, nombre, tipo, ruta, cant, monto, puntos) => {
+    const p = productos[clave] || (productos[clave] = { producto: nombre, tipo, total_cantidad: 0, total_pesos: 0, por_ruta: {}, puntos });
+    p.total_cantidad += cant; p.total_pesos += monto;
+    const rr = p.por_ruta[ruta] || (p.por_ruta[ruta] = { cantidad: 0, pesos: 0 });
+    rr.cantidad += cant; rr.pesos += monto;
+  };
+  for (const x of av) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.marca) : 0;
+    if (!pts) continue;
+    sumar(`av:${x.articulo}`, x.articulo + (x.marca ? ` (${x.marca})` : ''), 'paquetes', claveRuta(x.vendedor), Number(x.paquetes) || 0, Number(x.monto) || 0, pts);
+  }
+  for (const x of otc) {
+    const pts = x.fecha === fecha ? coincide(x.articulo, x.codigoArticulo) : 0;
+    if (!pts) continue;
+    sumar(`otc:${x.codigoArticulo || x.articulo}`, `${x.articulo}${x.codigoArticulo ? ` [${x.codigoArticulo}]` : ''} (OTC)`, 'piezas', claveRuta(x.vendedor), Number(x.unidadesVendidas) || 0, Number(x.monto) || 0, pts);
+  }
+  if (general) {
+    // Resumen: lo más vendido del equipo y, por ruta, sus artículos más vendidos
+    const todos = Object.values(productos);
+    const porRuta = {};
+    for (const p of todos) {
+      for (const [ruta, v] of Object.entries(p.por_ruta)) {
+        (porRuta[ruta] = porRuta[ruta] || []).push({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) });
+      }
+    }
+    const top = (arr, n) => arr.sort((a, b) => b.pesos - a.pesos || b.cantidad - a.cantidad).slice(0, n);
+    // Totales exactos por ruta (para que la IA no sume a mano): mismos que la tabla de la app
+    const totales = {};
+    for (const x of av) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.paquetes += Number(x.paquetes) || 0; t.venta_pesos += Number(x.monto) || 0;
+    }
+    for (const x of otc) {
+      if (x.fecha !== fecha) continue;
+      const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
+      t.otc_pesos += Number(x.monto) || 0; t.otc_piezas += Number(x.unidadesVendidas) || 0;
+    }
+    const redondear = (t) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v)]));
+    return {
+      fecha_del_detalle: fecha,
+      tipo_consulta: 'detalle general por producto',
+      rutas_del_equipo: [...misRutas].sort(),
+      ...(rutasPedidas.size ? { solo_rutas: [...rutasPedidas] } : {}),
+      encontrado: todos.length > 0,
+      mas_vendidos_equipo: top(todos.map((p) => ({ producto: p.producto, tipo: p.tipo, cantidad: Math.round(p.total_cantidad), pesos: Math.round(p.total_pesos), rutas: Object.keys(p.por_ruta).length })), 10),
+      por_ruta: Object.fromEntries(Object.entries(porRuta).sort().map(([r, arr]) => [r, {
+        totales_del_dia: redondear(totales[r] || {}), articulos_distintos: arr.length, top: top(arr, rutasPedidas.size ? 15 : 6),
+      }])),
+      nota: 'Venta real por artículo del detalle del día (paquetes en avance, piezas en OTC), ordenado por pesos. "top" por ruta son sus artículos más vendidos; si piden uno en específico, que lo pregunten por nombre.',
+    };
+  }
+  // Se quedan: los de apodo (100) y, de los demás, los que coinciden con más palabras
+  const maxPts = Math.max(0, ...Object.values(productos).filter((p) => p.puntos < 100).map((p) => p.puntos));
+  const lista = Object.values(productos)
+    .filter((p) => p.puntos >= 100 || (maxPts > 0 && p.puntos === maxPts))
+    .map(({ puntos: _p, ...p }) => ({ ...p, total_cantidad: Math.round(p.total_cantidad), total_pesos: Math.round(p.total_pesos),
+      por_ruta: Object.fromEntries(Object.entries(p.por_ruta).sort((a, b) => b[1].cantidad - a[1].cantidad)
+        .map(([k, v]) => [k, { cantidad: Math.round(v.cantidad), pesos: Math.round(v.pesos) }])) }))
+    .sort((a, b) => b.total_cantidad - a.total_cantidad)
+    .slice(0, 15);
+  return {
+    fecha_del_detalle: fecha,
+    palabras_buscadas: porApodo ? porApodo.frases : palabras,
+    ...(porApodo ? { buscado_por_apodo: true } : {}),
+    encontrado: lista.length > 0,
+    productos: lista,
+    nota: lista.length
+      ? `Venta real por artículo del detalle del día, SOLO de las rutas del equipo (${[...misRutas].sort().join(', ')}). Paquetes en avance, piezas en OTC. Las rutas que no aparecen no vendieron ese producto.`
+      : `En el detalle de ventas del día NO hay ninguna venta de ese producto en las rutas del equipo (${[...misRutas].sort().join(', ')}).`,
+  };
+}
+
+const n = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+
+const TIEMPOS_URL = (process.env.TIEMPOS_SUPABASE_URL || 'https://nzbsmkscvzttekkwgkqz.supabase.co').replace(/\/+$/, '');
+
+const TIEMPOS_KEY = process.env.TIEMPOS_SUPABASE_KEY || 'sb_publishable_Px5yEBkZfC8-zty4LPYnNg_INLvGZXU';
+
+async function salidasCLO(fecha) {
+  try {
+    const r = await fetch(`${TIEMPOS_URL}/rest/v1/panel_kv?key=eq.board-activo&select=value`, {
+      headers: { apikey: TIEMPOS_KEY },
+    });
+    if (!r.ok) return {};
+    const board = (await r.json())[0]?.value;
+    if (!board || board.fecha !== fecha) return {};
+    const out = {};
+    for (const [ruta, datos] of Object.entries(board.rutas || {})) {
+      const ts = datos?.areas?.salida_ruta?.ts;
+      if (ts) out[claveRuta(ruta)] = ts;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// ------------------------------------------------------------------ 📊 INDICADORES DE ROBOTINA
+// Se prenden / apagan desde SMART-TRACK (pestaña WhatsApp → data.whatsappBot.indicadores):
+//   { venta_dia: { retro, ia, tercera }, sin_vuala: {...}, 'rally_<id>': {...}, ... }
+//   retro   → aparece en la retro de cada hora al grupo
+//   ia      → Robotina lo conoce cuando le preguntan
+//   tercera → cuenta para elegir a los candidatos a La Tercera Mano del Pachuco
+// Lo que no esté configurado usa los valores por defecto de abajo.
+
+const INDICADORES_BASE = {
+  venta_dia:   { nombre: 'Venta del día',          unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  sin_vuala:   { nombre: 'OTC Sin Vuala',          unidad: 'pz',  def: { retro: true,  ia: true, tercera: true } },
+  reto:        { nombre: 'Reto del día',           unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
+  otc_dia:     { nombre: 'OTC del día',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  otc_semana:  { nombre: 'OTC semanal',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: false } },
+  // Del periodo (mes): se comparan contra el ritmo esperado a la fecha, no contra la meta completa
+  mes_max:       { nombre: 'MAX del periodo',       unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_open:      { nombre: 'OPEN del periodo',      unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+  mes_champions: { nombre: 'CHAMPIONS del periodo', unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
+};
+// Por marca (se arman solas con las marcas que trae el snapshot):
+//   open_<clave>  → marca OPEN del periodo    champ_<clave> → marca CHAMPIONS del periodo
+//   dia_<clave>   → marca del avance del día
+
+const DEF_MARCA = { retro: false, ia: true, tercera: false };
+
+const nomChamp = (t) => String(t || '').replace(/^CHAM[_ ]/i, '').replace(/^CH /, '');
+
+const DEF_RALLY = { retro: true, ia: true, tercera: true };
+
+// Rallies OTC activos que vienen en el snapshot (extra.rallies), sin repetir.
+
+function ralliesDe(filas) {
+  const vistos = {};
+  for (const f of filas) {
+    for (const r of (Array.isArray(f.extra?.rallies) ? f.extra.rallies : [])) {
+      if (r?.id && !vistos[r.id]) vistos[r.id] = r;
+    }
+  }
+  return Object.values(vistos);
+}
+
+// Lista de indicadores con su configuración final.
+
+function indicadoresConfig(cfg, filas) {
+  const conf = cfg?.indicadores || {};
+  const lista = Object.entries(INDICADORES_BASE).map(([clave, b]) => ({
+    clave, nombre: b.nombre, unidad: b.unidad, exclusivo: false, ...b.def, ...(conf[clave] || {}),
+  }));
+  // Marcas: OPEN, CHAMPIONS y del día
+  const marcas = { open: {}, champ: {}, dia: {} };
+  for (const f of filas) {
+    for (const x of (f.extra?.marcas || [])) if (x?.clave) marcas.open[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_champions || [])) if (x?.clave) marcas.champ[x.clave] = x.nombre || x.clave;
+    for (const x of (f.extra?.marcas_dia || [])) if (x?.clave) marcas.dia[x.clave] = x.nombre || x.clave;
+  }
+  const prefijo = { open: 'OPEN · ', champ: 'CHAMPIONS · ', dia: 'Hoy · ' };
+  for (const tipo of ['open', 'champ', 'dia']) {
+    for (const [k, nom] of Object.entries(marcas[tipo])) {
+      const clave = `${tipo}_${k}`;
+      lista.push({ clave, nombre: prefijo[tipo] + (tipo === 'champ' ? nomChamp(nom) : nom), unidad: 'paq', exclusivo: false, ...DEF_MARCA, ...(conf[clave] || {}) });
+    }
+  }
+  for (const r of ralliesDe(filas)) {
+    const clave = `rally_${r.id}`;
+    lista.push({
+      clave, nombre: `Rally ${r.nombre || 'OTC'}`, unidad: r.unidad === 'piezas' ? 'pz' : '$', exclusivo: !!r.exclusivo,
+      ...DEF_RALLY, ...(conf[clave] || {}),
+    });
+  }
+  return lista;
+}
+
+const r0 = (v) => (v === null || v === undefined ? null : Math.round(v)); // enteros, igual que la tabla de la app
+
+const medida = (avance, meta, extra = {}) => {
+  const a = n(avance), o = n(meta);
+  if (a === null && !o) return null;
+  return { avance: r0(a || 0), meta: o ? r0(o) : null, falta: o ? r0(Math.max(0, o - (a || 0))) : null, pct: o ? Math.round(((a || 0) / o) * 100) : null, ...extra };
+};
+
+// Indicador del periodo: además del % de la meta trae "ritmo" (% contra lo esperado a la fecha).
+// "comp" es el número con el que se compara entre rutas (ritmo en el periodo, % en el día).
+
+const medidaPeriodo = (avance, meta, porDia, esperado) => {
+  const x = medida(avance, meta);
+  if (!x || x.pct === null) return x;
+  const ritmo = esperado ? Math.round((x.pct / esperado) * 100) : null;
+  return { ...x, ritmo, comp: ritmo ?? x.pct, necesita_por_dia: n(porDia) === null ? null : r0(n(porDia)) };
+};
+
+// Valor de cada indicador para una ruta.
+
+function valorIndicador(clave, f, m, rt) {
+  const ex = f.extra || {};
+  const t = ex.tabs || {};
+  if (clave === 'mes_max') return medidaPeriodo(t.max?.avance ?? f.venta_mes, t.max?.objetivo ?? f.objetivo_mes, t.max?.por_dia ?? ex.necesita_diario, m.esperado);
+  if (clave === 'mes_open') return medidaPeriodo(t.open?.avance, t.open?.objetivo, t.open?.por_dia, m.esperado);
+  if (clave === 'mes_champions') return medidaPeriodo(t.champions?.avance, t.champions?.objetivo, t.champions?.por_dia, m.esperado);
+  if (clave.startsWith('open_')) {
+    const x = (ex.marcas || []).find((y) => `open_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, x.por_dia, m.esperado) : null;
+  }
+  if (clave.startsWith('champ_')) {
+    const x = (ex.marcas_champions || []).find((y) => `champ_${y.clave}` === clave);
+    return x ? medidaPeriodo(x.vendido, x.objetivo, null, m.esperado) : null;
+  }
+  if (clave.startsWith('dia_')) {
+    const x = (ex.marcas_dia || []).find((y) => `dia_${y.clave}` === clave);
+    return x ? medida(x.vendido, x.objetivo) : null;
+  }
+  if (clave === 'venta_dia') return medida(m.ventaDia, m.objDia);
+  if (clave === 'sin_vuala') { const sv = sinVualaDe(f); return sv ? medida(sv.piezas, sv.minimo) : null; }
+  if (clave === 'reto') return rt ? medida(rt.v, rt.meta, { lugar: rt.lugar }) : null;
+  if (clave === 'otc_dia') return medida(ex.otc_dia, ex.otc_dia_objetivo);
+  if (clave === 'otc_semana') return medida(ex.otc_semana?.vendido, ex.otc_semana?.objetivo);
+  if (clave === 'efectividad') return m.efectividad === null ? null : { avance: Math.round(m.efectividad), meta: 100, falta: null, pct: Math.round(m.efectividad) };
+  if (clave.startsWith('rally_')) {
+    const r = (ex.rallies || []).find((x) => `rally_${x.id}` === clave);
+    if (!r) return null; // la ruta no participa
+    const dia = medida(r.avanceDia, r.objetivoDia);
+    const total = medida(r.avanceTotal, r.objetivoFinal);
+    // Para comparar se usa el objetivo del día; si el rally no tiene, el total.
+    const base = dia?.meta ? dia : total;
+    return base ? { ...base, dia, total, cubierto_total: !!(total?.meta && total.avance >= total.meta) } : null;
+  }
+  return null;
+}
+
+// Indicadores por ruta para una fecha (lo usan la retro y la IA).
+
+async function tablaIndicadores(fecha, cfg, { filas = null, todos = null } = {}) {
+  filas = filas || await filasDeFecha(fecha);
+  todos = todos || await listaContactos(cfg);
+  const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
+  const retoPorRuta = Object.fromEntries((av?.tabla || []).map((r, i) => [r.ruta, { ...r, lugar: i + 1 }]));
+  const inds = indicadoresConfig(cfg, filas);
+  const rutas = filas.map((f) => {
+    const ruta = claveRuta(f.ruta);
+    const m = calcular(f, filas);
+    const valores = {};
+    for (const i of inds) {
+      const v = valorIndicador(i.clave, f, m, retoPorRuta[ruta]);
+      if (v) valores[i.clave] = v;
+    }
+    return { ruta, f, m, valores };
+  });
+  return { filas, todos, av, inds, rutas };
+}
+
+// Indicadores que Robotina conoce para contestar ({ J201: { 'Venta del día': {...}, ... } }).
+// A vendedores nunca se les dan los rallies exclusivos de Supervisor-1.
+
+async function indicadoresParaIA(fecha, cfg, { filas, todos, equipo }) {
+  try {
+    const t = await tablaIndicadores(fecha, cfg, { filas, todos });
+    const usar = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
+    const out = {};
+    for (const r of t.rutas) {
+      const x = {};
+      for (const i of usar) {
+        if (r.valores[i.clave]) x[i.nombre + (i.exclusivo ? ' (exclusivo Supervisor-1)' : '')] = { ...r.valores[i.clave], unidad: i.unidad };
+      }
+      out[r.ruta] = x;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function horaMXCorta(d) {
+  return new Intl.DateTimeFormat('es-MX', { timeZone: 'America/Mexico_City', hour: 'numeric', minute: '2-digit', hour12: true })
+    .format(d).replace(/\s?a\.?\s?m\.?/i, ' am').replace(/\s?p\.?\s?m\.?/i, ' pm');
+}
+
+const fmtU = (v, u) => (v === null || v === undefined ? '—' : u === '$' ? `$${Math.round(v).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${r0(v)} ${u}`);
+
+// Texto sin IA (respaldo si OpenAI falla)
 
 export default async function handler(req) {
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
