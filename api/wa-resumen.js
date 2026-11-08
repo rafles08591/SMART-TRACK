@@ -925,6 +925,55 @@ function textoRetroFijo(d) {
   return L.join('\n');
 }
 
+// ✨ La "chispa" de Robotina: saludo al inicio y retos/motivación al final. La tabla de números
+// sigue saliendo fija (sin IA); aquí la IA solo escribe el ánimo, con los datos ya calculados.
+async function chispaRetro(d, cfg) {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const tono = TONOS[cfg?.tonoBot] || TONOS.compa;
+  const r = (x) => ({ ruta: claveRuta(x.ruta), nombre: x.nombre, paquetes: x.venta_dia, meta: x.obj, pct: x.pct_dia, le_faltan: x.falta });
+  const datos = {
+    hora: d.hora,
+    lider: d.lider_dia ? { ...r(d.lider_dia), ya_cumplio_meta: (d.lider_dia.pct_dia ?? 0) >= 100 } : null,
+    ya_cumplieron_meta_del_dia: d.rutas.filter((x) => (x.pct_dia ?? 0) >= 100).map(r),
+    cerca_80_a_99: d.rutas.filter((x) => (x.pct_dia ?? 0) >= 80 && (x.pct_dia ?? 0) < 100).map(r),
+    candidatos_tercera_mano: d.pachuco.map(r),
+    en_cero: d.en_cero.map(r),
+    sin_vender_vuala: d.rutas.filter((x) => !x.vuala).map((x) => claveRuta(x.ruta)),
+  };
+  const sistema = [
+    'Eres ROBOTINA, la compañera bot del equipo de ventas de ruta de JMD (cigarros) en Puerto Vallarta.',
+    tono,
+    'Vas a escribir DOS partes cortas para la retro de la hora en el grupo de WhatsApp. La tabla con los números ya va aparte; tú solo pones la chispa.',
+    '"intro" (2-3 líneas): saluda según la hora (buenos días / buenas tardes / buenas noches), con energía, y reconoce al líder del día. Solo FELICITA a quien ya cumplió su meta del día (100% o más); si el líder no ha llegado al 100%, reconoce que va adelante pero rétalo a cerrarla.',
+    '"cierre" (4-6 líneas): rétalos y motívalos. Dirígete con nombre a los candidatos a la Tercera Mano del Pachuco con un reto concreto usando cuántos paquetes les faltan; empuja a los que van cerca (80-99%) a pasar el 100%; si alguien no ha vendido Vuala, recuérdaselo. Termina con una frase de aliento que los haga crecer (actitud, disciplina, constancia). Varía las frases, nada repetitivo.',
+    'MENCIONES: escribe @ + la ruta y el nombre, ej. "@J203 Ana". Nunca escribas teléfonos.',
+    'Usa SOLO los números de los datos; no inventes cifras ni hagas cuentas nuevas. Formato WhatsApp (*negritas*), pocos emojis.',
+    'Responde SOLO con JSON: {"intro":"...","cierre":"..."}',
+    `Datos: ${JSON.stringify(datos)}`,
+  ].join('\n');
+  try {
+    const resp = await fetchIA({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_BOT || 'gpt-4.1-mini',
+        temperature: 0.9,
+        max_tokens: 500,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: 'Escribe la intro y el cierre.' }],
+      }),
+    });
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    const o = JSON.parse(j.choices?.[0]?.message?.content || '{}');
+    const intro = String(o.intro || '').trim(), cierre = String(o.cierre || '').trim();
+    return intro || cierre ? { intro, cierre } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function textoRetroIA(d, cfg) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
@@ -981,7 +1030,16 @@ async function modoRetroGrupo(req) {
   const d = await datosRetro(hoy, cfg);
   if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
   // Formato fijo (tabla por ruta): los números salen directo de los datos, sin pasar por la IA
-  const texto = textoRetroFijo(d);
+  let texto = textoRetroFijo(d);
+  const chispa = await chispaRetro(d, cfg);
+  if (chispa) {
+    const todos = await listaContactos(cfg);
+    const intro = chispa.intro ? aplicarMenciones(chispa.intro, todos).texto : '';
+    const cierre = chispa.cierre ? aplicarMenciones(chispa.cierre, todos).texto : '';
+    // La tabla fija va en medio; se quita su frase final genérica si la IA ya puso cierre
+    if (cierre) texto = texto.replace(/\n¡Vamos equipo, a cerrar fuerte! 💪$/, '');
+    texto = [intro, texto, cierre].filter(Boolean).join('\n\n');
+  }
   const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
 
   await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
