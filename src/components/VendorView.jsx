@@ -12,6 +12,7 @@ import {
 import { supabase } from "../supabaseClient";
 import { RoadProgress, KpiCard, MarcasBreakdown } from "./ui";
 import NeonObjetivoTabs from "./NeonObjetivoTabs";
+import PedidosOtcView from "./PedidosOtcView";
 import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
@@ -124,7 +125,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
     .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
     .join("\n");
 
-  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "carreras" || tab === "carrera_mes" || tab === "scorecard" || tab === "mural_campeones";
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "pedidos_otc" || tab === "carreras" || tab === "carrera_mes" || tab === "scorecard" || tab === "mural_campeones";
   const m = !esTabEspecial ? vendedor.tabs[tab] : null;
   const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
   const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
@@ -236,6 +237,8 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
         <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
       ) : tab === "otc_ventas" ? (
         <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "pedidos_otc" ? (
+        <PedidosOtcView rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
       ) : tab === "scorecard" ? (
         <ScorecardSemanalView data={data} porVendedor={porVendedor} rol="vendedor" rutaPropia={rutaCodigo} ventasPeriodo={ventasPeriodo} />
       ) : tab === "mural_campeones" ? (
