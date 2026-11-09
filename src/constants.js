@@ -58,6 +58,7 @@ export const OBJETIVO_TABS = [
   { key: "alta_cliente", label: "ALTA CLIENTE", unit: "special" },
   { key: "altas_cliente", label: "ALTAS DE CLIENTE", unit: "special" },
   { key: "otc_ventas", label: "OTC VENTAS", unit: "special" },
+  { key: "pedidos_otc", label: "PEDIDOS OTC", unit: "special" },
   { key: "reset_pin", label: "RESTABLECER PIN", unit: "special" },
   { key: "permisos", label: "PERMISOS", unit: "special" },
   { key: "promociones_coach", label: "PROMOS PARA COACH", unit: "special" },
