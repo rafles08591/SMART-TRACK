@@ -1,244 +1,79 @@
 // @ts-nocheck
-import React, { useState, useEffect } from "react";
-import {
-  Target, Users, Upload, LogOut, Star, MapPin, Download, Plus, Trash2,
-  Calendar, AlertCircle, CheckCircle2, MessageSquare, RefreshCw, KeyRound,
-} from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Target, Calendar, MapPin, Star, LogOut, Sparkles } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-import * as XLSX from "xlsx";
 import {
-  OBJETIVO_TABS as OBJETIVO_TABS_BASE, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA, RUTAS,
+  OBJETIVO_TABS, NOMBRES, MARCAS_OPEN, MARCAS_CHAMPIONS,
 } from "../constants";
 import {
-  fmt, money, unidades, metaColor, analizarMesaControl, calcularResumenPedidos,
-  calcularVisitasVsObjetivo, todayISO, fechaHoyISO, blankObjetivos,
-  normalizarActividades, nuevaActividad, creditosPendientes,
+  fmt, money, unidades, metaColor, analizarMesaControl,
+  calcularResumenPedidos, calcularVisitasVsObjetivo, todayISO,
 } from "../utils";
-import { RoadProgress, KpiCard, MarcasBreakdown, PegarTextoBox, BotonGuardarImagen, ModalTablaCompleta } from "./ui";
-import NeonObjetivoTabs from "./NeonObjetivoTabs";
-import SwipeBackScreen from "./SwipeBackScreen";
-import { useCapturaImagen } from "./hooks";
 import { supabase } from "../supabaseClient";
+import { RoadProgress, KpiCard, MarcasBreakdown } from "./ui";
+import NeonObjetivoTabs from "./NeonObjetivoTabs";
+import PedidosOtcView from "./PedidosOtcView";
+import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
-import TablaPorRutaHoy from "./TablaPorRutaHoy";
-import RepartidorAhogadoView from "./RepartidorAhogadoView";
 import MesaControlView from "./MesaControlView";
 import CuponeraView from "./CuponeraView";
-import TiemposView from "./TiemposView";
-import UnidadesView, { unidadYaRegistradaHoy, CLO_PVR, CLO_TEPIC } from "./UnidadesView";
-import CreditosView from "./CreditosView";
-import RutasView from "./RutasView";
-import ActividadesView from "./ActividadesView";
 import RallyOtcView from "./RallyOtcView";
 import AvisosView, { hayAvisoNuevoPara } from "./AvisosView";
 import CargasView from "./CargasView";
+import UnidadesView, { unidadYaRegistradaHoy } from "./UnidadesView";
+import KmView from "./KmView";
 import FacturasView from "./FacturasView";
-import FacturasAdminView from "./FacturasAdminView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
-import ActividadView from "./ActividadView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
-import EscaleraStaffView from "./EscaleraStaffView";
+import EscaleraView from "./EscaleraView";
 import CarteraVencidaView from "./CarteraVencidaView";
-import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
-import AltasClienteStaffView from "./AltasClienteStaffView";
 import OtcVentasView from "./OtcVentasView";
-import ResetPinView from "./ResetPinView";
-import PermisosPersonalizadosView from "./PermisosPersonalizadosView";
-import PromocionesCoachView from "./PromocionesCoachView";
-import WhatsAppBotView from "./WhatsAppBotView";
+import AltaClienteView from "./AltaClienteView";
+import CoachIAView from "./CoachIAView";
 import CarrerasVentas from "./CarrerasVentas";
 import CarreraMes from "./CarreraMes";
 import ScorecardSemanalView from "./ScorecardSemanalView";
 import ScorecardMiniResumen from "./ScorecardMiniResumen";
 import MuralCampeonesView from "./MuralCampeonesView";
-import AlmacenView from "./AlmacenView";
-import UsuariosView from "./UsuariosView";
+import { hayCarteraVencidaPara } from "../carteraVencidaParser";
 
-// Módulo ALMACÉN: se agrega aquí si todavía no viene en OBJETIVO_TABS
-// (constants). Si después se agrega allá, no se duplica.
-const TABS_NUEVAS = [
-  { key: "almacen", label: "ALMACÉN", unit: "" },
-  { key: "usuarios", label: "USUARIOS", unit: "" }, // alta/baja/PIN de usuarios (solo Gerente)
-];
-const OBJETIVO_TABS = [...OBJETIVO_TABS_BASE, ...TABS_NUEVAS.filter((n) => !OBJETIVO_TABS_BASE.some((t) => t.key === n.key))];
+// Rutas que tienen habilitada la pestaña KM (captura directa de
+// kilometraje, aparte de UNIDADES y TIEMPOS). Para agregar otra ruta más
+// adelante, solo hay que sumarla aquí.
+const RUTAS_CON_KM = ["RUTA J201", "RUTA J203"];
 
-// Puestos que ya existían en el código. Cualquier otro (p. ej. "almacen") es un usuario
-// creado desde el módulo Usuarios: solo ve lo que el Gerente le active en Permisos.
-const PUESTOS_FIJOS = ["gerente", "supervisor", "supervisor2", "suplente1", "suplente2"];
-
-// Formatea un número de paquetes conservando 1 decimal (el resumen de
-// arriba redondea con fmt()/unidades(), pero el detalle expandible por
-// ruta necesita ver el decimal exacto).
-function decimales(n) {
-  const num = Number(n) || 0;
-  return num.toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-}
-
-// Tabla "POR VENDEDOR" (Avance/Resta/Necesario-día + marcas) para MAX/OPEN/
-// CHAMPIONS. Se usa dos veces (vista normal + modal de pantalla completa),
-// por eso vive como su propio componente en vez de JSX repetido inline.
-// El % de avance ahora se ve como una píldora de color (en vez de texto
-// plano) y las filas se alternan de fondo para que sea más fácil de leer
-// de un vistazo, sobre todo en la captura que se manda por WhatsApp.
-function TablaPorVendedorObjetivo({ porVendedor, objTab, objUnit, marcas, marcasSourceKey }) {
-  // Qué ruta está expandida (una a la vez). Tocar el renglón de una ruta
-  // despliega, marca por marca, el vendido exacto (con decimales — 0.5
-  // paq. no se pierde como pasa con unidades()/fmt() que redondean),
-  // objetivo, resta y cuánto necesita vender ese día por marca — no solo
-  // el "Necesario/día" agregado que ya se veía arriba.
-  const [expandedId, setExpandedId] = useState(null);
-  const expandible = marcas.length > 0;
-
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10, minWidth: (objTab === "open" || objTab === "champions") ? 760 : undefined }}>
-        <thead>
-          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-            <th style={{ padding: "10px 16px" }}>Vendedor</th>
-            <th>Avance</th>
-            <th>Resta</th>
-            <th>Necesario/día</th>
-            {marcas.map((m) => <th key={m.key}>{m.label}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {porVendedor.map((v, i) => {
-            const pct = v.tabs[objTab].avancePct;
-            const colorPct = metaColor(v.tabs[objTab].avance, v.tabs[objTab].objetivo);
-            const source = v[marcasSourceKey];
-            const abierto = expandedId === v.id;
-            return (
-              <React.Fragment key={v.id}>
-                <tr
-                  onClick={expandible ? () => setExpandedId(abierto ? null : v.id) : undefined}
-                  style={{
-                    borderTop: "1px solid #1E2A42", background: i % 2 === 1 ? "#0E1626" : "transparent",
-                    cursor: expandible ? "pointer" : "default",
-                  }}
-                >
-                  <td style={{ padding: "12px 16px", fontWeight: 600 }}>
-                    {expandible && (
-                      <span style={{
-                        display: "inline-block", width: 12, marginRight: 4, color: "#6C7A96",
-                        transform: abierto ? "rotate(90deg)" : "none", transition: "transform .15s ease",
-                      }}>
-                        ›
-                      </span>
-                    )}
-                    {v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}
-                  </td>
-                  <td>
-                    <span style={{
-                      display: "inline-block", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-                      color: colorPct, background: `${colorPct}22`, border: `1px solid ${colorPct}55`,
-                    }}>
-                      {pct.toFixed(0)}%
-                    </span>
-                  </td>
-                  <td>{fmt(objUnit, v.tabs[objTab].restaPorVender)}</td>
-                  <td>{fmt(objUnit, v.tabs[objTab].ventaPorDiaNecesaria)}</td>
-                  {marcas.map((m) => (
-                    <td key={m.key} style={{ color: metaColor(source[m.key].vendido, source[m.key].objetivo), fontVariantNumeric: "tabular-nums" }}>
-                      {unidades(source[m.key].vendido)} / {unidades(source[m.key].objetivo)}
-                    </td>
-                  ))}
-                </tr>
-
-                {expandible && abierto && (
-                  <tr style={{ background: "#0B121F" }}>
-                    <td colSpan={4 + marcas.length} style={{ padding: "2px 16px 18px" }}>
-                      <div style={{ fontSize: 11, color: "#6C7A96", margin: "8px 0 10px" }}>
-                        DETALLE POR MARCA · {v.name.replace("RUTA ", "")} (con decimales)
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
-                        {marcas.map((m) => {
-                          const d = source[m.key];
-                          const color = metaColor(d.vendido, d.objetivo);
-                          return (
-                            <div key={m.key} style={{ border: `1px solid ${color}40`, borderRadius: 10, padding: "10px 12px", background: `${color}10` }}>
-                              <div style={{ fontSize: 11, color: "#9AA7BD", fontWeight: 700, marginBottom: 6 }}>{m.label}</div>
-                              <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
-                                {decimales(d.vendido)} <span style={{ fontWeight: 400, fontSize: 12, color: "#9AA7BD" }}>/ {decimales(d.objetivo)} paq.</span>
-                              </div>
-                              <div style={{ fontSize: 11.5, color: "#9AA7BD", marginTop: 8, display: "flex", justifyContent: "space-between", gap: 8 }}>
-                                <span>Resta: <b style={{ color: "#E8EDF5" }}>{decimales(d.restaPorVender)}</b></span>
-                                <span>Por día: <b style={{ color: "#E8EDF5" }}>{decimales(d.ventaPorDiaNecesaria)}</b></span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-export default function StaffView({ data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, stats, puesto, staffUsername, onFile, fileInputRef, onDownloadTemplate, status, onObjetivosFile, objFileInputRef, onDownloadObjetivosTemplate, objStatus, onObjetivoVisitasFile, objetivoVisitasFileInputRef, onDownloadObjetivoVisitasTemplate, objetivoVisitasStatus, onObjetivoVisitasTexto, onAvanceDiaFile, avanceDiaFileInputRef, avanceDiaStatus, onAvanceDiaTexto, onOtcDiaFile, otcDiaFileInputRef, otcDiaStatus, onOtcDiaTexto, onPedidosDiaFile, pedidosDiaFileInputRef, pedidosDiaStatus, onPedidosDiaTexto, onVentasPeriodoFile, ventasPeriodoFileInputRef, ventasPeriodoStatus, onVentasPeriodoTexto, onBorrarTodoVentasPeriodo, onMesaControlFile, mesaControlFileInputRef, mesaControlStatus, onMesaControlTexto, onOtcSemanalTexto, onVisitasNurTexto, visitasNurStatus, onCargasFile, cargasFileInputRef, cargasStatus, onDescargarCargas, bloqueoPendienteCargas, onReintentarBloqueoCargas, onActivarCarga, onEliminarCarga, onRegistrarEvento, onRefresh, refrescando, onLogout, asignarFoliosTickets, ventasPeriodo }) {
-  const esSupervisor2 = puesto === "supervisor2";
-  const esSupervisor1 = puesto === "supervisor";
-  const esSuplente1 = puesto === "suplente1";
-  const esUsuarioApp = !!puesto && !PUESTOS_FIJOS.includes(puesto);
-
-  // Texto chiquito de "última actualización" para cada sección de Cargar
-  // datos — lee data.ultimaCarga (se reemplaza cada vez, no acumula).
-  function formatoUltimaCarga(seccion) {
-    const info = data.ultimaCarga?.[seccion];
-    if (!info) return null;
-    const fechaTxt = new Date(info.fecha).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-    return `Última actualización: ${fechaTxt} · ${info.quien}${info.accion && info.accion !== "carga" ? ` (${info.accion})` : ""}`;
-  }
-  const esSuplente2 = puesto === "suplente2";
-  const [fondoUrl, setFondoUrl] = useFondoPersonalizado(staffUsername);
-  const [tab, setTab] = useState("resumen");
-  const [objTab, setObjTab] = useState("dia");
-  // Fecha a la que corresponde el reporte de Visitas NUR que se va a
-  // pegar — por default hoy, pero se puede cambiar si el reporte que se
-  // está subiendo en realidad es de otro día (ej. un catch-up atrasado),
-  // para que no se archive bajo la semana equivocada.
-  const [fechaNur, setFechaNur] = useState(fechaHoyISO());
-  // Submenú dentro de la pestaña FACTURAS — aplica para Gerente y
-  // Supervisor-1: "clientes" es lo de siempre (registrar clientes que
-  // piden factura), "avance" es el mismo panel que ve ADMIN
-  // (pendientes/facturado por fecha, con la división automática de
-  // tickets EFECTIVO > $2,000).
-  const [facturasSubTab, setFacturasSubTab] = useState("clientes");
-  // true cuando se abrió una tarjeta del grid (DÍA, ESCALERA, MAX...) y se
-  // debe mostrar esa vista a pantalla completa en vez del grid.
+export default function VendorView({ vendedor, porVendedor, periodo, restantes, mesaControl, mensajeDia, data, persist, persistFresco, persistCargas, persistRevisionUnidad, persistConfigUnidades, onRefresh, refrescando, onRegistrarEvento, onLogout, peorVendedorNombre, bottom3Nombres, ventasPeriodo }) {
+  const [tab, setTab] = useState("dia");
+  // true cuando se abrió una tarjeta del grid y se debe mostrar esa vista a
+  // pantalla completa en vez del grid.
   const [pantallaAbierta, setPantallaAbierta] = useState(false);
-  // Detalle por ruta (con decimales) debajo del resumen de MARCAS · OPEN.
-  const [detalleOpenAbierto, setDetalleOpenAbierto] = useState(false);
-  const objUnit = OBJETIVO_TABS.find((t) => t.key === objTab).unit;
-  const [newName, setNewName] = useState("");
+  // Pantalla del Coach de Ventas IA — independiente del sistema de pestañas
+  // (OBJETIVO_TABS), igual que el Restablecer PIN de StaffView, para no
+  // tocar constants.js ni el árbol grande de JSX de abajo.
+  const [coachAbierto, setCoachAbierto] = useState(false);
 
-  // Registro de uso: cada vez que cambia la pestaña de indicador (DÍA,
-  // UNIDADES, NOMINA, etc.), se anota quién la vio y cuándo — no bloquea
-  // nada si falla, es solo estadística para el reporte de ACTIVIDAD.
+  // Registro de uso: mismo mecanismo que en StaffView.
   useEffect(() => {
-    if (!onRegistrarEvento) return;
-    onRegistrarEvento({ usuario: staffUsername, rol: "staff", puesto, tipoEvento: "tab_view", pestana: objTab });
+    if (!onRegistrarEvento || !vendedor) return;
+    onRegistrarEvento({ usuario: vendedor.name, rol: "vendedor", puesto: null, tipoEvento: "tab_view", pestana: tab });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objTab]);
+  }, [tab, vendedor?.name]);
 
-  // Observaciones de facturación sin responder (cualquier ruta) — para que
-  // Supervisor-1/Gerente vean si algo necesita atención.
+  // Observaciones de facturación sin responder para esta ruta — hace
+  // parpadear en naranja la pestaña FACTURAS hasta que la ruta responde.
   const [hayObservacionFacturasPendiente, setHayObservacionFacturasPendiente] = useState(false);
   useEffect(() => {
+    if (!vendedor) return;
     let activo = true;
     async function revisar() {
       try {
         const { count } = await supabase
           .from("facturas_observaciones")
           .select("id", { count: "exact", head: true })
+          .eq("ruta", vendedor.name)
           .eq("resuelta", false)
           .is("respondido_en", null);
         if (activo) setHayObservacionFacturasPendiente((count || 0) > 0);
@@ -249,1167 +84,225 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     revisar();
     const intervalo = setInterval(revisar, 20000);
     return () => { activo = false; clearInterval(intervalo); };
-  }, []);
+  }, [vendedor?.name]);
 
-  // Altas de cliente nuevas (Fase 2) — se revisa en cuanto se abre el
-  // Panel Staff (no solo al entrar a la pestaña), para que Supervisor-1
-  // y Gerente vean de inmediato si cayó un cliente nuevo del vendedor.
-  const [hayAltaClienteNueva, setHayAltaClienteNueva] = useState(false);
-  useEffect(() => {
-    let activo = true;
-    async function revisarAltasNuevas() {
-      try {
-        const { count } = await supabase
-          .from("altas_cliente")
-          .select("id", { count: "exact", head: true })
-          .eq("estatus", "pendiente");
-        if (activo) setHayAltaClienteNueva((count || 0) > 0);
-      } catch (e) {
-        console.error("Error revisando altas de cliente nuevas:", e);
-      }
-    }
-    revisarAltasNuevas();
-    const intervalo = setInterval(revisarAltasNuevas, 20000);
-    return () => { activo = false; clearInterval(intervalo); };
-  }, []);
+  const [fondoUrl, setFondoUrl] = useFondoPersonalizado(vendedor?.name);
 
-  // Estado de cada checklist de actividades, para pintar la pestaña
-  // parpadeando en rojo (hay pendientes) o en verde (todo completo).
-  const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
-  const estadoTabsActividades = {
-    actividades_dia: (data.actividades?.dia?.items || []).length === 0 ? undefined : (data.actividades.dia.items.every((it) => it.hecha) ? "completo" : "pendiente"),
-    actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
-    actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
-    rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
-    avisos: hayAvisoNuevoPara(data, puesto, null) ? "aviso_nuevo" : undefined,
-    unidades: rutaPropiaStaff && !unidadYaRegistradaHoy(data, rutaPropiaStaff) ? "pendiente_urgente" : undefined,
-    creditos: puesto === "gerente" && !creditosPendientes(data) ? "completo" : undefined,
-    facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
-    cartera_vencida: (puesto === "supervisor" || puesto === "gerente") && hayCarteraVencidaGlobal(data) ? "pendiente_urgente" : undefined,
-    altas_cliente: (puesto === "supervisor" || puesto === "gerente") && hayAltaClienteNueva ? "aviso_azul" : undefined,
-  };
-  const [newOpen, setNewOpen] = useState("");
-  const [newChampions, setNewChampions] = useState("");
-  const [nuevoFestivo, setNuevoFestivo] = useState("");
-  const [rutaMesaSeleccionada, setRutaMesaSeleccionada] = useState(data.vendedores[0]?.name || "");
-  const [rutaMensajeSeleccionada, setRutaMensajeSeleccionada] = useState(data.vendedores[0]?.name || "");
-  const [textoMensaje, setTextoMensaje] = useState("");
-  const [supervisorMensajeSeleccionado, setSupervisorMensajeSeleccionado] = useState("SUPERVISOR-1");
-  const [textoMensajeSupervisor, setTextoMensajeSupervisor] = useState("");
-  const [verTablaHoyCompleta, setVerTablaHoyCompleta] = useState(false);
-  const [verTablaVendedorCompleta, setVerTablaVendedorCompleta] = useState(false);
-  const [pwstActualizando, setPwstActualizando] = useState(false);
-  const [pwstStatus, setPwstStatus] = useState("");
-  const capturaPorRutaHoy = useCapturaImagen();
-  const capturaDiaCompleto = useCapturaImagen();
-  const capturaPorVendedorObj = useCapturaImagen();
+  if (!vendedor) return (
+    <div style={{ padding: 24 }}>
+      <div style={{ marginBottom: 10 }}>No se encontró tu ruta en la lista de vendedores activos.</div>
+      <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 14 }}>
+        Rutas disponibles ahora mismo: {(data?.vendedores || []).map((v) => v.name).join(", ") || "(ninguna cargada)"}
+      </div>
+      <button className="btn-ghost" onClick={onLogout}>Volver</button>
+    </div>
+  );
+  const nombre = NOMBRES[vendedor.name];
+  const rutaCodigo = vendedor.name.replace("RUTA ", "").trim();
 
-  function addVendedor() {
-    if (!newName.trim()) return;
-    const v = { id: "v" + Date.now(), name: newName.trim(), objetivos: { ...blankObjetivos(), open: Number(newOpen) || 0, champions: Number(newChampions) || 0 } };
-    persistFresco((fresca) => ({ vendedores: [...(fresca.vendedores || []), v] }));
-    setNewName(""); setNewOpen(""); setNewChampions("");
-  }
-  function removeVendedor(id) {
-    persistFresco((fresca) => ({ vendedores: (fresca.vendedores || []).filter((v) => v.id !== id) }));
-  }
-  function updateObjetivo(id, field, val) {
-    persistFresco((fresca) => ({
-      vendedores: (fresca.vendedores || []).map((v) =>
-        v.id === id ? { ...v, objetivos: { ...v.objetivos, [field]: Number(val) || 0 } } : v
-      ),
-    }));
-  }
-  function updatePeriodo(field, val) {
-    // Las ventas del periodo ya viven en su propia tabla (ventas_periodo) y
-    // se recargan solas cuando cambia data.periodo (ver useEffect de
-    // cargarVentasPeriodo). Aquí solo se reinicia el conteo de cupones
-    // canjeados por ruta, para que no se mezcle con el periodo nuevo.
-    persistFresco((fresca) => ({
-      periodo: { ...fresca.periodo, [field]: val },
-      cuponesRedimidos: [],
-    }));
-  }
-  function agregarDiaNoLaborable(fecha) {
-    if (!fecha) return;
-    persistFresco((fresca) => {
-      const actuales = fresca.diasNoLaborables || [];
-      if (actuales.includes(fecha)) return { diasNoLaborables: actuales };
-      return { diasNoLaborables: [...actuales, fecha].sort() };
-    });
-  }
-  function quitarDiaNoLaborable(fecha) {
-    persistFresco((fresca) => ({ diasNoLaborables: (fresca.diasNoLaborables || []).filter((f) => f !== fecha) }));
-  }
+  // Resúmenes en texto plano para el Coach de Ventas IA — se arman aquí con
+  // datos reales (no hay nada inventado) y se le pasan a CoachIAView, que
+  // solo los manda tal cual al endpoint /api/coach.
+  const tabMax = vendedor.tabs?.max;
+  const unitMax = OBJETIVO_TABS.find((t) => t.key === "max")?.unit;
+  const efectividadHoyTxt = vendedor.hoy?.efectividadPct != null ? `${vendedor.hoy.efectividadPct.toFixed(0)}%` : "sin datos";
+  const resumenObjetivo = tabMax
+    ? `${tabMax.avancePct.toFixed(0)}% del objetivo del periodo · faltan ${fmt(unitMax, tabMax.restaPorVender)} por vender · necesitas ${fmt(unitMax, tabMax.ventaPorDiaNecesaria)}/día · efectividad de hoy: ${efectividadHoyTxt}`
+    : `Efectividad de hoy: ${efectividadHoyTxt}`;
+  const resumenMarcasOpen = (MARCAS_OPEN || [])
+    .map((m) => { const d = vendedor.marcasOpen?.[m.key]; return d ? `${m.label}: ${unidades(d.vendido)}/${unidades(d.objetivo)}` : null; })
+    .filter(Boolean).join(" · ");
+  const resumenMarcasChampions = (MARCAS_CHAMPIONS || [])
+    .map((m) => { const d = vendedor.marcasChampions?.[m.key]; return d ? `${m.label}: ${unidades(d.vendido)}/${unidades(d.objetivo)}` : null; })
+    .filter(Boolean).join(" · ");
+  const resumenOtc = vendedor.marcaOtc ? `OTC: ${money(vendedor.marcaOtc.vendido)}/${money(vendedor.marcaOtc.objetivo)}` : "";
+  const resumenVentas = [resumenMarcasOpen, resumenMarcasChampions, resumenOtc].filter(Boolean).join(" · ") || "Sin datos de ventas todavía.";
 
-  // Reinicia solo los checklists de actividades que ya entraron a un nuevo
-  // periodo (día/semana/mes). No hace nada si ya están al día.
-  useEffect(() => {
-    if (!data) return;
-    const actual = data.actividades;
-    const normalizado = normalizarActividades(actual);
-    const cambio = normalizado.dia !== actual?.dia || normalizado.semana !== actual?.semana || normalizado.mes !== actual?.mes;
-    if (cambio) persistFresco((fresca) => ({ actividades: normalizarActividades(fresca.actividades) }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.actividades?.dia?.fecha, data?.actividades?.semana?.semanaId, data?.actividades?.mes?.mesId]);
+  // Promociones activas cargadas por Gerente (PromocionesCoachView) — se le
+  // pasan al coach tal cual, con precios reales, para que no invente combos.
+  const resumenPromociones = (data.promocionesCoach || [])
+    .filter((p) => p.activa)
+    .map((p) => `${p.titulo} — ${p.precio}${p.detalle ? ` — ${p.detalle}` : ""}`)
+    .join("\n");
 
-  function marcarActividad(ciclo, id, hecha) {
-    persistFresco((fresca) => {
-      const est = fresca.actividades[ciclo];
-      const items = est.items.map((it) => (it.id === id ? { ...it, hecha } : it));
-      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items } } };
-    });
-  }
-  function agregarActividad(ciclo, texto, tipo, autor) {
-    if (!texto || !texto.trim()) return;
-    persistFresco((fresca) => {
-      const est = fresca.actividades[ciclo];
-      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: [...est.items, nuevaActividad(texto, tipo, autor, fechaHoyISO())] } } };
-    });
-  }
-  function eliminarActividad(ciclo, id) {
-    persistFresco((fresca) => {
-      const est = fresca.actividades[ciclo];
-      return { actividades: { ...fresca.actividades, [ciclo]: { ...est, items: est.items.filter((it) => it.id !== id) } } };
-    });
-  }
-
-  const revisorNombre = NOMBRES[staffUsername] || staffUsername || "Staff";
-
-  function enviarMensajeDia(vendedorName, texto) {
-    if (!texto.trim()) return;
-    persistFresco((fresca) => ({
-      mensajesDia: {
-        ...(fresca.mensajesDia || {}),
-        [vendedorName]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
-      },
-    }));
-  }
-  function quitarMensajeDia(vendedorName) {
-    persistFresco((fresca) => {
-      const copia = { ...(fresca.mensajesDia || {}) };
-      delete copia[vendedorName];
-      return { mensajesDia: copia };
-    });
-  }
-
-  function enviarMensajeSupervisor(username, texto) {
-    if (!texto.trim()) return;
-    persistFresco((fresca) => ({
-      mensajesSupervisores: {
-        ...(fresca.mensajesSupervisores || {}),
-        [username]: { texto: texto.trim(), fecha: todayISO(), autor: revisorNombre },
-      },
-    }));
-  }
-  function quitarMensajeSupervisor(username) {
-    persistFresco((fresca) => {
-      const copia = { ...(fresca.mensajesSupervisores || {}) };
-      delete copia[username];
-      return { mensajesSupervisores: copia };
-    });
-  }
-
-  function descargarExcelMesaControl(analisis, rutaNombre, vendedorNombre, revisor) {
-    if (!analisis) return;
-    const encabezado = [
-      ["Ruta", rutaNombre],
-      ["Vendedor", vendedorNombre || ""],
-      ["Revisó", revisor || ""],
-      ["Fecha evaluada", analisis.fecha],
-      ["Hora de inicio", analisis.horaInicio || ""],
-      ["Volumen total", analisis.volumenTotal],
-      ["Visitas < 3 min", analisis.menores3.length],
-      [],
-      ["Cliente", "Inicio", "Final", "Min. estancia", "Tipo inicio", "Tipo cierre", "Volumen", "Descuento", "Alerta"],
-    ];
-    const filas = analisis.todos.map((r) => [
-      r.cliente, r.inicio, r.final, r.tiempoEstancia, r.tipoInicio, r.tipoFin, r.volumen, r.descuento, r.alerta ? "SI" : "",
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([...encabezado, ...filas]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Mesa de Control");
-    const nombreArchivo = `mesa_control_${rutaNombre.replace(/\s+/g, "_")}_${analisis.fecha}.xlsx`;
-    XLSX.writeFile(wb, nombreArchivo);
-  }
-
+  const esTabEspecial = tab === "dia" || tab === "mesa" || tab === "cuponera" || tab === "rally_otc" || tab === "avisos" || tab === "cargas" || tab === "unidades" || tab === "km" || tab === "facturas" || tab === "nomina" || tab === "sin_visita" || tab === "reloj_checador" || tab === "mi_fondo" || tab === "escalera" || tab === "cartera_vencida" || tab === "alta_cliente" || tab === "otc_ventas" || tab === "pedidos_otc" || tab === "carreras" || tab === "carrera_mes" || tab === "scorecard" || tab === "mural_campeones";
+  const m = !esTabEspecial ? vendedor.tabs[tab] : null;
+  const unit = OBJETIVO_TABS.find((t) => t.key === tab).unit;
+  const chartData = unit === "units" ? vendedor.ventaPorDiaUnidades : vendedor.ventaPorDia;
+  const chartKey = unit === "units" ? "paquetes" : "monto";
   return (
-    <div style={{ maxWidth: 820, margin: "0 auto", padding: "24px 18px 60px", position: "relative", zIndex: 0 }}>
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 18px 60px", position: "relative", zIndex: 0 }}>
       <FondoDeFondo url={fondoUrl} />
-      <TopBar title="Panel Staff" subtitle={`Periodo ${data.periodo.inicio} → ${data.periodo.fin} · ${stats.restantes} días hábiles restantes (Lun-Sáb)`} onLogout={onLogout} onRefresh={onRefresh} refrescando={refrescando} />
+      <TopBar
+        title={vendedor.name}
+        subtitle={`${nombre ? nombre + " · " : ""}Periodo ${periodo.inicio} → ${periodo.fin} · ${restantes} días hábiles restantes (Lun-Sáb)`}
+        onLogout={onLogout}
+        onRefresh={onRefresh}
+        refrescando={refrescando}
+      />
 
-      {!pantallaAbierta && !esUsuarioApp && (
+      {!pantallaAbierta && !coachAbierto && (
+        <div style={{ display: "flex", justifyContent: "flex-end", margin: "10px 0 0" }}>
+          <button className="btn-ghost" onClick={() => setCoachAbierto(true)} style={{ fontSize: 12 }}>
+            <Sparkles size={13} style={{ verticalAlign: "-2px" }} /> Coach de ventas
+          </button>
+        </div>
+      )}
+
+      {!pantallaAbierta && !coachAbierto && (
         <ScorecardMiniResumen
           data={data}
-          porVendedor={stats.porVendedor}
-          rol="staff"
+          porVendedor={porVendedor}
+          rol="vendedor"
+          rutaPropia={rutaCodigo}
           ventasPeriodo={ventasPeriodo}
-          onAbrir={() => { setTab("resumen"); setObjTab("scorecard"); setPantallaAbierta(true); }}
+          onAbrir={() => { setTab("scorecard"); setPantallaAbierta(true); }}
         />
       )}
 
-
-      <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
-        {(esSupervisor2 || esUsuarioApp ? [["resumen","Resumen"]] : [["resumen","Resumen"],["proyectado","Proyectado"],["objetivos","Objetivos"],["cargar","Cargar datos"]]).map(([k,l]) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={tab===k ? "btn" : "btn-ghost"} style={{ fontSize: 13 }}>{l}</button>
-        ))}
-      </div>
-
-      {tab === "resumen" && (
-        <>
-          {!pantallaAbierta && (
-            <NeonObjetivoTabs
-              tab={objTab}
-              setTab={(k) => { setObjTab(k); setPantallaAbierta(true); }}
-              tabs={
-                esUsuarioApp
-                  ? OBJETIVO_TABS.filter((t) => t.key !== "usuarios" && (data.permisosPersonalizados?.[staffUsername] || (puesto === "almacen" ? ["almacen"] : [])).includes(t.key))
-                  : (esSuplente1 || esSuplente2)
-                  ? OBJETIVO_TABS.filter((t) => (data.permisosSuplentes?.[puesto] || []).includes(t.key))
-                  : (esSupervisor1 || esSupervisor2) && data.permisosPersonalizados?.[rutaPropiaStaff]
-                  ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[rutaPropiaStaff].includes(t.key))
-                  : esSupervisor2
-                  ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones", "almacen"].includes(t.key))
-                  : esSupervisor1
-                  ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot" && t.key !== "usuarios")
-                  : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
-              }
-              estadoTabs={estadoTabsActividades}
-            />
-          )}
-
-          {pantallaAbierta && (
-            <SwipeBackScreen
-              title={OBJETIVO_TABS.find((t) => t.key === objTab)?.label || objTab}
-              onBack={() => setPantallaAbierta(false)}
-            >
-          {objTab === "dia" ? (
-            <div ref={capturaDiaCompleto.capturaRef}>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                <BotonGuardarImagen captura={capturaDiaCompleto} nombreArchivo={`dia_${fechaHoyISO()}.png`} etiqueta="Guardar / enviar DÍA" />
-              </div>
-              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 10 }}>Avance del {stats.total.hoy.fecha}</div>
-              {stats.total.alertas.length > 0 && (
-                <div className="card" style={{ padding: 16, marginBottom: 20, border: "1px solid #FF6B6B" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <AlertCircle size={16} color="#FF6B6B" />
-                    <span className="display" style={{ fontSize: 14, color: "#FF6B6B" }}>ALERTA · BAJO DESEMPEÑO HOY</span>
-                  </div>
-                  {stats.total.alertas.map((v) => (
-                    <div key={v.id} style={{ fontSize: 13, color: "#E8EDF5", marginBottom: 4 }}>
-                      {v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""} — {unidades(v.hoy.volumen.vendido)} vendidos, meta del día ~{unidades(v.hoy.volumen.objetivo)}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-                <KpiCard icon={<Target size={14} />} label="VOLUMEN (hoy)" value={`${unidades(stats.total.hoy.volumen.vendido)} / ${unidades(stats.total.hoy.volumen.objetivo)}`} accent={metaColor(stats.total.hoy.volumen.vendido, stats.total.hoy.volumen.objetivo)} />
-                {MARCAS_DIA.map((m) => (
-                  <KpiCard key={m.key} icon={<Star size={14} />} label={m.label} value={`${unidades(stats.total.hoy.marcas[m.key].vendido)} / ${unidades(stats.total.hoy.marcas[m.key].objetivo)}`} accent={metaColor(stats.total.hoy.marcas[m.key].vendido, stats.total.hoy.marcas[m.key].objetivo)} />
-                ))}
-                <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(stats.total.hoy.otc.vendido)} / ${money(stats.total.hoy.otc.objetivo)}`} accent={metaColor(stats.total.hoy.otc.vendido, stats.total.hoy.otc.objetivo)} />
-                <KpiCard icon={<Star size={14} />} label="OTC sin Vuala" value={`${stats.total.hoy.otcSinVuala.rutasQueCumplen} / ${stats.total.hoy.otcSinVuala.totalRutas} rutas`} accent={stats.total.hoy.otcSinVuala.rutasQueCumplen === stats.total.hoy.otcSinVuala.totalRutas ? "#3DDC97" : "#FF6B6B"} />
-                <KpiCard icon={<MapPin size={14} />} label="VISITAS EFECTIVAS" value={stats.total.hoy.visitasEfectivas} />
-              </div>
-
-              <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                  <MessageSquare size={16} color="#F2B134" />
-                  <span className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>MENSAJE PARA LA RUTA</span>
-                </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-                  <select value={rutaMensajeSeleccionada} onChange={(e) => { setRutaMensajeSeleccionada(e.target.value); setTextoMensaje(""); }} style={{ flex: 1, minWidth: 200 }}>
-                    {data.vendedores.map((v) => (
-                      <option key={v.id} value={v.name}>{v.name}{NOMBRES[v.name] ? ` — ${NOMBRES[v.name]}` : ""}</option>
-                    ))}
-                  </select>
-                </div>
-                {data.mensajesDia?.[rutaMensajeSeleccionada] && (
-                  <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>
-                    Mensaje actual ({data.mensajesDia[rutaMensajeSeleccionada].fecha} · {data.mensajesDia[rutaMensajeSeleccionada].autor}):
-                    <div style={{ color: "#E8EDF5", marginTop: 4, whiteSpace: "pre-wrap" }}>{data.mensajesDia[rutaMensajeSeleccionada].texto}</div>
-                  </div>
-                )}
-                <textarea
-                  value={textoMensaje}
-                  onChange={(e) => setTextoMensaje(e.target.value)}
-                  placeholder="Escribe una indicación para esta ruta (se verá en su pestaña DÍA)..."
-                  rows={3}
-                  style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, resize: "vertical", color: "#000000", background: "#FFFFFF" }}
-                />
-                <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                  <button className="btn" onClick={() => { enviarMensajeDia(rutaMensajeSeleccionada, textoMensaje); setTextoMensaje(""); }}>
-                    Enviar mensaje
-                  </button>
-                  {data.mensajesDia?.[rutaMensajeSeleccionada] && (
-                    <button className="btn-ghost" onClick={() => quitarMensajeDia(rutaMensajeSeleccionada)}>Quitar mensaje</button>
-                  )}
-                </div>
-              </div>
-
-              {puesto === "gerente" && (
-                <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <MessageSquare size={16} color="#F2B134" />
-                    <span className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>MENSAJE PARA SUPERVISOR</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-                    <select value={supervisorMensajeSeleccionado} onChange={(e) => { setSupervisorMensajeSeleccionado(e.target.value); setTextoMensajeSupervisor(""); }} style={{ flex: 1, minWidth: 200 }}>
-                      <option value="SUPERVISOR-1">SUPERVISOR-1{NOMBRES["SUPERVISOR-1"] ? ` — ${NOMBRES["SUPERVISOR-1"]}` : ""}</option>
-                      <option value="SUPERVISOR-2">SUPERVISOR-2{NOMBRES["SUPERVISOR-2"] ? ` — ${NOMBRES["SUPERVISOR-2"]}` : ""}</option>
-                    </select>
-                  </div>
-                  {data.mensajesSupervisores?.[supervisorMensajeSeleccionado] && (
-                    <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>
-                      Mensaje actual ({data.mensajesSupervisores[supervisorMensajeSeleccionado].fecha} · {data.mensajesSupervisores[supervisorMensajeSeleccionado].autor}):
-                      <div style={{ color: "#E8EDF5", marginTop: 4, whiteSpace: "pre-wrap" }}>{data.mensajesSupervisores[supervisorMensajeSeleccionado].texto}</div>
-                    </div>
-                  )}
-                  <textarea
-                    value={textoMensajeSupervisor}
-                    onChange={(e) => setTextoMensajeSupervisor(e.target.value)}
-                    placeholder="Escribe una indicación para este supervisor (la verá al entrar a su pestaña DÍA)..."
-                    rows={3}
-                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 13, resize: "vertical", color: "#000000", background: "#FFFFFF" }}
-                  />
-                  <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                    <button className="btn" onClick={() => { enviarMensajeSupervisor(supervisorMensajeSeleccionado, textoMensajeSupervisor); setTextoMensajeSupervisor(""); }}>
-                      Enviar mensaje
-                    </button>
-                    {data.mensajesSupervisores?.[supervisorMensajeSeleccionado] && (
-                      <button className="btn-ghost" onClick={() => quitarMensajeSupervisor(supervisorMensajeSeleccionado)}>Quitar mensaje</button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {(puesto === "supervisor" || puesto === "supervisor2") && data.mensajesSupervisores?.[staffUsername] && (
-                <div className="card" style={{ padding: 14, marginBottom: 20, border: "1px solid #F2B134" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <MessageSquare size={16} color="#F2B134" />
-                    <span className="display" style={{ fontSize: 13, color: "#F2B134" }}>MENSAJE DEL GERENTE</span>
-                  </div>
-                  <div style={{ fontSize: 14, color: "#E8EDF5", whiteSpace: "pre-wrap" }}>{data.mensajesSupervisores[staffUsername].texto}</div>
-                  <div style={{ fontSize: 11, color: "#9AA7BD", marginTop: 8 }}>
-                    {data.mensajesSupervisores[staffUsername].autor} · {data.mensajesSupervisores[staffUsername].fecha}
-                  </div>
-                </div>
-              )}
-
-              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px 0", flexWrap: "wrap", gap: 8 }}>
-                  <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>POR RUTA · HOY</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <BotonGuardarImagen captura={capturaPorRutaHoy} nombreArchivo={`por_ruta_hoy_${fechaHoyISO()}.png`} etiqueta="Guardar / enviar" />
-                    <button className="btn-ghost" onClick={() => setVerTablaHoyCompleta(true)}>
-                      Ver tabla completa (pantalla)
-                    </button>
-                  </div>
-                </div>
-                <div ref={capturaPorRutaHoy.capturaRef} style={{ padding: 16 }}>
-                  <div style={{ overflowX: "auto" }}>
-                    <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
-                  </div>
-                </div>
-              </div>
-
-              {verTablaHoyCompleta && (
-                <ModalTablaCompleta titulo="POR RUTA · HOY" onClose={() => setVerTablaHoyCompleta(false)}>
-                  <TablaPorRutaHoy porVendedor={stats.porVendedor} peorVendedorNombre={stats.peorVendedorNombre} />
-                </ModalTablaCompleta>
-              )}
-
-              {!esSupervisor2 && (
-                <div style={{ marginTop: 24 }}>
-                  <RepartidorAhogadoView stats={stats} />
-                </div>
-              )}
-            </div>
-          ) : objTab === "mesa" ? (
-            <>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
-                <select value={rutaMesaSeleccionada} onChange={(e) => setRutaMesaSeleccionada(e.target.value)} style={{ flex: 1, minWidth: 200 }}>
-                  {data.vendedores.map((v) => (
-                    <option key={v.id} value={v.name}>{v.name}{NOMBRES[v.name] ? ` — ${NOMBRES[v.name]}` : ""}</option>
-                  ))}
-                </select>
-                <button className="btn" onClick={() => mesaControlFileInputRef.current?.click()}>
-                  <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir mesa de control (hasta 7)
-                </button>
-                <button
-                  className="btn-ghost"
-                  disabled={!analizarMesaControl(data.mesaControl || [], rutaMesaSeleccionada)}
-                  onClick={() => descargarExcelMesaControl(
-                    analizarMesaControl(data.mesaControl || [], rutaMesaSeleccionada),
-                    rutaMesaSeleccionada,
-                    NOMBRES[rutaMesaSeleccionada],
-                    revisorNombre
-                  )}
-                >
-                  Descargar Excel
-                </button>
-              </div>
-              <p style={{ fontSize: 12, color: "#9AA7BD", marginTop: 0, marginBottom: 12 }}>
-                Puedes seleccionar hasta 7 archivos a la vez (uno por ruta). Se combinan sin borrar las otras rutas.
-              </p>
-              <input ref={mesaControlFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onMesaControlFile} />
-              <PegarTextoBox onProcesar={onMesaControlTexto} placeholder="Pega aquí las filas con columnas vendedor, fecha, cliente, inicio, final, Tiempo_estancia, tipoinicio, tipofin, volumen y descuento (incluye el encabezado)." />
-              {mesaControlStatus && (
-                <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: (mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? "#3DDC97" : "#FF6B6B" }}>
-                  {(mesaControlStatus.startsWith("Mesa de control") && !mesaControlStatus.includes("Error") && !mesaControlStatus.includes("No se")) ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {mesaControlStatus}
-                </div>
-              )}
-              <MesaControlView
-                data={data}
-                analisis={analizarMesaControl(data.mesaControl || [], rutaMesaSeleccionada)}
-                nombreRuta={rutaMesaSeleccionada}
-                nombreVendedor={NOMBRES[rutaMesaSeleccionada]}
-                revisor={revisorNombre}
-                vendedorStats={stats.porVendedor.find((v) => v.name === rutaMesaSeleccionada)}
-                resumenPedidos={calcularResumenPedidos(data.pedidosDia, rutaMesaSeleccionada)}
-                visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, rutaMesaSeleccionada, data.objetivosVisitasDia, todayISO())}
-                mesaControl={data.mesaControl || []}
-              />
-            </>
-          ) : objTab === "cuponera" ? (
-            <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" rutaActual={null} revisorNombre={revisorNombre} nombres={NOMBRES} />
-          ) : objTab === "tiempos" ? (
-            <TiemposView identidad={revisorNombre} misAreas={["Ingreso a CLO", "Salida a ruta", "Ingreso a CLO (fin de ruta)", "Salida de CLO final"]} data={data} persistFresco={persistFresco} />
-          ) : objTab === "unidades" ? (
-            <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_PVR} />
-          ) : objTab === "nomina" ? (
-            <NominaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
-          ) : objTab === "sin_visita" ? (
-            <SinVisitaView data={data} rol="staff" puesto={puesto} rutaPropia={null} />
-          ) : objTab === "escalera" ? (
-            esSupervisor2 ? (
-              <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-                Este módulo es exclusivo de Supervisor-1 y Gerente.
-              </div>
-            ) : (
-              <EscaleraStaffView data={data} persistFresco={persistFresco} stats={stats} revisorNombre={revisorNombre} />
-            )
-          ) : objTab === "carreras" ? null
-          : objTab === "carrera_mes" ? null
-          : objTab === "actividad" ? (
-            puesto === "gerente" ? (
-              <ActividadView />
-            ) : (
-              <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-                Este módulo es exclusivo del Gerente.
-              </div>
-            )
-          ) : objTab === "reloj_checador" ? (
-            <RelojChecadorView puedeSubir={puesto === "gerente"} rutaPropia={null} puedeVerBono={puesto === "gerente" || esSupervisor1} />
-          ) : objTab === "tepic" ? (
-            <div>
-              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 4 }}>CLO TEPIC</div>
-              <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 14 }}>
-                Unidades y revisiones del CLO Tepic. El reporte combinado de ambos CLOs está al final, junto a la bitácora.
-              </div>
-              <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} cloFiltro={CLO_TEPIC} />
-            </div>
-          ) : objTab === "creditos" ? (
-            <CreditosView data={data} persistFresco={persistFresco} rol="staff" revisorNombre={revisorNombre} />
-          ) : objTab === "cartera_vencida" ? (
-            <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
-          ) : objTab === "altas_cliente" ? (
-            <AltasClienteStaffView revisorNombre={revisorNombre} puesto={puesto} />
-          ) : objTab === "otc_ventas" ? (
-            <OtcVentasView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} revisorNombre={revisorNombre} />
-          ) : objTab === "rutas" ? (
-            <RutasView stats={stats} />
-          ) : objTab === "actividades_dia" ? (
-            <ActividadesView ciclo="dia" titulo="ACTIVIDADES DEL DÍA" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
-          ) : objTab === "actividades_semana" ? (
-            <ActividadesView ciclo="semana" titulo="ACTIVIDADES DE LA SEMANA" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
-          ) : objTab === "actividades_mes" ? (
-            <ActividadesView ciclo="mes" titulo="ACTIVIDADES DEL MES" data={data} persist={persist} persistFresco={persistFresco} revisorNombre={revisorNombre} puedeEliminar={puesto === "gerente"} />
-          ) : objTab === "cotizador" ? (
-            <div className="card" style={{ padding: 30, textAlign: "center" }}>
-              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>COTIZADOR MARLBORO</div>
-              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
-                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
-              </p>
-              <a
-                href="https://cotizador-marlboro.vercel.app"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn"
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px" }}
-              >
-                Abrir cotizador
-              </a>
-            </div>
-          ) : objTab === "almacen" ? (
-            <AlmacenView
-              data={data}
-              persistFresco={persistFresco}
-              puedeEditar={puesto === "gerente" || esSupervisor1 || esSupervisor2 || esUsuarioApp}
-              quien={revisorNombre}
-            />
-          ) : objTab === "usuarios" ? (
-            puesto === "gerente" ? (
-              <UsuariosView onIrPermisos={() => setObjTab("permisos")} />
-            ) : (
-              <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>Solo el Gerente administra usuarios.</div>
-            )
-          ) : objTab === "rally_otc" ? (
-            <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={puesto} rol="staff" revisorNombre={revisorNombre} />
-          ) : objTab === "avisos" ? (
-            <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={puesto === "gerente" || esSupervisor1 || esSupervisor2} revisorNombre={revisorNombre} viewerKey={puesto} />
-          ) : objTab === "facturas" ? (
-            (puesto === "gerente" || esSupervisor1) ? (
-              <div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                  <button
-                    className={facturasSubTab === "clientes" ? "btn" : "btn-ghost"}
-                    style={{ flex: "1 1 45%", minWidth: 0 }}
-                    onClick={() => setFacturasSubTab("clientes")}
-                  >
-                    CLIENTES REGISTRADOS
-                  </button>
-                  <button
-                    className={facturasSubTab === "avance" ? "btn" : "btn-ghost"}
-                    style={{ flex: "1 1 45%", minWidth: 0 }}
-                    onClick={() => setFacturasSubTab("avance")}
-                  >
-                    AVANCE Y PENDIENTES
-                  </button>
-                </div>
-                {facturasSubTab === "clientes" ? (
-                  <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
-                ) : (
-                  <FacturasAdminView onLogout={onLogout} asignarFoliosTickets={asignarFoliosTickets} ocultarSalir />
-                )}
-              </div>
-            ) : (
-              <FacturasView rol="staff" puesto={puesto} rutaActual={null} identidad={revisorNombre} nombres={NOMBRES} vendedores={data.vendedores} />
-            )
-          ) : objTab === "cargas" ? (
-            <CargasView
-              data={data} persist={persist} persistCargas={persistCargas} puesto={puesto} rol="staff"
-              onUpload={onCargasFile} cargasFileInputRef={cargasFileInputRef} cargasStatus={cargasStatus} onDescargar={onDescargarCargas}
-              bloqueoPendiente={bloqueoPendienteCargas} onReintentarBloqueo={onReintentarBloqueoCargas}
-              onActivarCarga={onActivarCarga} onEliminarCarga={onEliminarCarga}
-            />
-          ) : objTab === "km" ? (
-            <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-              KM es un registro individual de cada ruta — entra a la pestaña de la ruta específica que quieras revisar para verlo.
-            </div>
-          ) : objTab === "mi_fondo" ? (
-            <PanelFondoPersonalizado identidad={staffUsername} url={fondoUrl} setUrl={setFondoUrl} />
-          ) : objTab === "reset_pin" ? (
-            <ResetPinView />
-          ) : objTab === "permisos" ? (
-            <PermisosPersonalizadosView data={data} persistFresco={persistFresco} />
-          ) : objTab === "promociones_coach" ? (
-            <PromocionesCoachView data={data} persistFresco={persistFresco} puedeEditar={puesto === "gerente"} />
-          ) : objTab === "whatsapp_bot" ? (
-            <WhatsAppBotView
-              data={data}
-              persistFresco={persistFresco}
-              puedeEditar={puesto === "gerente" || (data.permisosPersonalizados?.[rutaPropiaStaff] || []).includes("whatsapp_bot")}
-            />
-          ) : objTab === "scorecard" ? (
-            <ScorecardSemanalView data={data} porVendedor={stats.porVendedor} rol="staff" puesto={puesto} ventasPeriodo={ventasPeriodo} />
-          ) : objTab === "mural_campeones" ? (
-            <MuralCampeonesView puesto={puesto} staffUsername={staffUsername} />
-          ) : objTab === "pwst" ? (
-            <div className="card" style={{ padding: 30, textAlign: "center" }}>
-              <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 8 }}>PWST · POWERSTREET</div>
-              <p style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 20 }}>
-                Se abre en una pestaña nueva de tu navegador, sin salir de SMART-TRACK.
-              </p>
-              <a
-                href="https://client.powerstreet.cloud"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn"
-                style={{ display: "inline-flex", alignItems: "center", gap: 8, textDecoration: "none", padding: "12px 24px", background: "#1E6FEB", borderColor: "#1E6FEB", color: "#FFFFFF" }}
-              >
-                Abrir PowerStreet
-              </a>
-              {puesto === "gerente" && (
-                <div style={{ marginTop: 24, display: "inline-block", textAlign: "left" }}>
-                  <div className="card" style={{ padding: 14, background: "#131C30" }}>
-                    <div style={{ fontSize: 11, color: "#9AA7BD", marginBottom: 6 }}>ACCESO (solo visible para Gerente)</div>
-                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Usuario: <span className="mono">jmdrafgal</span></div>
-                    <div style={{ fontSize: 13, color: "#E8EDF5" }}>Contraseña: <span className="mono">Pwst12345*</span></div>
-                  </div>
-
-                  {/* ===== BOTÓN ACTUALIZAR DESDE POWERSTREET (n8n) — MODO PRUEBA =====
-                      Usa el webhook de PRUEBA de n8n ("webhook-test"). Ese webhook solo
-                      responde una vez cada que en el editor de n8n le des clic a
-                      "Listen for test event" antes de presionar este botón aquí.
-                      Cuando el workflow ya esté probado y funcionando, hay que:
-                        1) Activar el workflow en n8n (toggle "Active").
-                        2) Cambiar la URL de abajo de "/webhook-test/" a "/webhook/". */}
-                  <div style={{ marginTop: 20 }}>
-                    <div style={{ fontSize: 11, color: "#F2B134", marginBottom: 8, fontWeight: 600 }}>
-                      MODO PRUEBA — antes de presionar, activa "Listen for test event" en n8n
-                    </div>
-                    <button
-                      className="btn"
-                      style={{ background: "#1E6FEB", borderColor: "#1E6FEB", color: "#fff", width: "100%", padding: "12px 20px" }}
-                      disabled={pwstActualizando}
-                      onClick={async () => {
-                        setPwstActualizando(true);
-                        setPwstStatus("Actualizando desde PowerStreet... espera unos segundos");
-                        try {
-                          const res = await fetch(
-                            "https://n8n-n8n.u4ld49.easypanel.host/webhook-test/actualizar-avance-powerstreet",
-                            {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ trigger: "avance-dia" }),
-                            }
-                          );
-                          const result = await res.json();
-                          if (result.success) {
-                            setPwstStatus(`Avance cargado: ${result.totalRegistros} registros desde PowerStreet`);
-                            if (onRefresh) await onRefresh();
-                          } else {
-                            setPwstStatus("Error: " + (result.message || "No se pudo actualizar"));
-                          }
-                        } catch (err) {
-                          console.error(err);
-                          setPwstStatus("Error de conexión con n8n. Revisa que el workflow esté activo y escuchando el test.");
-                        } finally {
-                          setPwstActualizando(false);
-                        }
-                      }}
-                    >
-                      {pwstActualizando ? "Actualizando..." : "Actualizar Avance del Día desde PowerStreet (prueba)"}
-                    </button>
-                    {pwstStatus && (
-                      <div style={{ marginTop: 12, fontSize: 13, textAlign: "center", color: pwstStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                        {pwstStatus}
-                      </div>
-                    )}
-                  </div>
-                  {/* ===== FIN BOTÓN ===== */}
-                </div>
-              )}
-            </div>
-          ) : objTab === "alta_cliente" ? (
-            // "Alta cliente" es solo para vendedores — el Staff no tiene
-            // botón para llegar aquí, pero se deja una rama explícita por
-            // seguridad, para nunca caer en el fallback de abajo (que
-            // asume que la pestaña es una meta de venta con avancePct).
-            <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
-              Esta sección es exclusiva de la vista de vendedor.
-            </div>
-          ) : !stats.total.tabs[objTab] ? (
-            // Guardia de seguridad: si algún día se agrega una pestaña
-            // nueva a OBJETIVO_TABS y se le olvida su propia rama aquí,
-            // esto evita que truene toda la app — solo muestra un aviso.
-            <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
-              Esta pestaña ("{objTab}") todavía no tiene una vista configurada aquí.
-            </div>
-          ) : (
-            <>
-              <RoadProgress pct={stats.total.tabs[objTab].avancePct} />
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 20 }}>
-                <span>{fmt(objUnit, stats.total.tabs[objTab].avance)} {objUnit==="units" ? "vendidos" : "vendido"}</span>
-                <span>{stats.total.tabs[objTab].avancePct.toFixed(0)}% de {fmt(objUnit, stats.total.tabs[objTab].objetivo)}</span>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-                <KpiCard icon={<Target size={14} />} label="Resta por vender (total)" value={fmt(objUnit, stats.total.tabs[objTab].restaPorVender)} accent="#FF6B6B" />
-                <KpiCard icon={<Calendar size={14} />} label="Necesario / día (total)" value={fmt(objUnit, stats.total.tabs[objTab].ventaPorDiaNecesaria)} accent="#F2B134" />
-                {objTab === "max" && (
-                  <>
-                    <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={stats.total.visitasEfectivas} />
-                    <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(stats.total.marcaOtc.vendido)} / ${money(stats.total.marcaOtc.objetivo)}`} accent={metaColor(stats.total.marcaOtc.vendido, stats.total.marcaOtc.objetivo)} />
-                    <KpiCard
-                      icon={<Star size={14} />}
-                      label={puesto === "gerente" ? "Comisión Gerente" : "Comisión Supervisor"}
-                      value={money(puesto === "gerente" ? stats.total.comisionGerente : stats.total.comisionSupervisor)}
-                      accent="#3DDC97"
-                    />
-                  </>
-                )}
-              </div>
-
-              {objTab === "open" && <MarcasBreakdown titulo="MARCAS · OPEN (PAQUETES)" marcas={MARCAS_OPEN} data={stats.total.marcasOpen} />}
-              {objTab === "champions" && <MarcasBreakdown titulo="MARCAS · CHAMPIONS (PAQUETES)" marcas={MARCAS_CHAMPIONS} data={stats.total.marcasChampions} />}
-
-              {objTab === "open" && (
-                <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                  <button
-                    type="button"
-                    onClick={() => setDetalleOpenAbierto((v) => !v)}
-                    style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
-                      background: "none", border: "none", cursor: "pointer", padding: 0,
-                      color: "#9AA7BD", fontSize: 13, fontWeight: 700,
-                    }}
-                  >
-                    <span>DETALLE POR RUTA · OPEN (con decimales)</span>
-                    <span style={{ fontSize: 18, lineHeight: 1 }}>{detalleOpenAbierto ? "−" : "+"}</span>
-                  </button>
-
-                  {detalleOpenAbierto && (
-                    <div style={{ overflowX: "auto", marginTop: 14 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
-                        <thead>
-                          <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                            <th style={{ padding: "8px 10px" }}>Ruta</th>
-                            {MARCAS_OPEN.map((m) => (
-                              <th key={m.key} style={{ padding: "8px 10px", textAlign: "right" }}>{m.label}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {stats.porVendedor.map((v) => (
-                            <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                              <td style={{ padding: "8px 10px" }}>{v.name.replace("RUTA ", "")}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                              {MARCAS_OPEN.map((m) => (
-                                <td
-                                  key={m.key}
-                                  style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: metaColor(v.marcasOpen[m.key].vendido, v.marcasOpen[m.key].objetivo) }}
-                                >
-                                  {decimales(v.marcasOpen[m.key].vendido)} / {decimales(v.marcasOpen[m.key].objetivo)}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                          {stats.total.medioMayoreo && stats.total.medioMayoreo.paquetes > 0 && (
-                            <tr style={{ borderTop: "1px solid #1E2A42" }}>
-                              <td style={{ padding: "8px 10px", color: "#F2B134" }}>MEDIO MAYOREO</td>
-                              {MARCAS_OPEN.map((m) => (
-                                <td key={m.key} style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#F2B134" }}>
-                                  {decimales(stats.total.medioMayoreo.marcasOpen[m.key])} / —
-                                </td>
-                              ))}
-                            </tr>
-                          )}
-                        </tbody>
-                        <tfoot>
-                          <tr style={{ borderTop: "2px solid #2A3852", fontWeight: 700 }}>
-                            <td style={{ padding: "8px 10px" }}>TOTAL</td>
-                            {MARCAS_OPEN.map((m) => (
-                              <td key={m.key} style={{ padding: "8px 10px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                                {decimales(stats.total.marcasOpen[m.key].vendido)} / {decimales(stats.total.marcasOpen[m.key].objetivo)}
-                              </td>
-                            ))}
-                          </tr>
-                        </tfoot>
-                      </table>
-                      <div style={{ fontSize: 11, color: "#6C7A96", marginTop: 10 }}>
-                        MEDIO MAYOREO (NUR {"802878M050"}) no tiene ruta ni objetivo propio — su venta ya está incluida en el TOTAL de arriba, pero no se le acredita a ningún vendedor.
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-                <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTA POR DÍA (TODOS){objUnit==="units" ? " · PAQUETES" : ""}</div>
-                <div style={{ height: 200 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={objUnit === "units" ? stats.total.ventaPorDiaUnidades : stats.total.ventaPorDia}>
-                      <CartesianGrid stroke="#1E2A42" vertical={false} />
-                      <XAxis dataKey="fecha" stroke="#9AA7BD" fontSize={11} />
-                      <YAxis stroke="#9AA7BD" fontSize={11} tickFormatter={(v) => (objUnit === "units" ? v : `${(v/1000).toFixed(0)}k`)} />
-                      <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid #2A3852" }} formatter={(v) => (objUnit === "units" ? unidades(v) : money(v))} />
-                      <Bar dataKey={objUnit === "units" ? "paquetes" : "monto"} fill="#3DDC97" radius={[4,4,0,0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px 0", flexWrap: "wrap", gap: 8 }}>
-                  <div className="display" style={{ fontSize: 14, color: "#9AA7BD" }}>POR VENDEDOR ({OBJETIVO_TABS.find(t=>t.key===objTab).label})</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <BotonGuardarImagen captura={capturaPorVendedorObj} nombreArchivo={`por_vendedor_${objTab}_${todayISO()}.png`} etiqueta="Guardar / enviar" />
-                    <button className="btn-ghost" onClick={() => setVerTablaVendedorCompleta(true)}>
-                      Ver tabla completa (pantalla)
-                    </button>
-                  </div>
-                </div>
-                <div ref={capturaPorVendedorObj.capturaRef} style={{ padding: 16 }}>
-                  <TablaPorVendedorObjetivo
-                    porVendedor={stats.porVendedor}
-                    objTab={objTab}
-                    objUnit={objUnit}
-                    marcas={objTab === "open" ? MARCAS_OPEN : objTab === "champions" ? MARCAS_CHAMPIONS : []}
-                    marcasSourceKey={objTab === "champions" ? "marcasChampions" : "marcasOpen"}
-                  />
-                </div>
-              </div>
-
-              {verTablaVendedorCompleta && (
-                <ModalTablaCompleta titulo={`POR VENDEDOR (${OBJETIVO_TABS.find(t=>t.key===objTab).label})`} onClose={() => setVerTablaVendedorCompleta(false)}>
-                  <TablaPorVendedorObjetivo
-                    porVendedor={stats.porVendedor}
-                    objTab={objTab}
-                    objUnit={objUnit}
-                    marcas={objTab === "open" ? MARCAS_OPEN : objTab === "champions" ? MARCAS_CHAMPIONS : []}
-                    marcasSourceKey={objTab === "champions" ? "marcasChampions" : "marcasOpen"}
-                  />
-                </ModalTablaCompleta>
-              )}
-            </>
-          )}
-            </SwipeBackScreen>
-          )}
-          {pantallaAbierta && objTab === "carreras" && (
-            <CarrerasVentas porVendedor={stats.porVendedor} onCerrar={() => setPantallaAbierta(false)} />
-          )}
-          {pantallaAbierta && objTab === "carrera_mes" && (
-            <CarreraMes porVendedor={stats.porVendedor} onCerrar={() => setPantallaAbierta(false)} />
-          )}
-        </>
+      {coachAbierto && (
+        <div style={{ position: "fixed", inset: 0, background: "#0B1120", zIndex: 999, overflowY: "auto" }}>
+          <div style={{ maxWidth: 620, margin: "0 auto", padding: "24px 18px 60px" }}>
+            <button className="btn-ghost" onClick={() => setCoachAbierto(false)} style={{ marginBottom: 16 }}>‹ Regresar</button>
+            <CoachIAView vendedorNombre={nombre || vendedor.name} resumenObjetivo={resumenObjetivo} resumenVentas={resumenVentas} resumenPromociones={resumenPromociones} />
+          </div>
+        </div>
       )}
 
-      {tab === "proyectado" && (
-        <div>
-          <div className="card" style={{ padding: 16, marginBottom: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 6 }}>PROYECCIÓN AL CIERRE DE MES</div>
-            <p style={{ fontSize: 12, color: "#9AA7BD", margin: 0 }}>
-              Proyectado = avance ÷ días transcurridos × días laborables del periodo.
-              Días transcurridos: <span className="mono" style={{ color: "#E8EDF5" }}>{stats.diasTranscurridos}</span> de <span className="mono" style={{ color: "#E8EDF5" }}>{stats.diasLaborablesTotal}</span> días hábiles del periodo (Lun-Sáb).
-            </p>
+      {!pantallaAbierta && (
+        <NeonObjetivoTabs
+          tab={tab}
+          setTab={(k) => { setTab(k); setPantallaAbierta(true); }}
+          tabs={
+            data.permisosPersonalizados?.[vendedor.name]
+              ? OBJETIVO_TABS.filter((t) => data.permisosPersonalizados[vendedor.name].includes(t.key))
+              : OBJETIVO_TABS.filter((t) => {
+                  if (t.key === "km") return RUTAS_CON_KM.includes(vendedor.name);
+                  return !["tiempos", "rutas", "actividades_dia", "actividades_semana", "actividades_mes", "cotizador", "pwst", "tepic", "actividad", "creditos", "altas_cliente"].includes(t.key);
+                })
+          }
+          estadoTabs={{
+            rally_otc: (data.rallyOtcs || (data.rallyOtc?.nombre ? [data.rallyOtc] : [])).some((r) => r.activo) ? "parpadeo_verde" : undefined,
+            avisos: hayAvisoNuevoPara(data, vendedor.name, vendedor.name) ? "aviso_nuevo" : undefined,
+            unidades: !unidadYaRegistradaHoy(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+            facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
+            escalera: !data.escaleraProgreso?.[rutaCodigo]?.orden ? "aviso_nuevo" : undefined,
+            cartera_vencida: hayCarteraVencidaPara(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+          }}
+        />
+      )}
+
+      {pantallaAbierta && (
+        <SwipeBackScreen
+          title={OBJETIVO_TABS.find((t) => t.key === tab)?.label || tab}
+          onBack={() => setPantallaAbierta(false)}
+        >
+      {tab === "dia" ? (
+        <DiaKpis
+          hoy={vendedor.hoy}
+          mensajeDia={mensajeDia}
+          rutaCodigo={rutaCodigo}
+          esPeor={peorVendedorNombre === vendedor.name}
+          esBottom3={(bottom3Nombres || []).includes(vendedor.name)}
+        />
+      ) : tab === "mesa" ? (
+        <MesaControlView data={data} analisis={analizarMesaControl(mesaControl, vendedor.name)} nombreRuta={vendedor.name} nombreVendedor={nombre} vendedorStats={vendedor} resumenPedidos={calcularResumenPedidos(data.pedidosDia, vendedor.name)} visitasVsObjetivo={calcularVisitasVsObjetivo(data.pedidosDia, vendedor.name, data.objetivosVisitasDia, todayISO())} mesaControl={data.mesaControl || []} />
+      ) : tab === "cuponera" ? (
+        <CuponeraView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" rutaActual={vendedor.name} nombres={NOMBRES} />
+      ) : tab === "rally_otc" ? (
+        <RallyOtcView data={data} persist={persist} persistFresco={persistFresco} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "avisos" ? (
+        <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} verComoRuta={vendedor.name} viewerKey={vendedor.name} />
+      ) : tab === "cargas" ? (
+        <CargasView data={data} persist={persist} persistCargas={persistCargas} puesto={null} rol="vendedor" vendedorActual={vendedor.name} />
+      ) : tab === "unidades" ? (
+        <UnidadesView data={data} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
+      ) : tab === "km" ? (
+        <KmView data={data} persistRevisionUnidad={persistRevisionUnidad} rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "facturas" ? (
+        <FacturasView rol="vendedor" puesto={null} rutaActual={vendedor.name} identidad={nombre || vendedor.name} nombres={NOMBRES} vendedores={data.vendedores} />
+      ) : tab === "nomina" ? (
+        <NominaView data={data} persistFresco={persistFresco} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
+      ) : tab === "sin_visita" ? (
+        <SinVisitaView data={data} rol="vendedor" puesto={null} rutaPropia={rutaCodigo} persistFresco={persistFresco} />
+      ) : tab === "reloj_checador" ? (
+        <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} puedeVerBono={false} />
+      ) : tab === "mi_fondo" ? (
+        <PanelFondoPersonalizado identidad={vendedor.name} url={fondoUrl} setUrl={setFondoUrl} />
+      ) : tab === "escalera" ? (
+        <EscaleraView data={data} persistFresco={persistFresco} vendedor={vendedor} rutaPropia={rutaCodigo} />
+      ) : tab === "cartera_vencida" ? (
+        <CarteraVencidaView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "alta_cliente" ? (
+        <AltaClienteView vendedorUsername={vendedor.name} rutaCodigo={rutaCodigo} />
+      ) : tab === "otc_ventas" ? (
+        <OtcVentasView data={data} persistFresco={persistFresco} rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "pedidos_otc" ? (
+        <PedidosOtcView rol="vendedor" rutaPropia={rutaCodigo} identidad={nombre || vendedor.name} />
+      ) : tab === "scorecard" ? (
+        <ScorecardSemanalView data={data} porVendedor={porVendedor} rol="vendedor" rutaPropia={rutaCodigo} ventasPeriodo={ventasPeriodo} />
+      ) : tab === "mural_campeones" ? (
+        <MuralCampeonesView puesto={null} staffUsername={vendedor.name} modo="vendedor" />
+      ) : tab === "carreras" ? null
+      : tab === "carrera_mes" ? null
+      : !m ? (
+        // Guardia de seguridad: si algún día se agrega una pestaña nueva a
+        // OBJETIVO_TABS y se olvida agregarla a esTabEspecial arriba, esto
+        // evita que truene toda la app.
+        <div className="card" style={{ padding: 16, textAlign: "center", color: "#9AA7BD", fontSize: 13 }}>
+          Esta pestaña ("{tab}") todavía no tiene una vista configurada aquí.
+        </div>
+      ) : (
+        <>
+          <RoadProgress pct={m.avancePct} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9AA7BD", marginBottom: 20 }}>
+            <span>{fmt(unit, m.avance)} {unit === "units" ? "vendidos" : "vendido"}</span>
+            <span>{m.avancePct.toFixed(0)}% de {fmt(unit, m.objetivo)}</span>
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-            {OBJETIVO_TABS.filter((t) => ["max", "open", "champions"].includes(t.key)).map((t) => {
-              const p = stats.total.proyeccion[t.key];
-              return (
-                <KpiCard
-                  key={t.key}
-                  icon={<Target size={14} />}
-                  label={`Proyectado ${t.label}`}
-                  value={unidades(p.proyectado)}
-                  accent={p.cumple ? "#3DDC97" : "#FF6B6B"}
-                />
-              );
-            })}
+            <KpiCard icon={<Target size={14} />} label="Resta por vender" value={fmt(unit, m.restaPorVender)} accent="#FF6B6B" />
+            <KpiCard icon={<Calendar size={14} />} label="Necesitas vender / día" value={fmt(unit, m.ventaPorDiaNecesaria)} accent="#F2B134" />
+            {tab === "max" && (
+              <>
+                <KpiCard icon={<MapPin size={14} />} label="Visitas efectivas" value={vendedor.visitasEfectivas} />
+                <KpiCard icon={<Star size={14} />} label="OTC" value={`${money(vendedor.marcaOtc.vendido)} / ${money(vendedor.marcaOtc.objetivo)}`} accent={metaColor(vendedor.marcaOtc.vendido, vendedor.marcaOtc.objetivo)} />
+                <KpiCard icon={<Star size={14} />} label={`Comisión OTC (${(vendedor.tasaComisionOtc * 100).toFixed(1)}%)`} value={money(vendedor.comisionOtc)} accent="#3DDC97" />
+              </>
+            )}
           </div>
 
-          {["max", "open", "champions"].map((tabKey) => {
-            const label = OBJETIVO_TABS.find((t) => t.key === tabKey).label;
-            const p = stats.total.proyeccion[tabKey];
-            return (
-              <div key={tabKey} className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 20 }}>
-                <div className="display" style={{ fontSize: 14, padding: "14px 16px 0", color: "#9AA7BD" }}>
-                  {label} · PROYECTADO {unidades(p.proyectado)} DE {unidades(p.objetivo)}
-                </div>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
-                  <thead>
-                    <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                      <th style={{ padding: "8px 16px" }}>Vendedor</th>
-                      <th>Objetivo</th>
-                      <th>Proyectado</th>
-                      <th>Diferencia</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stats.porVendedor.map((v) => {
-                      const vp = v.proyeccion[tabKey];
-                      const diferencia = vp.proyectado - vp.objetivo;
-                      return (
-                        <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                          <td style={{ padding: "10px 16px" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                          <td>{unidades(vp.objetivo)}</td>
-                          <td style={{ color: vp.cumple ? "#3DDC97" : "#FF6B6B" }}>{unidades(vp.proyectado)}</td>
-                          <td style={{ color: diferencia >= 0 ? "#3DDC97" : "#FF6B6B" }}>
-                            {diferencia >= 0 ? "+" : ""}{unidades(diferencia)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+          {tab === "open" && <MarcasBreakdown titulo="MARCAS · OPEN (PAQUETES)" marcas={MARCAS_OPEN} data={vendedor.marcasOpen} />}
+          {tab === "champions" && <MarcasBreakdown titulo="MARCAS · CHAMPIONS (PAQUETES)" marcas={MARCAS_CHAMPIONS} data={vendedor.marcasChampions} />}
 
-                {(tabKey === "open" || tabKey === "champions") && (() => {
-                  const lista = tabKey === "open" ? MARCAS_OPEN : MARCAS_CHAMPIONS;
-                  const clave = tabKey === "open" ? "marcasOpen" : "marcasChampions";
-                  return (
-                    <div style={{ padding: 16, borderTop: "1px solid #1E2A42" }}>
-                      <div className="display" style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 12 }}>
-                        MARCAS PROYECTADAS · {label}
-                      </div>
-                      {lista.map((m) => {
-                        const tp = stats.total.proyeccion[clave][m.key];
-                        return (
-                          <div key={m.key} style={{ marginBottom: 18 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
-                              <span>{m.label} (equipo)</span>
-                              <span className="mono" style={{ color: tp.cumple ? "#3DDC97" : "#FF6B6B" }}>
-                                {unidades(tp.proyectado)} / {unidades(tp.objetivo)}
-                              </span>
-                            </div>
-                            <div style={{ overflowX: "auto" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
-                                <thead>
-                                  <tr style={{ color: "#9AA7BD", textAlign: "left" }}>
-                                    <th style={{ padding: "4px 0" }}>Vendedor</th>
-                                    <th>Objetivo</th>
-                                    <th>Proyectado</th>
-                                    <th>Diferencia</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {stats.porVendedor.map((v) => {
-                                    const vp = v.proyeccion[clave][m.key];
-                                    const diferencia = vp.proyectado - vp.objetivo;
-                                    return (
-                                      <tr key={v.id} style={{ borderTop: "1px solid #1E2A42" }}>
-                                        <td style={{ padding: "6px 0" }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</td>
-                                        <td>{unidades(vp.objetivo)}</td>
-                                        <td style={{ color: vp.cumple ? "#3DDC97" : "#FF6B6B" }}>{unidades(vp.proyectado)}</td>
-                                        <td style={{ color: diferencia >= 0 ? "#3DDC97" : "#FF6B6B" }}>
-                                          {diferencia >= 0 ? "+" : ""}{unidades(diferencia)}
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </div>
-            );
-          })}
-        </div>
+          <div className="card" style={{ padding: 16 }}>
+            <div className="display" style={{ fontSize: 14, marginBottom: 12, color: "#9AA7BD" }}>VENTA POR DÍA{unit === "units" ? " (PAQUETES)" : ""}</div>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid stroke="#1E2A42" vertical={false} />
+                  <XAxis dataKey="fecha" stroke="#9AA7BD" fontSize={11} />
+                  <YAxis stroke="#9AA7BD" fontSize={11} tickFormatter={(v) => (unit === "units" ? v : `${(v/1000).toFixed(0)}k`)} />
+                  <Tooltip contentStyle={{ background: "#0F172A", border: "1px solid #2A3852" }} formatter={(v) => (unit === "units" ? unidades(v) : money(v))} />
+                  <Bar dataKey={chartKey} fill="#F2B134" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
       )}
-
-      {tab === "objetivos" && (
-        <div className="card" style={{ padding: 18 }}>
-          <div style={{ display: "flex", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-            <div>
-              <label style={{ fontSize: 12, color: "#9AA7BD" }}>Inicio de periodo</label><br />
-              <input type="date" value={data.periodo.inicio} onChange={(e) => updatePeriodo("inicio", e.target.value)} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, color: "#9AA7BD" }}>Fin de periodo</label><br />
-              <input type="date" value={data.periodo.fin} onChange={(e) => updatePeriodo("fin", e.target.value)} />
-            </div>
-          </div>
-          <p style={{ fontSize: 12, color: "#9AA7BD", marginTop: 0, marginBottom: 16 }}>
-            Los días hábiles considerados van de <b>lunes a sábado</b> (los domingos ya se descuentan automáticamente). Si hay un día festivo o un descanso extraordinario entre semana, agrégalo abajo para que también se reste del conteo.
-          </p>
-
-          <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 10 }}>DÍAS FESTIVOS / DESCANSOS EXTRAORDINARIOS</div>
-          {(data.diasNoLaborables || []).length === 0 && (
-            <div style={{ fontSize: 13, color: "#9AA7BD", marginBottom: 10 }}>No hay festivos registrados.</div>
-          )}
-          {(data.diasNoLaborables || []).map((f) => (
-            <div key={f} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-              <span style={{ flex: 1 }} className="mono">{f}</span>
-              <button className="btn-ghost" onClick={() => quitarDiaNoLaborable(f)}><Trash2 size={14} /></button>
-            </div>
-          ))}
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-            <input type="date" value={nuevoFestivo} onChange={(e) => setNuevoFestivo(e.target.value)} style={{ flex: 1 }} />
-            <button className="btn" onClick={() => { agregarDiaNoLaborable(nuevoFestivo); setNuevoFestivo(""); }}>
-              <Plus size={14} style={{ verticalAlign: "-2px" }} />
-            </button>
-          </div>
-
-          <div className="display" style={{ fontSize: 14, color: "#9AA7BD", margin: "18px 0 10px" }}>CARGA MASIVA (EXCEL)</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-            <button className="btn" onClick={() => objFileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir objetivos
-            </button>
-            <button className="btn-ghost" onClick={onDownloadObjetivosTemplate}>Descargar plantilla</button>
-          </div>
-          <input ref={objFileInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={onObjetivosFile} />
-          <p style={{ fontSize: 12, color: "#9AA7BD", marginTop: 6 }}>
-            Columnas: RUTA, OPEN, CHAMPIONS, MAX, VISITAS_EFECTIVAS, ICE MIX, BLOSS MIX, SUMM MIX, FARONET, CHAM_ICE, CHAM_BLOSS-SUMM, CHAM_FARONET, OTC, OTC_DIA.
-            OPEN, CHAMPIONS y las marcas van en paquetes. OTC va en dinero ($ acumulado del periodo); OTC_DIA es el objetivo diario en $ (por defecto $1,600 si se omite).
-            Se cruza por RUTA; si una ruta no existe, se crea.
-          </p>
-          {objStatus && (
-            <div style={{ marginTop: 4, marginBottom: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: objStatus.startsWith("Objetivos") ? "#3DDC97" : "#FF6B6B" }}>
-              {objStatus.startsWith("Objetivos") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {objStatus}
-            </div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", marginTop: 20, paddingTop: 20 }}>
-            <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 8 }}>OBJETIVO DE VISITAS POR DÍA DE LA SEMANA</div>
-            <p style={{ fontSize: 13, color: "#9AA7BD", marginTop: 0 }}>
-              Cuántos clientes debe visitar cada ruta según el día (Lun-Sáb). Sube una tabla con columnas <b>RUTA, LUNES, MARTES, MIERCOLES, JUEVES, VIERNES, SABADO</b> — una fila por ruta.
-              Mesa de Control compara esto contra los clientes que sí visitó ese día (según el reporte de pedidos) y marca en rojo si visitó menos de lo que le tocaba. Cada carga reemplaza por completo la anterior.
-            </p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => objetivoVisitasFileInputRef.current?.click()}>
-                <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir objetivo de visitas
-              </button>
-              <button className="btn-ghost" onClick={onDownloadObjetivoVisitasTemplate}>Descargar plantilla</button>
-            </div>
-            <input ref={objetivoVisitasFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onObjetivoVisitasFile} />
-            <PegarTextoBox onProcesar={onObjetivoVisitasTexto} placeholder="Pega aquí la tabla con columnas RUTA, LUNES, MARTES, MIERCOLES, JUEVES, VIERNES y SABADO (incluye el encabezado)." />
-            {objetivoVisitasStatus && (
-              <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: objetivoVisitasStatus.startsWith("Objetivo de visitas actualizado") ? "#3DDC97" : "#FF6B6B" }}>
-                {objetivoVisitasStatus.startsWith("Objetivo de visitas actualizado") ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />} {objetivoVisitasStatus}
-              </div>
-            )}
-          </div>
-
-          <div className="display" style={{ fontSize: 14, color: "#9AA7BD", marginBottom: 10, marginTop: 8 }}>VENDEDORES Y OBJETIVOS</div>
-          <div style={{ display: "flex", gap: 10, fontSize: 11, color: "#9AA7BD", padding: "0 0 6px", paddingLeft: 4 }}>
-            <span style={{ flex: 1 }}>Vendedor</span>
-            <span style={{ width: 110 }}>OPEN</span>
-            <span style={{ width: 110 }}>CHAMPIONS</span>
-            <span style={{ width: 90 }}>MAX</span>
-            <span style={{ width: 30 }} />
-          </div>
-          {data.vendedores.map((v) => {
-            const open = v.objetivos?.open || 0;
-            const champions = v.objetivos?.champions || 0;
-            const max = Math.max(open, champions);
-            return (
-              <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <span style={{ flex: 1 }}>{v.name}{NOMBRES[v.name] ? ` · ${NOMBRES[v.name]}` : ""}</span>
-                <input type="number" style={{ width: 110 }} value={open} onChange={(e) => updateObjetivo(v.id, "open", e.target.value)} />
-                <input type="number" style={{ width: 110 }} value={champions} onChange={(e) => updateObjetivo(v.id, "champions", e.target.value)} />
-                <span className="mono" style={{ width: 90, color: "#F2B134" }}>{unidades(max)}</span>
-                <button className="btn-ghost" onClick={() => removeVendedor(v.id)}><Trash2 size={14} /></button>
-              </div>
-            );
-          })}
-
-          <div style={{ display: "flex", gap: 8, marginTop: 16, borderTop: "1px solid #1E2A42", paddingTop: 16, flexWrap: "wrap" }}>
-            <input placeholder="Nombre del vendedor" value={newName} onChange={(e) => setNewName(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
-            <input placeholder="OPEN (paq.)" type="number" value={newOpen} onChange={(e) => setNewOpen(e.target.value)} style={{ width: 110 }} />
-            <input placeholder="CHAMPIONS (paq.)" type="number" value={newChampions} onChange={(e) => setNewChampions(e.target.value)} style={{ width: 110 }} />
-            <button className="btn" onClick={addVendedor}><Plus size={14} style={{ verticalAlign: "-2px" }} /></button>
-          </div>
-        </div>
+        </SwipeBackScreen>
       )}
-
-      {tab === "cargar" && (
-        <div className="card" style={{ padding: 18 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>AVANCE DEL DÍA</div>
-            <button className="btn" onClick={() => avanceDiaFileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
-            </button>
-            <input ref={avanceDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onAvanceDiaFile} />
-            <PegarTextoBox onProcesar={onAvanceDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha, Cliente, Articulo, Paquetes y Total $ (incluye el encabezado)." />
-            {avanceDiaStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: avanceDiaStatus.startsWith("Avance cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                {avanceDiaStatus.startsWith("Avance cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {avanceDiaStatus}
-              </span>
-            )}
-          </div>
-          {formatoUltimaCarga("avanceDia") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("avanceDia")}</div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC DEL DÍA</div>
-            <button className="btn" onClick={() => otcDiaFileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
-            </button>
-            <input ref={otcDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onOtcDiaFile} />
-            <PegarTextoBox onProcesar={onOtcDiaTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
-            {otcDiaStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: otcDiaStatus.startsWith("OTC cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                {otcDiaStatus.startsWith("OTC cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {otcDiaStatus}
-              </span>
-            )}
-          </div>
-          {formatoUltimaCarga("otcDia") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("otcDia")}</div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>AVANCE DEL PERIODO</div>
-            <button className="btn" onClick={() => ventasPeriodoFileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
-            </button>
-            <button className="btn-ghost" onClick={onBorrarTodoVentasPeriodo}>
-              <Trash2 size={14} style={{ verticalAlign: "-2px" }} color="#FF6B6B" /> Borrar todo
-            </button>
-            <input ref={ventasPeriodoFileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onVentasPeriodoFile} />
-            <PegarTextoBox onProcesar={onVentasPeriodoTexto} placeholder="Pega aquí las filas con columnas NUR, Vendedor, Fecha, Articulo, Paquetes y Total $ (incluye el encabezado). Si trae NUR, se usa para saber la ruta real — sobre todo importante en medio mayoreo (NUR 802878M050)." />
-            {ventasPeriodoStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: ventasPeriodoStatus.startsWith("Periodo actualizado") ? "#3DDC97" : "#FF6B6B" }}>
-                {ventasPeriodoStatus.startsWith("Periodo actualizado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {ventasPeriodoStatus}
-              </span>
-            )}
-          </div>
-          {formatoUltimaCarga("ventasPeriodo") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("ventasPeriodo")}</div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>OTC SEMANAL</div>
-            <button className="btn" onClick={() => fileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
-            </button>
-            <button className="btn-ghost" onClick={onDownloadTemplate}>Plantilla</button>
-            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onFile} />
-            <PegarTextoBox onProcesar={onOtcSemanalTexto} placeholder="Pega aquí las filas con columnas Vendedor, Fecha Venta y TOTAL $ (incluye el encabezado)." />
-            <span style={{ fontSize: 11.5, color: "#9AA7BD" }}>{(data.otcSemanal || []).length} registros</span>
-            {status && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: status.startsWith("OTC semanal cargado") ? "#3DDC97" : "#FF6B6B" }}>
-                {status.startsWith("OTC semanal cargado") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {status}
-              </span>
-            )}
-          </div>
-          {formatoUltimaCarga("otcSemanal") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("otcSemanal")}</div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>VISITAS NUR</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 11.5, color: "#9AA7BD" }}>Fecha del reporte:</span>
-              <input
-                type="date"
-                value={fechaNur}
-                onChange={(e) => setFechaNur(e.target.value)}
-                style={{ background: "#0F172A", color: "#E7ECF7", border: "1px solid #2A3852", borderRadius: 8, padding: "5px 8px", fontSize: 12.5 }}
-              />
-            </div>
-            <PegarTextoBox onProcesar={(texto) => onVisitasNurTexto(texto, fechaNur)} placeholder="Pega aquí el reporte de clientes visitados por NUR (columnas NUR, Cliente, Nombre, Direccion, Colonia, Potencial, Estado, Municipio, Localidad)." />
-            {visitasNurStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? "#3DDC97" : "#FF6B6B" }}>
-                {visitasNurStatus.startsWith("Visitas NUR cargadas") && !visitasNurStatus.includes("Error") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {visitasNurStatus}
-              </span>
-            )}
-          </div>
-          <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>
-            Si el reporte que vas a pegar es de un día distinto a hoy (ej. lo subes tarde o es un catch-up), cambia la fecha de arriba antes de pegarlo — así no se mezcla con la semana equivocada.
-          </p>
-          <p style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 0 }}>
-            Se sube todos los días con lo visitado hasta ese momento — se combina con Mesa de Control en "Sin Visita", cualquiera de los dos cuenta.
-          </p>
-          {formatoUltimaCarga("visitasNur") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginBottom: 4 }}>{formatoUltimaCarga("visitasNur")}</div>
-          )}
-
-          <div style={{ borderTop: "1px solid #1E2A42", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 0" }}>
-            <div className="display" style={{ fontSize: 13, color: "#9AA7BD", minWidth: 140 }}>PEDIDOS DEL DÍA</div>
-            <button className="btn" onClick={() => pedidosDiaFileInputRef.current?.click()}>
-              <Upload size={14} style={{ verticalAlign: "-2px" }} /> Subir
-            </button>
-            <input ref={pedidosDiaFileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }} onChange={onPedidosDiaFile} />
-            <PegarTextoBox onProcesar={onPedidosDiaTexto} placeholder="Pega aquí las filas del reporte de pedidos (incluye el encabezado)." />
-            {pedidosDiaStatus && (
-              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: pedidosDiaStatus.startsWith("Pedidos cargados") ? "#3DDC97" : "#FF6B6B" }}>
-                {pedidosDiaStatus.startsWith("Pedidos cargados") ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />} {pedidosDiaStatus}
-              </span>
-            )}
-          </div>
-          {formatoUltimaCarga("pedidosDia") && (
-            <div style={{ fontSize: 11, color: "#6C7A96", marginTop: -6, marginBottom: 4 }}>{formatoUltimaCarga("pedidosDia")}</div>
-          )}
-        </div>
+      {pantallaAbierta && tab === "carreras" && (
+        <CarrerasVentas porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
+      )}
+      {pantallaAbierta && tab === "carrera_mes" && (
+        <CarreraMes porVendedor={porVendedor} onCerrar={() => setPantallaAbierta(false)} />
       )}
     </div>
   );
 }
+
+// Bloque de avance (RoadProgress + KPIs + marcas + gráfica) para MAX/OPEN/
+// CHAMPIONS de un vendedor — el mismo que ve cada ruta, reutilizado para que
+// el staff pueda darle seguimiento tal cual.
