@@ -107,6 +107,7 @@ const META = {
   alta_cliente:      { icon: "userplus", color: "#34d399", fam: "💰 Ventas" },
 
   cuponera:          { icon: "ticket",   color: "#fb923c", fam: "🎟️ Promociones" },
+  pedidos_otc:       { icon: "cart",     color: "#22d3ee", fam: "🎟️ Promociones" },
   promociones_coach: { icon: "megaphone",color: "#fbbf24", fam: "🎟️ Promociones" },
 
   unidades:          { icon: "truck",    color: "#f87171", fam: "📋 Operación" },
