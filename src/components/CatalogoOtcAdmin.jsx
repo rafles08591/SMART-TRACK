@@ -12,6 +12,7 @@ const vacio = () => ({ codigo: "", nombre: "", categoria: "Cigarros", presentaci
 const money = (n) => "$" + (Math.round(Number(n) * 100) / 100).toLocaleString("es-MX", { maximumFractionDigits: 2 });
 const sinAcento = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
 const hoyMX = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+const txt = (v) => String(v ?? "").trim();
 const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
 
 export function promoVigente(p, hoy = hoyMX()) {
@@ -65,7 +66,9 @@ function Vista({ p }) {
 }
 
 function Editor({ inicial, categorias, onGuardado, onCerrar }) {
-  const [p, setP] = useState({ ...vacio(), ...inicial, precio: inicial.precio ?? "", descuento_pct: inicial.descuento_pct ?? "", precio_promo: inicial.precio_promo ?? "", promo_desde: inicial.promo_desde || "", promo_hasta: inicial.promo_hasta || "" });
+  // lo que viene de la base puede traer null: se cambia por "" para que los campos de texto no truenen
+  const limpio = Object.fromEntries(Object.entries(inicial || {}).filter(([, v]) => v != null));
+  const [p, setP] = useState({ ...vacio(), ...limpio, precio: inicial.precio ?? "", descuento_pct: inicial.descuento_pct ?? "", precio_promo: inicial.precio_promo ?? "", promo_desde: inicial.promo_desde || "", promo_hasta: inicial.promo_hasta || "" });
   const [estado, setEstado] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [tipoPromo, setTipoPromo] = useState(Number(inicial.precio_promo) > 0 ? "precio" : Number(inicial.descuento_pct) > 0 ? "pct" : "no");
@@ -89,14 +92,14 @@ function Editor({ inicial, categorias, onGuardado, onCerrar }) {
   }
 
   async function guardar() {
-    if (!p.nombre.trim()) return setEstado("⚠️ Falta el nombre.");
+    if (!txt(p.nombre)) return setEstado("⚠️ Falta el nombre.");
     if (p.activo && !(Number(p.precio) > 0)) return setEstado("⚠️ Para que salga en el catálogo necesita precio.");
     const fila = {
-      codigo: p.codigo.trim().toUpperCase() || null, nombre: p.nombre.trim(), categoria: (p.categoria || "Otros").trim(),
-      presentacion: p.presentacion.trim() || null, descripcion: p.descripcion.trim() || null, precio: num(p.precio),
+      codigo: txt(p.codigo).toUpperCase() || null, nombre: txt(p.nombre), categoria: txt(p.categoria) || "Otros",
+      presentacion: txt(p.presentacion) || null, descripcion: txt(p.descripcion) || null, precio: num(p.precio),
       imagen_url: p.imagen_url || null, activo: !!p.activo, destacado: !!p.destacado, orden: Number(p.orden) || 100,
       descuento_pct: tipoPromo === "pct" ? num(p.descuento_pct) : null, precio_promo: tipoPromo === "precio" ? num(p.precio_promo) : null,
-      promo_min: Math.max(1, Number(p.promo_min) || 1), promo_texto: tipoPromo === "no" ? null : p.promo_texto.trim() || null,
+      promo_min: Math.max(1, Number(p.promo_min) || 1), promo_texto: tipoPromo === "no" ? null : txt(p.promo_texto) || null,
       promo_desde: tipoPromo === "no" ? null : p.promo_desde || null, promo_hasta: tipoPromo === "no" ? null : p.promo_hasta || null,
       actualizado_en: new Date().toISOString(),
     };
