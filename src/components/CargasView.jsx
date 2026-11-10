@@ -54,6 +54,23 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
   const [rutaVistaStaff, setRutaVistaStaff] = useState(null);
   const [diaParaSubir, setDiaParaSubir] = useState(() => siguienteDiaHabil().dia);
   const [verPivote, setVerPivote] = useState(false);
+  const [reactivando, setReactivando] = useState(null);
+  // gerente y supervisores pueden regresarle a una ruta su carga para que la corrija y la vuelva a enviar
+  const puedeReactivarRuta = rol === "staff" && (puesto === "gerente" || puesto === "supervisor");
+  async function reactivarRuta(nombreRuta) {
+    if (!cargaActivoDia) return;
+    if (!window.confirm(`¿Reactivar ${nombreRuta}? La ruta podrá modificar su carga y tendrá que volver a enviarla.`)) return;
+    setReactivando(nombreRuta);
+    try {
+      await persistCargas(cargaActivoDia, (c) => {
+        const envios = { ...(c.enviosPorRuta || {}) };
+        delete envios[nombreRuta];
+        return { ...c, enviosPorRuta: envios };
+      });
+    } finally {
+      setReactivando(null);
+    }
+  }
 
   const rutaActiva = rol === "vendedor" ? vendedorActual : rutaVistaStaff;
   function claveBorradorCargas(ruta, dia) {
@@ -237,7 +254,8 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
               )}
 
               <div style={{ marginTop: 16 }}>
-                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>ESTATUS POR RUTA</div>
+                <div className="display" style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 4 }}>ESTATUS POR RUTA</div>
+                {puedeReactivarRuta && <div style={{ fontSize: 11.5, color: "#5b6478", marginBottom: 8 }}>Toca una ruta en verde para reactivarla y que pueda corregir su carga.</div>}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {RUTAS.map((nombreRuta) => {
                     const enviado = !!cargaActiva.enviosPorRuta?.[nombreRuta];
@@ -260,6 +278,17 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
                 </div>
                 {rutaVistaStaff && (
                   <div style={{ marginTop: 12 }}>
+                    {puedeReactivarRuta && cargaActiva.enviosPorRuta?.[rutaVistaStaff] && (
+                      <div className="card" style={{ padding: 12, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", border: "1px solid #3DDC9755" }}>
+                        <div style={{ fontSize: 12.5, color: "#9AA7BD" }}>
+                          <b style={{ color: "#3DDC97" }}>{rutaVistaStaff}</b> ya envió su carga.
+                          {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}> La carga está bloqueada: reactiva también la edición para que pueda cambiarla.</span>}
+                        </div>
+                        <button className="btn-ghost" onClick={() => reactivarRuta(rutaVistaStaff)} disabled={reactivando === rutaVistaStaff}>
+                          <RefreshCw size={13} style={{ verticalAlign: "-2px" }} /> {reactivando === rutaVistaStaff ? "Reactivando…" : "Reactivar ruta"}
+                        </button>
+                      </div>
+                    )}
                     <TablaCargaVendedor items={cargaActiva.items} nombreRuta={rutaVistaStaff} bloqueado={cargaActiva.bloqueado || !esGerente} valoresLocales={borrador} onCambiarLocal={cambiarLocal} />
                     {esGerente && !cargaActiva.bloqueado && (
                       <button className="btn" style={{ marginTop: 12, width: "100%" }} onClick={() => manejarEnviarConConfirmacion(rutaVistaStaff)} disabled={enviando}>
