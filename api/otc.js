@@ -69,10 +69,17 @@ async function linkCliente(req, tel) {
   const base = process.env.OTC_CATALOGO_URL || `${new URL(req.url).origin}/catalogo.html`;
   return `${base}?c=${tel}.${await firma(tel)}`;
 }
+// Tolerante: WhatsApp/Meta a veces le agrega cosas al link (?fbclid=…, %2E, espacios). Se toma solo "<12 dígitos>.<16 hex>".
+export function partesLink(c) {
+  let t = String(c || '');
+  try { t = decodeURIComponent(t); } catch { /* ya venía decodificado */ }
+  const m = t.match(/(\d{12})\D{0,3}([0-9a-f]{16})/i);
+  return m ? [m[1], m[2].toLowerCase()] : null;
+}
 async function telDeLink(c) {
-  const [tel, f] = String(c || '').split('.');
-  if (!tel || !f) return null;
-  return (await firma(tel)) === f ? tel : null;
+  const p = partesLink(c);
+  if (!p) return null;
+  return (await firma(p[0])) === p[1] ? p[0] : null;
 }
 
 async function sesionValida(req) {
