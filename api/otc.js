@@ -9,6 +9,8 @@
 //
 // SESIÓN de SMART-TRACK (Authorization: Bearer <token>) o BOT:
 //   GET  /api/otc?accion=link&telefono=5232…  → link personal del cliente al catálogo
+//   POST /api/otc  { accion:'invitar', telefono }  → le manda la plantilla oficial de WhatsApp con su botón al catálogo
+//        (variables: WHATSAPP_TOKEN obligatorio · WHATSAPP_PHONE_ID · OTC_PLANTILLA · OTC_PLANTILLA_IMAGEN)
 //
 // BOT (header x-bot-token: <BOT_TOKEN>, el mismo de Robotina):
 //   GET  /api/otc?accion=clientes_dia&dia=LUNES
@@ -26,6 +28,11 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL 
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SECRETO = process.env.OTC_LINK_SECRET || process.env.BOT_TOKEN || '';
 const AVISO = process.env.OTC_AVISO_WEBHOOK || '';
+// Invitación oficial de WhatsApp (plantilla con botón al catálogo) que se manda al dar de alta un cliente
+const WA_TOKEN = process.env.WHATSAPP_TOKEN || '';
+const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '837534606114144';
+const PLANTILLA = process.env.OTC_PLANTILLA || 'ventas_otc_2';
+const PLANTILLA_IMG = process.env.OTC_PLANTILLA_IMAGEN || 'https://jxyosutthiuzbrmdznoa.supabase.co/storage/v1/object/public/fondos_personal/catalogootc.jpg';
 
 const headers = (extra = {}) => {
   const h = { apikey: KEY, 'Content-Type': 'application/json', ...extra };
@@ -210,6 +217,34 @@ export default async function handler(req) {
       const tel = normTel(url.searchParams.get('telefono'));
       if (tel.length !== 12) return json({ error: 'teléfono inválido' }, 400);
       return json({ telefono: tel, c: `${tel}.${await firma(tel)}`, link: await linkCliente(req, tel) });
+    }
+
+    if (req.method === 'POST' && accion === 'invitar') {
+      if (!autorizado(req) && !(await sesionValida(req))) return json({ error: 'no autorizado' }, 401);
+      if (!WA_TOKEN) return json({ error: 'Falta la variable WHATSAPP_TOKEN en Vercel.' }, 500);
+      const tel = normTel(body.telefono);
+      const cli = (await rest(`clientes_otc?telefono=eq.${tel}&select=telefono,nombre,invitado_en`))[0];
+      if (!cli) return json({ error: 'Ese cliente no está registrado.' }, 404);
+      if (cli.invitado_en && Date.now() - new Date(cli.invitado_en).getTime() < 2 * 60 * 1000) {
+        return json({ error: 'Ya se le mandó hace menos de 2 minutos. Espera un poco antes de reenviar.' }, 429);
+      }
+      const nombre = String(cli.nombre || 'cliente').split(/\s+/).slice(0, 3).join(' ');
+      const r = await fetch(`https://graph.facebook.com/v22.0/${WA_PHONE_ID}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp', to: tel, type: 'template',
+          template: { name: PLANTILLA, language: { code: 'es_MX' }, components: [
+            { type: 'header', parameters: [{ type: 'image', image: { link: PLANTILLA_IMG } }] },
+            { type: 'body', parameters: [{ type: 'text', parameter_name: 'customer_name', text: nombre }] },
+            { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: `${tel}.${await firma(tel)}` }] },
+          ] },
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return json({ error: 'WhatsApp no lo aceptó: ' + (j?.error?.error_data?.details || j?.error?.message || r.status) }, 502);
+      await rest(`clientes_otc?telefono=eq.${tel}`, { method: 'PATCH', body: JSON.stringify({ invitado_en: new Date().toISOString() }) }).catch(() => {});
+      return json({ ok: true, id: j?.messages?.[0]?.id || null });
     }
 
     // ======================= BOT =======================
