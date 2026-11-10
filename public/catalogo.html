@@ -135,7 +135,10 @@ const API = '/api/otc';
 const params = new URLSearchParams(location.search);
 // El cliente llega desde el botón de la plantilla de WhatsApp: ?c=<su teléfono registrado>.<firma>
 // (la firma la pone el servidor; así nadie puede cambiar el número en el link y pedir a nombre de otro)
-let C = params.get('c') || '';
+// Se busca "c=<12 dígitos>.<16 hex>" en todo el link, aunque WhatsApp le agregue cosas (?fbclid, %2E…)
+const LIGA_CRUDA = (() => { try { return decodeURIComponent(location.search + location.hash); } catch { return location.search + location.hash; } })();
+const mLiga = LIGA_CRUDA.match(/c=(\d{12})\D{0,3}([0-9a-f]{16})/i);
+let C = mLiga ? `${mLiga[1]}.${mLiga[2].toLowerCase()}` : '';
 const leerGuardado = () => {
   try { const v = localStorage.getItem('otc_c'); if (v) return v; } catch {}
   const m = document.cookie.match(/(?:^|;\s*)otc_c=([^;]+)/); return m ? decodeURIComponent(m[1]) : '';
@@ -149,7 +152,7 @@ const olvidarCliente = () => {
   try { document.cookie = 'otc_c=; max-age=0; path=/'; } catch {}
 };
 if (C) guardarCliente(C); else C = leerGuardado();
-const veníaEnLiga = !!params.get('c');
+const veníaEnLiga = /[?&#]c=/.test(LIGA_CRUDA);
 const LLAVE = 'carrito_otc';
 const $ = (s) => document.querySelector(s);
 const money = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('es-MX', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
@@ -193,7 +196,8 @@ function encabezado() {
     $('#saludo').textContent = 'Hola, ' + cliente.nombre.split(' ').slice(0, 3).join(' ');
     $('#subt').textContent = cliente.dia_visita ? `Tu pedido se entrega el ${cliente.dia_visita.toLowerCase()} con tu vendedor.` : 'Te lo entrega tu vendedor en tu día de visita.';
   }
-  $('#quien').innerHTML = identificado ? '' : `<div class="yo" style="width:100%">${veníaEnLiga ? '⚠️ Esta liga ya no es válida.' : ''} Para enviar tu pedido entra desde el botón <b>CATÁLOGO</b> del WhatsApp que te enviamos. Después ya te reconocemos siempre.</div>`;
+  $('#quien').innerHTML = identificado ? '' : `<div class="yo" style="width:100%">${veníaEnLiga ? '⚠️ No pudimos reconocer tu liga.' : ''} Para enviar tu pedido entra desde el botón <b>CATÁLOGO</b> del WhatsApp que te enviamos. Después ya te reconocemos siempre.</div>
+    ${veníaEnLiga ? `<div style="width:100%;font-size:10px;opacity:.55;word-break:break-all;margin-top:4px">ref: ${esc(LIGA_CRUDA.slice(0, 120))}</div>` : ''}`;
 }
 
 function categorias() {
