@@ -91,6 +91,13 @@ export default function Login({ onLogin }) {
   const [origin, setOrigin] = useState("root");
   const [clo, setClo] = useState(null);
   const [objetivo, setObjetivo] = useState(null);
+  // Aviso de pedidos OTC: cada ruta solo ve los suyos; gerente y supervisores ven todos; los demás, nada
+  const otcUser = String(objetivo?.username || "").toUpperCase();
+  const otcRuta = otcUser.startsWith("RUTA ") ? otcUser.replace("RUTA ", "").trim() : null;
+  const otcVeTodo = ["GERENTE", "SUPERVISOR-1", "SUPERVISOR-2"].includes(otcUser);
+  const otcAviso = step !== "pin" ? null
+    : otcRuta ? ((otcPorRuta?.[otcRuta] || 0) > 0 ? { n: otcPorRuta[otcRuta], rutas: null, propio: true } : null)
+    : otcVeTodo && otcNuevos > 0 ? { n: otcNuevos, rutas: otcPorRuta, propio: false } : null;
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -512,17 +519,17 @@ export default function Login({ onLogin }) {
             )}
           </div>
 
-          {otcNuevos > 0 && (
+          {otcAviso && (
             <div className="otc-aviso" role="status" style={{
               border: "1.5px solid #22c55e", borderRadius: 14, padding: "12px 14px", marginBottom: 16,
               color: "#dcfce7", textAlign: "center",
             }}>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>🛒 {otcNuevos} pedido{otcNuevos === 1 ? "" : "s"} OTC nuevo{otcNuevos === 1 ? "" : "s"} por surtir</div>
-              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
-                {Object.entries(otcPorRuta).sort().map(([r, n]) => (
+              <div style={{ fontSize: 15, fontWeight: 800 }}>🛒 {otcAviso.n} pedido{otcAviso.n === 1 ? "" : "s"} OTC nuevo{otcAviso.n === 1 ? "" : "s"} {otcAviso.propio ? "de tu ruta " : ""}por surtir</div>
+              {otcAviso.rutas && <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
+                {Object.entries(otcAviso.rutas).sort().map(([r, n]) => (
                   <span key={r} style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", background: "#22c55e", color: "#03140a", borderRadius: 8, padding: "2px 8px" }}>{r} · {n}</span>
                 ))}
-              </div>
+              </div>}
               <div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 6 }}>Entra y abre PEDIDOS OTC</div>
             </div>
           )}
@@ -537,13 +544,9 @@ export default function Login({ onLogin }) {
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {RUTAS_BOTONES.map((r) => (
-                  <button key={r.full} className={`card-btn${otcPorRuta[r.corto] ? " otc-aviso" : ""}`} {...fastTap(() => pickRuta(r.full, r.corto))}
-                    style={{ ...estiloBotonCuadro(), position: "relative", ...(otcPorRuta[r.corto] ? { borderColor: "#22c55e" } : {}) }}>
-                    <Route size={16} color={otcPorRuta[r.corto] ? "#4ade80" : COLOR.amber} />
+                  <button key={r.full} className="card-btn" {...fastTap(() => pickRuta(r.full, r.corto))} style={estiloBotonCuadro()}>
+                    <Route size={16} color={COLOR.amber} />
                     <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>{r.corto}</span>
-                    {otcPorRuta[r.corto] > 0 && (
-                      <span style={{ position: "absolute", top: -6, right: -6, minWidth: 18, height: 18, borderRadius: 9, background: "#22c55e", color: "#03140a", fontSize: 11, fontWeight: 900, lineHeight: "18px", padding: "0 4px" }}>🛒{otcPorRuta[r.corto]}</span>
-                    )}
                   </button>
                 ))}
                 <button className="card-btn" {...fastTap(pickGerente)} style={estiloBotonCuadro()}>
