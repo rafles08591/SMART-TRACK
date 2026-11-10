@@ -5,6 +5,7 @@ import {
   ChevronLeft, MapPin, Settings, ShieldCheck, UserCog
 } from "lucide-react";
 import { supabase } from "../supabaseClient";
+import { usePedidosOtcNuevos } from "./avisoPedidosOtc";
 
 const USER_EMAIL_MAP = {
   "RUTA J201": "j201@smarttrack.local",
@@ -85,6 +86,8 @@ export default function Login({ onLogin }) {
   }, []);
 
   const [step, setStep] = useState("root");
+  // aviso de pedidos OTC sin surtir (se ve antes de entrar)
+  const { total: otcNuevos, porRuta: otcPorRuta } = usePedidosOtcNuevos(null);
   const [origin, setOrigin] = useState("root");
   const [clo, setClo] = useState(null);
   const [objetivo, setObjetivo] = useState(null);
@@ -441,6 +444,11 @@ export default function Login({ onLogin }) {
         .fade-in { animation: fadeInUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
         .scale-in { animation: scaleIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
         .shake { animation: shake 0.4s ease; }
+        @keyframes otcFlash {
+          0%, 100% { box-shadow: 0 0 6px #22c55e66; background: #052e16; }
+          50% { box-shadow: 0 0 26px 4px #22c55e; background: #0b4a26; }
+        }
+        .otc-aviso { animation: otcFlash 0.8s ease-in-out infinite; }
       `}</style>
 
       <div style={{
@@ -504,6 +512,21 @@ export default function Login({ onLogin }) {
             )}
           </div>
 
+          {otcNuevos > 0 && (
+            <div className="otc-aviso" role="status" style={{
+              border: "1.5px solid #22c55e", borderRadius: 14, padding: "12px 14px", marginBottom: 16,
+              color: "#dcfce7", textAlign: "center",
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>🛒 {otcNuevos} pedido{otcNuevos === 1 ? "" : "s"} OTC nuevo{otcNuevos === 1 ? "" : "s"} por surtir</div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap", marginTop: 8 }}>
+                {Object.entries(otcPorRuta).sort().map(([r, n]) => (
+                  <span key={r} style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", background: "#22c55e", color: "#03140a", borderRadius: 8, padding: "2px 8px" }}>{r} · {n}</span>
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 6 }}>Entra y abre PEDIDOS OTC</div>
+            </div>
+          )}
+
           {step === "root" && (
             <div className="scale-in">
               <p style={{
@@ -514,9 +537,13 @@ export default function Login({ onLogin }) {
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {RUTAS_BOTONES.map((r) => (
-                  <button key={r.full} className="card-btn" {...fastTap(() => pickRuta(r.full, r.corto))} style={estiloBotonCuadro()}>
-                    <Route size={16} color={COLOR.amber} />
+                  <button key={r.full} className={`card-btn${otcPorRuta[r.corto] ? " otc-aviso" : ""}`} {...fastTap(() => pickRuta(r.full, r.corto))}
+                    style={{ ...estiloBotonCuadro(), position: "relative", ...(otcPorRuta[r.corto] ? { borderColor: "#22c55e" } : {}) }}>
+                    <Route size={16} color={otcPorRuta[r.corto] ? "#4ade80" : COLOR.amber} />
                     <span style={{ fontSize: 13, fontFamily: "monospace", fontWeight: 600 }}>{r.corto}</span>
+                    {otcPorRuta[r.corto] > 0 && (
+                      <span style={{ position: "absolute", top: -6, right: -6, minWidth: 18, height: 18, borderRadius: 9, background: "#22c55e", color: "#03140a", fontSize: 11, fontWeight: 900, lineHeight: "18px", padding: "0 4px" }}>🛒{otcPorRuta[r.corto]}</span>
+                    )}
                   </button>
                 ))}
                 <button className="card-btn" {...fastTap(pickGerente)} style={estiloBotonCuadro()}>
