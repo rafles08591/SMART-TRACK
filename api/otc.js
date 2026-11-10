@@ -2,6 +2,7 @@
 // Fuente de datos: Supabase (clientes_otc, pedidos_otc, catalogo_otc). Ya no Google Sheets.
 //
 // PÚBLICO (página /catalogo.html, sin sesión):
+//   GET  /api/otc?accion=pendientes  → cuántos pedidos nuevos (sin surtir) hay, total y por ruta (para los avisos)
 //   GET  /api/otc?accion=precios[&q=vuala]  → lista corta en texto (la consulta Paulina, el bot de n8n)
 //   GET  /api/otc?accion=catalogo[&c=<telefono.firma>]  → productos activos con precio final + datos del cliente si el link es suyo
 //   POST /api/otc  { accion:'pedido_web', c, nombre?, nota?, items:[{ id, cantidad }] }
@@ -164,6 +165,13 @@ export default async function handler(req) {
         cliente: cli[0] ? { nombre: cli[0].nombre, ruta: normRuta(cli[0].ruta), dia_visita: cli[0].dia_visita } : null,
         identificado: !!tel,
       }, 200, 'no-store');
+    }
+
+    if (req.method === 'GET' && accion === 'pendientes') {
+      const filas = await rest('pedidos_otc?estado=eq.nuevo&select=ruta&limit=2000');
+      const porRuta = {};
+      for (const f of filas) { const r = f.ruta || 'SIN RUTA'; porRuta[r] = (porRuta[r] || 0) + 1; }
+      return json({ total: filas.length, porRuta });
     }
 
     if (req.method === 'GET' && accion === 'precios') {
