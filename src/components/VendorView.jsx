@@ -13,6 +13,7 @@ import { supabase } from "../supabaseClient";
 import { RoadProgress, KpiCard, MarcasBreakdown } from "./ui";
 import NeonObjetivoTabs from "./NeonObjetivoTabs";
 import PedidosOtcView from "./PedidosOtcView";
+import { usePedidosOtcNuevos } from "./avisoPedidosOtc";
 import SwipeBackScreen from "./SwipeBackScreen";
 import TopBar from "./TopBar";
 import DiaKpis from "./DiaKpis";
@@ -87,6 +88,9 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
   }, [vendedor?.name]);
 
   const [fondoUrl, setFondoUrl] = useFondoPersonalizado(vendedor?.name);
+
+  // pedidos OTC sin surtir de esta ruta: el botón se pone verde y destella
+  const { nuevos: pedidosOtcNuevos } = usePedidosOtcNuevos(vendedor ? vendedor.name.replace("RUTA ", "").trim() : null);
 
   if (!vendedor) return (
     <div style={{ padding: 24 }}>
@@ -188,7 +192,9 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
             facturas: hayObservacionFacturasPendiente ? "aviso_nuevo" : undefined,
             escalera: !data.escaleraProgreso?.[rutaCodigo]?.orden ? "aviso_nuevo" : undefined,
             cartera_vencida: hayCarteraVencidaPara(data, rutaCodigo) ? "pendiente_urgente" : undefined,
+            pedidos_otc: pedidosOtcNuevos > 0 ? "pedido_nuevo" : undefined,
           }}
+          conteos={{ pedidos_otc: pedidosOtcNuevos }}
         />
       )}
 
