@@ -137,7 +137,9 @@ const params = new URLSearchParams(location.search);
 // (la firma la pone el servidor; así nadie puede cambiar el número en el link y pedir a nombre de otro)
 // Se busca "c=<12 dígitos>.<16 hex>" en todo el link, aunque WhatsApp le agregue cosas (?fbclid, %2E…)
 const LIGA_CRUDA = (() => { try { return decodeURIComponent(location.search + location.hash); } catch { return location.search + location.hash; } })();
-const mLiga = LIGA_CRUDA.match(/c=(\d{12})\D{0,3}([0-9a-f]{16})/i);
+// si el botón trae pegado el ejemplo de la plantilla (c=EJEMPLO<real>) se toma el ÚLTIMO, que es el del cliente
+const mLiga = (() => { const i = LIGA_CRUDA.search(/[?&#]c=/); if (i < 0) return null;
+  const t = [...LIGA_CRUDA.slice(i).matchAll(/(\d{12})\D{0,3}([0-9a-f]{16})/gi)]; return t[t.length - 1] || null; })();
 let C = mLiga ? `${mLiga[1]}.${mLiga[2].toLowerCase()}` : '';
 const leerGuardado = () => {
   try { const v = localStorage.getItem('otc_c'); if (v) return v; } catch {}
