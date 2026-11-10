@@ -2,6 +2,7 @@
 // Fuente de datos: Supabase (clientes_otc, pedidos_otc, catalogo_otc). Ya no Google Sheets.
 //
 // PÚBLICO (página /catalogo.html, sin sesión):
+//   GET  /api/otc?accion=precios[&q=vuala]  → lista corta en texto (la consulta Paulina, el bot de n8n)
 //   GET  /api/otc?accion=catalogo[&c=<telefono.firma>]  → productos activos con precio final + datos del cliente si el link es suyo
 //   POST /api/otc  { accion:'pedido_web', c, nombre?, nota?, items:[{ id, cantidad }] }
 //        → c obligatorio: viene firmado en el botón de la plantilla (el teléfono que tenemos registrado)
@@ -163,6 +164,23 @@ export default async function handler(req) {
         cliente: cli[0] ? { nombre: cli[0].nombre, ruta: normRuta(cli[0].ruta), dia_visita: cli[0].dia_visita } : null,
         identificado: !!tel,
       }, 200, 'no-store');
+    }
+
+    if (req.method === 'GET' && accion === 'precios') {
+      const hoy = hoyMX();
+      const q = normDia(url.searchParams.get('q') || ''); // sin acentos y en mayúsculas
+      const lista = (await productosActivos()).map((p) => paraCliente(p, hoy))
+        .filter((p) => !q || normDia(`${p.nombre} ${p.categoria} ${p.presentacion} ${p.codigo}`).includes(q));
+      const lineas = lista.map((p) => {
+        let t = `- ${p.nombre}${p.presentacion ? ` (${p.presentacion})` : ''} · ${p.categoria} · $${p.precio}`;
+        if (p.promo) t += ` · PROMO: $${p.promo.precio}${p.promo.min > 1 ? ` c/u llevando ${p.promo.min} o más` : ''}${p.promo.texto ? ` (${p.promo.texto})` : ''}${p.promo.hasta ? ` hasta ${p.promo.hasta}` : ''}`;
+        if (p.descripcion) t += ` · ${p.descripcion.slice(0, 120)}`;
+        return t;
+      });
+      const texto = lineas.length
+        ? `Catálogo Marjus al ${hoy} (${lineas.length} productos, precios en pesos por la presentación indicada):\n${lineas.join('\n')}`
+        : (q ? `No hay productos que coincidan con "${url.searchParams.get('q')}" en el catálogo.` : 'El catálogo todavía no tiene productos activos con precio.');
+      return new Response(texto, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
     }
 
     if (req.method === 'POST' && accion === 'pedido_web') {
