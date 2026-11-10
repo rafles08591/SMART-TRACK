@@ -157,7 +157,8 @@ const MIN_CORREGIR = 10;
 export function minutosParaCorregir(c, uid) {
   if (!c || !uid || c.creado_por !== uid || !c.creado_en) return 0;
   const quedan = MIN_CORREGIR - (Date.now() - new Date(c.creado_en).getTime()) / 60000;
-  return quedan > 0 ? Math.ceil(quedan) : 0;
+  // tope de 10: si el reloj del celular está atrasado no debe mostrar más tiempo del real (Supabase manda con su hora)
+  return quedan > 0 ? Math.min(MIN_CORREGIR, Math.ceil(quedan)) : 0;
 }
 
 // Formulario de alta / edición de un cliente. El teléfono es con lo que el cliente se identifica en el catálogo.
@@ -192,7 +193,7 @@ function FormCliente({ inicial, rutaFija, esVendedor, uid, onGuardado, onCerrar 
         ? supabase.from("clientes_otc").update(fila).eq("telefono", original).select().single()
         : supabase.from("clientes_otc").insert(fila).select().single();
       const { data, error } = await q;
-      if (error) throw /row-level security/i.test(error.message) ? new Error("No tienes permiso para cambiar este cliente (ya pasaron los 10 minutos).") : error;
+      if (error) throw (/row-level security/i.test(error.message) || (original && error.code === "PGRST116")) ? new Error("No tienes permiso para cambiar este cliente (ya pasaron los 10 minutos).") : error;
       let aviso = "";
       if (!original && invitar) {
         setEstado("Mandando la invitación por WhatsApp…");
