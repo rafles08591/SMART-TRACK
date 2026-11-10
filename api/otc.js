@@ -106,8 +106,14 @@ async function sesionValida(req) {
 }
 
 // ---------- precios y promociones
+// Promo de regalo: "lleva 11, paga 10" → por cada 10 que paga se le regala 1
+const esRegalo = (p) => Number(p.promo_paga) > 0 && Number(p.promo_lleva) > Number(p.promo_paga);
+export function piezasRegalo(p, cantidad) {
+  if (!esRegalo(p)) return 0;
+  return Math.floor(cantidad / Number(p.promo_paga)) * (Number(p.promo_lleva) - Number(p.promo_paga));
+}
 function promoVigente(p, hoy = hoyMX()) {
-  const tiene = Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0;
+  const tiene = Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0 || esRegalo(p);
   if (!tiene) return false;
   if (p.promo_desde && p.promo_desde > hoy) return false;
   if (p.promo_hasta && p.promo_hasta < hoy) return false;
@@ -120,8 +126,12 @@ function precioPromo(p) {
 // precio por pieza según la cantidad (la promo puede pedir mínimo de piezas)
 export function precioPara(p, cantidad, hoy) {
   const normal = redondea(Number(p.precio) || 0);
-  if (promoVigente(p, hoy) && cantidad >= (Number(p.promo_min) || 1)) return { precio: precioPromo(p), normal, promo: true };
-  return { precio: normal, normal, promo: false };
+  if (promoVigente(p, hoy) && esRegalo(p)) { // se cobra normal y se regalan piezas
+    const regalo = piezasRegalo(p, cantidad);
+    return { precio: normal, normal, promo: regalo > 0, regalo };
+  }
+  if (promoVigente(p, hoy) && cantidad >= (Number(p.promo_min) || 1)) return { precio: precioPromo(p), normal, promo: true, regalo: 0 };
+  return { precio: normal, normal, promo: false, regalo: 0 };
 }
 function paraCliente(p, hoy) {
   const vig = promoVigente(p, hoy);
@@ -129,8 +139,10 @@ function paraCliente(p, hoy) {
     id: p.id, codigo: p.codigo, nombre: p.nombre, categoria: p.categoria || 'Otros', presentacion: p.presentacion || '',
     descripcion: p.descripcion || '', imagen: p.imagen_url || '', destacado: !!p.destacado, orden: p.orden ?? 100,
     precio: redondea(Number(p.precio)),
-    promo: vig ? { precio: precioPromo(p), min: Number(p.promo_min) || 1, texto: p.promo_texto || '', hasta: p.promo_hasta || null,
-      pct: Number(p.precio_promo) > 0 ? Math.round((1 - Number(p.precio_promo) / Number(p.precio)) * 100) : Number(p.descuento_pct) } : null,
+    promo: !vig ? null : esRegalo(p)
+      ? { tipo: 'regalo', lleva: Number(p.promo_lleva), paga: Number(p.promo_paga), texto: p.promo_texto || '', hasta: p.promo_hasta || null }
+      : { tipo: 'precio', precio: precioPromo(p), min: Number(p.promo_min) || 1, texto: p.promo_texto || '', hasta: p.promo_hasta || null,
+        pct: Number(p.precio_promo) > 0 ? Math.round((1 - Number(p.precio_promo) / Number(p.precio)) * 100) : Number(p.descuento_pct) },
   };
 }
 const productosActivos = () => rest('catalogo_otc?activo=eq.true&precio=gt.0&select=*&order=orden.asc,nombre.asc');
@@ -186,7 +198,8 @@ export default async function handler(req) {
         .filter((p) => !q || normDia(`${p.nombre} ${p.categoria} ${p.presentacion} ${p.codigo}`).includes(q));
       const lineas = lista.map((p) => {
         let t = `- ${p.nombre}${p.presentacion ? ` (${p.presentacion})` : ''} · ${p.categoria} · $${p.precio}`;
-        if (p.promo) t += ` · PROMO: $${p.promo.precio}${p.promo.min > 1 ? ` c/u llevando ${p.promo.min} o más` : ''}${p.promo.texto ? ` (${p.promo.texto})` : ''}${p.promo.hasta ? ` hasta ${p.promo.hasta}` : ''}`;
+        if (p.promo?.tipo === 'regalo') t += ` · PROMO ${p.promo.lleva}x${p.promo.paga}: por cada ${p.promo.paga} que compre se le regala${p.promo.lleva - p.promo.paga > 1 ? 'n' : ''} ${p.promo.lleva - p.promo.paga}${p.promo.texto ? ` (${p.promo.texto})` : ''}${p.promo.hasta ? ` hasta ${p.promo.hasta}` : ''}`;
+        else if (p.promo) t += ` · PROMO: $${p.promo.precio}${p.promo.min > 1 ? ` c/u llevando ${p.promo.min} o más` : ''}${p.promo.texto ? ` (${p.promo.texto})` : ''}${p.promo.hasta ? ` hasta ${p.promo.hasta}` : ''}`;
         if (p.descripcion) t += ` · ${p.descripcion.slice(0, 120)}`;
         return t;
       });
@@ -216,11 +229,12 @@ export default async function handler(req) {
         if (!p || !(Number(p.precio) > 0)) continue;
         const pr = precioPara(p, i.cantidad, hoy);
         productos.push({ id: p.id, codigo: p.codigo || null, producto: p.nombre + (p.presentacion ? ` (${p.presentacion})` : ''), cantidad: i.cantidad,
-          precio: pr.precio, precio_normal: pr.normal, promo: pr.promo, importe: redondea(pr.precio * i.cantidad) });
+          precio: pr.precio, precio_normal: pr.normal, promo: pr.promo, regalo: pr.regalo || 0, importe: redondea(pr.precio * i.cantidad) });
       }
       if (!productos.length) return json({ error: 'Los productos de tu carrito ya no están disponibles. Recarga la página.' }, 409);
       const total = redondea(productos.reduce((s, x) => s + x.importe, 0));
-      const ahorro = redondea(productos.reduce((s, x) => s + (x.precio_normal - x.precio) * x.cantidad, 0));
+      const ahorro = redondea(productos.reduce((s, x) => s + (x.precio_normal - x.precio) * x.cantidad + (x.regalo || 0) * x.precio_normal, 0));
+      const regalos = productos.reduce((s, x) => s + (x.regalo || 0), 0);
 
       const cli = (await rest(`clientes_otc?telefono=eq.${tel}&select=*`))[0] || {};
       if (!cli.telefono && nombreEscrito.length < 2) return json({ error: 'Escribe el nombre de tu negocio.' }, 400);
@@ -233,12 +247,12 @@ export default async function handler(req) {
         dia_visita: cli.dia_visita || null,
         origen: 'web',
         productos,
-        texto: productos.map((p) => `${p.cantidad} x ${p.producto} · $${p.importe}${p.promo ? ' (promo)' : ''}`).join('\n'),
+        texto: productos.map((p) => `${p.cantidad} x ${p.producto} · $${p.importe}${p.regalo ? ` + ${p.regalo} de regalo 🎁` : p.promo ? ' (promo)' : ''}`).join('\n'),
         total,
         nota: [nota, !cli.telefono ? 'Cliente NO registrado en la base de la cuponera' : ''].filter(Boolean).join(' · ') || null,
       });
       await avisar(pedido);
-      return json({ ok: true, folio: pedido.id, total, ahorro, dia_visita: pedido.dia_visita, registrado: !!cli.telefono,
+      return json({ ok: true, folio: pedido.id, total, ahorro, regalos, dia_visita: pedido.dia_visita, registrado: !!cli.telefono,
         nombre: pedido.nombre, c: cli.telefono ? `${tel}.${await firma(tel)}` : null });
     }
 
@@ -323,7 +337,7 @@ export default async function handler(req) {
       const abiertos = lista.filter((p) => p.estado === 'nuevo').length;
       const fmt = (p) => {
         const f = new Date(p.creado_en).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-        const prods = (p.productos || []).map((x) => `${x.cantidad} x ${x.producto}${x.precio ? ` ($${x.precio} c/u)` : ''}`).join('; ') || p.texto;
+        const prods = (p.productos || []).map((x) => `${x.cantidad} x ${x.producto}${x.precio ? ` ($${x.precio} c/u)` : ''}${x.regalo ? ` + ${x.regalo} de regalo` : ''}`).join('; ') || p.texto;
         const est = p.estado === 'nuevo' ? 'PENDIENTE de entregar (se puede cancelar o modificar)' : p.estado === 'entregado' ? 'ENTREGADO' : 'CANCELADO';
         return `- Folio #${p.id} · ${f} · ${est} · ${prods}${p.total ? ` · Total $${p.total}` : ''}${p.dia_visita ? ` · entrega ${String(p.dia_visita).toLowerCase()}` : ''}`;
       };
@@ -366,14 +380,14 @@ export default async function handler(req) {
         if (!c) { faltan.push(x.producto); continue; }
         const pr = precioPara(c, x.cantidad, hoy);
         productos.push({ id: c.id, codigo: c.codigo || null, producto: c.nombre + (c.presentacion ? ` (${c.presentacion})` : ''), cantidad: x.cantidad,
-          precio: pr.precio, precio_normal: pr.normal, promo: pr.promo, importe: redondea(pr.precio * x.cantidad) });
+          precio: pr.precio, precio_normal: pr.normal, promo: pr.promo, regalo: pr.regalo || 0, importe: redondea(pr.precio * x.cantidad) });
       }
       if (faltan.length) return texto(`ERROR: no encontré en el catálogo: ${faltan.join(', ')}. Consulta el catálogo y usa el nombre exacto. No se cambió nada.`);
       const total = redondea(productos.reduce((s, x) => s + x.importe, 0));
       await rest(`pedidos_otc?id=eq.${folio}`, { method: 'PATCH', body: JSON.stringify({ productos, total,
-        texto: productos.map((x) => `${x.cantidad} x ${x.producto} · $${x.importe}${x.promo ? ' (promo)' : ''}`).join('\n'),
+        texto: productos.map((x) => `${x.cantidad} x ${x.producto} · $${x.importe}${x.regalo ? ` + ${x.regalo} de regalo 🎁` : x.promo ? ' (promo)' : ''}`).join('\n'),
         actualizado_por: 'Cliente (WhatsApp)', actualizado_en: ahora, nota: nota('Modificado por el cliente por WhatsApp') }) });
-      return texto(`OK: el pedido #${folio} quedó así:\n${productos.map((x) => `${x.cantidad} x ${x.producto} = $${x.importe}`).join('\n')}\nTotal: $${total}`);
+      return texto(`OK: el pedido #${folio} quedó así:\n${productos.map((x) => `${x.cantidad} x ${x.producto} = $${x.importe}${x.regalo ? ` + ${x.regalo} de regalo` : ''}`).join('\n')}\nTotal: $${total}`);
     }
 
     return json({ error: 'acción no válida' }, 400);
