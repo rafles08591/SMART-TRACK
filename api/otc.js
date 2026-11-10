@@ -4,7 +4,7 @@
 // PÚBLICO (página /catalogo.html, sin sesión):
 //   GET  /api/otc?accion=catalogo[&c=<telefono.firma>]  → productos activos con precio final + datos del cliente si el link es suyo
 //   POST /api/otc  { accion:'pedido_web', c, nombre?, nota?, items:[{ id, cantidad }] }
-//        → c es obligatorio: el cliente se identifica con el teléfono que TENEMOS registrado (viene firmado en el botón)
+//        → c obligatorio: viene firmado en el botón de la plantilla (el teléfono que tenemos registrado)
 //        → el precio y la promoción se calculan aquí (no se confía en lo que mande el navegador)
 //
 // SESIÓN de SMART-TRACK (Authorization: Bearer <token>) o BOT:
@@ -152,7 +152,8 @@ export default async function handler(req) {
     if (req.method === 'POST' && accion === 'pedido_web') {
       const hoy = hoyMX();
       const telLink = await telDeLink(body.c);
-      if (!telLink) return json({ error: 'Abre el catálogo desde el botón “Hacer mi pedido” del WhatsApp que te enviamos.' }, 401);
+      // El cliente se identifica SOLO con el link firmado del botón de WhatsApp (el teléfono que tenemos registrado).
+      if (!telLink) return json({ error: 'Abre el catálogo desde el botón CATÁLOGO del WhatsApp que te enviamos.' }, 401);
       const tel = telLink;
       const nombreEscrito = String(body.nombre || '').trim().slice(0, 80);
       const pedidos = (Array.isArray(body.items) ? body.items : []).slice(0, 80)
@@ -175,7 +176,7 @@ export default async function handler(req) {
       const ahorro = redondea(productos.reduce((s, x) => s + (x.precio_normal - x.precio) * x.cantidad, 0));
 
       const cli = (await rest(`clientes_otc?telefono=eq.${tel}&select=*`))[0] || {};
-      if (!cli.telefono && nombreEscrito.length < 2) return json({ error: 'Tu número no está registrado: escribe el nombre de tu negocio.' }, 400);
+      if (!cli.telefono && nombreEscrito.length < 2) return json({ error: 'Escribe el nombre de tu negocio.' }, 400);
       const nota = String(body.nota || '').trim().slice(0, 300);
       const pedido = await guardarPedido({
         telefono: tel,
@@ -190,7 +191,8 @@ export default async function handler(req) {
         nota: [nota, !cli.telefono ? 'Cliente NO registrado en la base de la cuponera' : ''].filter(Boolean).join(' · ') || null,
       });
       await avisar(pedido);
-      return json({ ok: true, folio: pedido.id, total, ahorro, dia_visita: pedido.dia_visita, registrado: !!cli.telefono });
+      return json({ ok: true, folio: pedido.id, total, ahorro, dia_visita: pedido.dia_visita, registrado: !!cli.telefono,
+        nombre: pedido.nombre, c: cli.telefono ? `${tel}.${await firma(tel)}` : null });
     }
 
     // ======================= SESIÓN o BOT =======================
