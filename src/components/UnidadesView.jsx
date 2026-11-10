@@ -1304,7 +1304,7 @@ async function obtenerSalidasRutaHoy(fecha) {
   return mapa;
 }
 
-function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
+function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, persistFresco }) {
   const capturaRef = useRef(null);
   const [generando, setGenerando] = useState(false);
   const [imagenLista, setImagenLista] = useState(null);
@@ -1377,7 +1377,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
       ]);
       canvas.toBlob((blob) => {
         if (!blob) return;
-        const nombreArchivo = `salida_hoy_unidades_${etiqueta}_${hoy}.png`;
+        const nombreArchivo = `cardex_salida_${etiqueta}_${hoy}.png`;
         setImagenLista({ blob, nombreArchivo, url: URL.createObjectURL(blob) });
       }, "image/png");
     } catch (e) {
@@ -1415,34 +1415,131 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta }) {
     }
   }
 
+  // ============ Cardex de salida (formato J&MARJUS) ============
+  const CHECKS_CARDEX = [
+    ["mur", "MUR"], ["caja", "Caja de Valores"], ["esclusas", "Esclusas"], ["chapas", "Chapas"],
+    ["celular", "Celular"], ["impresora", "Impresora"], ["cigarrera", "Cigarrera"],
+  ];
+  const guardado = data?.cardexSalida?.fecha === hoy ? data.cardexSalida : null;
+  const [cardex, setCardex] = useState(() => guardado || { fecha: hoy, clo: "Vallarta", valida: "", filas: {} });
+  const [verTodas, setVerTodas] = useState(false);
+  const [capturando, setCapturando] = useState(false);
+  const [estadoGuardado, setEstadoGuardado] = useState("");
+  const sucioRef = useRef(false);
+
+  // si cambia el día o llega lo que guardó otro usuario (y aquí no hay cambios sin guardar), se toma
+  useEffect(() => {
+    if (sucioRef.current) return;
+    setCardex(data?.cardexSalida?.fecha === hoy ? data.cardexSalida : { fecha: hoy, clo: "Vallarta", valida: "", filas: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.cardexSalida, hoy]);
+
+  // guardado automático 1.5 s después del último cambio
+  useEffect(() => {
+    if (!sucioRef.current || !persistFresco) return;
+    setEstadoGuardado("Guardando…");
+    const t = setTimeout(async () => {
+      try {
+        await persistFresco(() => ({ cardexSalida: cardex }));
+        sucioRef.current = false;
+        setEstadoGuardado("✓ Guardado");
+      } catch (e) { setEstadoGuardado("No se pudo guardar: " + (e?.message || e)); }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [cardex, persistFresco]);
+
   function kmDeUnidad(unidad, revision) {
+    const editado = cardex.filas?.[unidad.id]?.km;
+    if (editado !== undefined && editado !== "") return Number(editado);
     const kmTiempos = salidasPorRuta[unidad.ruta]?.km;
     if (kmTiempos != null) return Number(kmTiempos);
     const kmChecklist = revision?.operativo?.kilometraje;
     return kmChecklist ? Number(kmChecklist) : null;
   }
+  const filaCardex = (u) => ({ paquetes: "", obs: "OK", ...Object.fromEntries(CHECKS_CARDEX.map(([k]) => [k, true])), ...(cardex.filas?.[u.id] || {}) });
+  const cambiarCardex = (cambio) => { sucioRef.current = true; setCardex((c) => ({ ...c, ...cambio })); };
+  const cambiarFila = (id, k, v) => { sucioRef.current = true; setCardex((c) => ({ ...c, filas: { ...c.filas, [id]: { ...(c.filas?.[id] || {}), [k]: v } } })); };
 
-  function descargarExcelResumenHoy() {
-    const filasExcel = filas.map(({ unidad, revision }) => {
-      const km = kmDeUnidad(unidad, revision);
-      return {
-        Unidad: unidad.placas,
-        Ruta: unidad.ruta,
-        Chofer: unidad.conductor || revision?.capturadoPor || "",
-        "Km": km ?? "",
-        "Hora de salida": salidasPorRuta[unidad.ruta]?.ts
-          ? new Date(salidasPorRuta[unidad.ruta].ts).toLocaleTimeString("es-MX")
-          : ["J201", "J203"].includes(unidad.ruta)
-          ? "RUTA DE PUEBLO"
-          : "Sin salida registrada",
-        "Checklist de hoy": revision ? "Registrado" : "Sin registro",
-      };
-    });
-    const hoja = XLSX.utils.json_to_sheet(filasExcel);
-    hoja["!cols"] = [{ wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 10 }, { wch: 18 }, { wch: 16 }];
-    const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, "Salida de hoy");
-    XLSX.writeFile(libro, `salida_hoy_unidades_${etiqueta}_${hoy}.xlsx`);
+  // en el cardex van las rutas de venta (J…); con el interruptor se agregan merch, supervisión, etc.
+  const filasCardex = filas.filter(({ unidad }) => verTodas || /^J\d/i.test(String(unidad.ruta || "")));
+  const choferDe = (unidad, revision) => unidad.conductor || revision?.capturadoPor || "";
+  const tsSalidas = filasCardex.map(({ unidad }) => salidasPorRuta[unidad.ruta]?.ts).filter(Boolean).map((t) => new Date(t).getTime());
+  const horaCorta = (ms) => new Date(ms).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  const salidaPrimera = tsSalidas.length ? horaCorta(Math.min(...tsSalidas)) : "";
+  const salidaUltima = tsSalidas.length ? horaCorta(Math.max(...tsSalidas)) : "";
+  const fechaElab = hoy.split("-").reverse().join("/");
+  const faltanPaquetes = filasCardex.filter(({ unidad }) => String(filaCardex(unidad).paquetes).trim() === "").map(({ unidad }) => unidad.ruta);
+
+  function validarAntes() {
+    if (faltanPaquetes.length) {
+      alert(`Falta la cantidad de paquetes en: ${faltanPaquetes.join(", ")}.`);
+      return false;
+    }
+    return true;
+  }
+
+  async function generarImagenCardex() {
+    if (!validarAntes()) return;
+    setCapturando(true);
+    await new Promise((r) => setTimeout(r, 60)); // deja pintar la versión sin cuadros de captura
+    try { await generarImagen(); } finally { setCapturando(false); }
+  }
+
+  // Excel: se llena el formato oficial (public/formato_kardex.xlsx) tal cual, sin cambiarle columnas
+  async function descargarExcelResumenHoy() {
+    if (!validarAntes()) return;
+    try {
+      if (!window.ExcelJS) {
+        await new Promise((ok, mal) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
+          s.onload = ok; s.onerror = () => mal(new Error("No se pudo cargar el generador de Excel"));
+          document.head.appendChild(s);
+        });
+      }
+      const [plantilla, logo] = await Promise.all([
+        fetch("/formato_kardex.xlsx", { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error("No encontré el formato (public/formato_kardex.xlsx)"); return r.arrayBuffer(); }),
+        fetch("/logo-marjus.png").then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null),
+      ]);
+      const wb = new window.ExcelJS.Workbook();
+      await wb.xlsx.load(plantilla);
+      const ws = wb.getWorksheet("Formato") || wb.worksheets[0];
+      // logo (en el formato viene "dentro de la celda" y ese tipo no se conserva: se pone encima de B1:C6)
+      ws.getCell("B1").value = null;
+      if (logo) ws.addImage(wb.addImage({ buffer: logo, extension: "png" }), { tl: { col: 1.15, row: 0.2 }, ext: { width: 250, height: 123 } });
+      ws.getCell("N3").value = fechaElab;
+      ws.getCell("F5").value = cardex.clo || "";
+      ws.getCell("F6").value = cardex.valida || "";
+      ws.getCell("N5").value = salidaPrimera;
+      ws.getCell("N6").value = salidaUltima;
+      const PRIMERA = 10, ULTIMA = 55; // filas de captura del formato
+      const marcaX = (v) => (v ? "✓" : "✗");
+      filasCardex.slice(0, ULTIMA - PRIMERA + 1).forEach(({ unidad, revision }, i) => {
+        const r = PRIMERA + i;
+        const f = filaCardex(unidad);
+        const km = kmDeUnidad(unidad, revision);
+        const vals = { B: choferDe(unidad, revision), C: unidad.ruta, D: unidad.placas, E: km ?? "", F: marcaX(f.mur), G: Number(f.paquetes) || f.paquetes,
+          H: marcaX(f.caja), I: marcaX(f.esclusas), J: marcaX(f.chapas), K: marcaX(f.celular), L: marcaX(f.impresora), M: marcaX(f.cigarrera), N: f.obs || "" };
+        for (const [col, v] of Object.entries(vals)) {
+          const c = ws.getCell(col + r);
+          c.value = v;
+          if (v === "✗") c.font = { ...(c.font || {}), color: { argb: "FFC00000" }, bold: true };
+          if (v === "✓") c.font = { ...(c.font || {}), color: { argb: "FF000000" }, bold: true }; // ✓ en negro, ✗ en rojo
+          if (col === "E" && typeof v === "number") c.numFmt = "#,##0";
+        }
+      });
+      // las filas que sobran se ocultan (el formato pide solo quitar o agregar filas) y la última lleva el borde grueso
+      const ultimaUsada = PRIMERA + Math.max(filasCardex.length, 1) - 1;
+      for (let r = ultimaUsada + 1; r <= ULTIMA; r++) ws.getRow(r).hidden = true;
+      for (let c = 2; c <= 14; c++) { const cell = ws.getCell(ultimaUsada, c); cell.border = { ...(cell.border || {}), bottom: { style: "medium" } }; }
+      const buf = await wb.xlsx.writeBuffer();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      a.download = `KARDEX_CLO_${(cardex.clo || "CLO").toUpperCase()}_${fechaElab.replaceAll("/", ".")}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) {
+      alert("No se pudo generar el Excel: " + (e?.message || e));
+    }
   }
 
   async function copiarListaKilometrajes() {
@@ -1507,68 +1604,126 @@ ${lineas.join("\n")}
     return () => { if (imagenLista?.url) URL.revokeObjectURL(imagenLista.url); };
   }, [imagenLista]);
 
+  const AZUL = "#104861";
+  const borde = "1px solid #000";
+  const bordeG = "2px solid #000";
+  const fuente = 'Calibri, Carlito, "Segoe UI", Arial, sans-serif';
+  const celda = { border: borde, textAlign: "center", verticalAlign: "middle", padding: "0 4px", height: 34, fontSize: 13.5, color: "#000" };
+  const ANCHOS = [195, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 193];
+  const campo = { width: "100%", boxSizing: "border-box", border: "none", background: "transparent", textAlign: "center", font: "inherit", color: "inherit", outline: "none", padding: 0 };
+  const marca = (on) => <span style={{ fontWeight: 700, fontSize: 15, color: on ? "#000" : "#C00000" }}>{on ? "✓" : "✗"}</span>;
+
   return (
     <div style={{ marginTop: 22 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-        <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Salida de hoy · Unidad, Chofer, Km y Hora</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button className="ru-btn" onClick={copiarListaKilometrajes}>
-            <Gauge size={14} /> Copiar script de KM
-          </button>
+        <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Cardex de salida · {fechaElab}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, color: T.muted, display: "flex", gap: 5, alignItems: "center" }}>
+            <input type="checkbox" checked={verTodas} onChange={(e) => setVerTodas(e.target.checked)} /> Incluir merch / supervisión
+          </label>
+          <button className="ru-btn" onClick={copiarListaKilometrajes}><Gauge size={14} /> Copiar script de KM</button>
           <button className="ru-btn" onClick={descargarExcelResumenHoy}><Download size={14} /> Excel</button>
           {generando && <span style={{ fontSize: 12, color: T.muted }}>Generando…</span>}
-          {!generando && !imagenLista && (
-            <button className="ru-btn" onClick={generarImagen}><Download size={14} /> Generar imagen</button>
-          )}
-          {imagenLista && (
-            <button className="ru-btn active" onClick={guardarOCompartir}><Download size={14} /> Guardar / compartir</button>
-          )}
+          {!generando && !imagenLista && <button className="ru-btn" onClick={generarImagenCardex}><Download size={14} /> Generar imagen</button>}
+          {imagenLista && <button className="ru-btn active" onClick={guardarOCompartir}><Download size={14} /> Guardar / compartir</button>}
         </div>
+      </div>
+      <div style={{ fontSize: 12, color: T.muted, marginBottom: 8 }}>
+        Toca ✓ para marcar ✗ si algo falta. Kilometraje, paquetes y observaciones se pueden escribir.
+        {faltanPaquetes.length > 0 && <span style={{ color: T.late, fontWeight: 600 }}> Falta la cantidad de paquetes en {faltanPaquetes.join(", ")}.</span>}
+        {estadoGuardado && <span style={{ marginLeft: 8, color: estadoGuardado.startsWith("✓") ? T.ok : T.muted }}>{estadoGuardado}</span>}
       </div>
       {copiado && <div style={{ fontSize: 12.5, color: T.ok, marginBottom: 10, fontWeight: 500 }}>{copiado}</div>}
       {error && <div style={{ fontSize: 12, color: T.late, marginBottom: 10 }}>No se pudo generar: {error}</div>}
 
-      <div ref={capturaRef} className="ru-card" style={{ padding: 18, background: "#FFFFFF" }}>
-        <div className="ru-h" style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>Salida de hoy</div>
-        <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 14 }}>{hoy}</div>
-        {filas.length === 0 ? (
-          <div style={{ fontSize: 13, color: T.muted, padding: "10px 0" }}>No hay unidades en este alcance.</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 480 }}>
-              <thead>
-                <tr style={{ background: T.bg, textAlign: "left" }}>
-                  {["Ruta", "Unidad", "Chofer", "Km", "Hora de salida"].map((h) => (
-                    <th key={h} style={{ padding: "8px 10px", fontWeight: 500, color: T.muted, fontSize: 11.5, whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filas.map(({ unidad, revision }) => {
-                  const tsSalida = salidasPorRuta[unidad.ruta]?.ts;
-                  const km = kmDeUnidad(unidad, revision);
-                  return (
-                    <tr key={unidad.id} style={{ borderTop: `1px solid ${T.border}` }}>
-                      <td style={{ padding: "8px 10px", fontWeight: 600, whiteSpace: "nowrap" }}>{unidad.ruta}</td>
-                      <td style={{ padding: "8px 10px", fontWeight: 500, whiteSpace: "nowrap" }}>{unidad.placas}</td>
-                      <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{unidad.conductor || revision?.capturadoPor || "—"}</td>
-                      <td className="ru-mono" style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
-                        {km != null ? `${km.toLocaleString("es-MX")} km` : "—"}
-                      </td>
-                      <td className="ru-mono" style={{ padding: "8px 10px", color: tsSalida ? T.ink : (["J201", "J203"].includes(unidad.ruta) ? T.muted : T.late), whiteSpace: "nowrap" }}>
-                        {tsSalida
-                          ? new Date(tsSalida).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                          : ["J201", "J203"].includes(unidad.ruta)
-                          ? "RUTA DE PUEBLO"
-                          : cargandoSalidas ? "Consultando…" : "Sin salida registrada"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <div style={{ overflowX: "auto", background: "#FFFFFF", border: `1px solid ${T.border}`, borderRadius: 8 }}>
+        <div ref={capturaRef} style={{ background: "#FFFFFF", padding: 12, width: "max-content", fontFamily: fuente, color: "#000" }}>
+          {/* Encabezado: logo + fecha + recuadro CLO */}
+          <table style={{ borderCollapse: "collapse", tableLayout: "fixed", width: ANCHOS.reduce((a, b) => a + b, 0) }}>
+            <colgroup>{ANCHOS.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+            <tbody>
+              <tr style={{ height: 46 }}>
+                <td colSpan={2} rowSpan={6} style={{ verticalAlign: "middle", textAlign: "center", padding: 0 }}>
+                  <img src="/logo-marjus.png" alt="J&MARJUS" crossOrigin="anonymous" style={{ width: 210, display: "inline-block" }} />
+                </td>
+                <td colSpan={11} style={{ textAlign: "center", fontWeight: 700, fontSize: 30, verticalAlign: "bottom", lineHeight: 1 }}>Kardex de rutas y equipamiento</td>
+              </tr>
+              <tr style={{ height: 22 }}>
+                <td colSpan={11} style={{ textAlign: "center", fontSize: 14 }}>Control Operativo - Seguridad - Asignacion de equipos</td>
+              </tr>
+              <tr style={{ height: 22 }}>
+                <td colSpan={10} style={{ textAlign: "right", fontSize: 14, paddingRight: 4 }}>Fecha de elaboracion:</td>
+                <td style={{ borderBottom: borde, textAlign: "center", fontSize: 14 }}>{fechaElab}</td>
+              </tr>
+              <tr style={{ height: 6 }}><td colSpan={11} /></tr>
+              <tr style={{ height: 29 }}>
+                <td colSpan={2} style={{ borderTop: bordeG, borderLeft: bordeG, borderBottom: borde, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4 }}>CLO:</td>
+                <td colSpan={6} style={{ borderTop: bordeG, borderBottom: borde, borderRight: bordeG, fontSize: 13.5, paddingLeft: 4 }}>
+                  {capturando ? cardex.clo : <input style={{ ...campo, textAlign: "left" }} value={cardex.clo || ""} onChange={(e) => cambiarCardex({ clo: e.target.value })} />}
+                </td>
+                <td colSpan={2} style={{ borderTop: bordeG, borderBottom: borde, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4, whiteSpace: "nowrap" }}>Salida 1er ruta:</td>
+                <td style={{ borderTop: bordeG, borderBottom: borde, borderRight: bordeG, textAlign: "center", fontSize: 13.5 }}>{salidaPrimera}</td>
+              </tr>
+              <tr style={{ height: 29 }}>
+                <td colSpan={2} style={{ borderBottom: bordeG, borderLeft: bordeG, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4, whiteSpace: "nowrap" }}>Nombre de quien valida:</td>
+                <td colSpan={6} style={{ borderBottom: bordeG, borderRight: bordeG, fontSize: 13.5, paddingLeft: 4 }}>
+                  {capturando ? cardex.valida : <input style={{ ...campo, textAlign: "left" }} value={cardex.valida || ""} placeholder="Escribe tu nombre" onChange={(e) => cambiarCardex({ valida: e.target.value })} />}
+                </td>
+                <td colSpan={2} style={{ borderBottom: bordeG, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4, whiteSpace: "nowrap" }}>Salida ultima ruta:</td>
+                <td style={{ borderBottom: bordeG, borderRight: bordeG, textAlign: "center", fontSize: 13.5 }}>{salidaUltima}</td>
+              </tr>
+              <tr style={{ height: 8 }}><td colSpan={13} /></tr>
+              <tr style={{ height: 34 }}>
+                <td colSpan={2} />
+                <td colSpan={2} style={{ background: AZUL, color: "#fff", textAlign: "center", fontSize: 17 }}>Flotas</td>
+                <td colSpan={5} style={{ background: AZUL, color: "#fff", textAlign: "center", fontSize: 11.5, letterSpacing: 0.3 }}>SEGURIDAD</td>
+                <td colSpan={4} style={{ background: AZUL, color: "#fff", textAlign: "center", fontSize: 11.5, letterSpacing: 0.3 }}>OPERACIONES</td>
+              </tr>
+              <tr style={{ height: 44 }}>
+                {["Usuario", "Ruta", "Placa", "Kilometraje", "MUR", "Cantidad de Paquetes", "Caja de Valores", "Esclusas", "Chapas", "Celular", "Impresora", "Cigarrera", "Observaciones"].map((t, i) => (
+                  <th key={t} style={{ ...celda, height: 44, fontWeight: 700, fontSize: 13.5, borderTop: bordeG, borderBottom: bordeG, borderLeft: i === 0 ? bordeG : borde, borderRight: i === 12 ? bordeG : borde, lineHeight: 1.25 }}>{t}</th>
+                ))}
+              </tr>
+              {filasCardex.length === 0 ? (
+                <tr><td colSpan={13} style={{ ...celda, borderLeft: bordeG, borderRight: bordeG, borderBottom: bordeG, color: T.muted }}>No hay unidades en este alcance.</td></tr>
+              ) : filasCardex.map(({ unidad, revision }, i) => {
+                const f = filaCardex(unidad);
+                const km = kmDeUnidad(unidad, revision);
+                const ultima = i === filasCardex.length - 1;
+                const b = (c) => ({ ...celda, borderLeft: c === 0 ? bordeG : borde, borderRight: c === 12 ? bordeG : borde, borderBottom: ultima ? bordeG : borde });
+                const sinPaq = String(f.paquetes).trim() === "";
+                return (
+                  <tr key={unidad.id}>
+                    <td style={{ ...b(0), fontWeight: 700, lineHeight: 1.15 }}>{choferDe(unidad, revision) || "—"}</td>
+                    <td style={b(1)}>{unidad.ruta}</td>
+                    <td style={b(2)}>{unidad.placas}</td>
+                    <td style={b(3)}>
+                      {capturando ? (km != null ? km.toLocaleString("es-MX") : "") : (
+                        <input style={campo} inputMode="numeric" value={f.km !== undefined ? f.km : km ?? ""} placeholder="—"
+                          onChange={(e) => cambiarFila(unidad.id, "km", e.target.value.replace(/[^\d]/g, ""))} />
+                      )}
+                    </td>
+                    {CHECKS_CARDEX.slice(0, 1).map(([k]) => (
+                      <td key={k} style={{ ...b(4), cursor: "pointer", userSelect: "none" }} onClick={() => cambiarFila(unidad.id, k, !f[k])}>{marca(f[k])}</td>
+                    ))}
+                    <td style={{ ...b(5), background: sinPaq && !capturando ? "#FDECEC" : undefined }}>
+                      {capturando ? f.paquetes : (
+                        <input style={campo} inputMode="numeric" value={f.paquetes} placeholder="Capturar"
+                          onChange={(e) => cambiarFila(unidad.id, "paquetes", e.target.value.replace(/[^\d]/g, ""))} />
+                      )}
+                    </td>
+                    {CHECKS_CARDEX.slice(1).map(([k], j) => (
+                      <td key={k} style={{ ...b(6 + j), cursor: "pointer", userSelect: "none" }} onClick={() => cambiarFila(unidad.id, k, !f[k])}>{marca(f[k])}</td>
+                    ))}
+                    <td style={b(12)}>
+                      {capturando ? f.obs : <input style={campo} value={f.obs} onChange={(e) => cambiarFila(unidad.id, "obs", e.target.value)} />}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1743,7 +1898,7 @@ function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, sco
             </div>
           )}
 
-          <ResumenSalidaHoyImagen unidadesVisibles={unidadesVisibles} revisiones={revisiones} etiqueta={esGerente ? "gerente" : "supervisor"} />
+          <ResumenSalidaHoyImagen unidadesVisibles={unidadesVisibles} revisiones={revisiones} etiqueta={esGerente ? "gerente" : "supervisor"} data={data} persistFresco={persistFresco} />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 0 10px" }}>
             <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Bitácora reciente</div>
