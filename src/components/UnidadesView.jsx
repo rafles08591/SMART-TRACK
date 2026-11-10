@@ -1282,7 +1282,7 @@ async function obtenerSalidasRutaHoy(fecha) {
     if (activoRow?.value?.fecha === fecha && activoRow.value.rutas) {
       Object.entries(activoRow.value.rutas).forEach(([ruta, info]) => {
         const salida = info?.areas?.salida_ruta;
-        if (salida?.ts) mapa[ruta] = { ts: salida.ts, km: salida.km ?? null };
+        if (salida?.ts || salida?.km != null || salida?.paquetes != null) mapa[ruta] = { ts: salida?.ts || null, km: salida?.km ?? null, paquetes: salida?.paquetes ?? null };
       });
     }
   } catch (e) {
@@ -1296,7 +1296,7 @@ async function obtenerSalidasRutaHoy(fecha) {
       .forEach((h) => {
         if (mapa[h.ruta] == null) {
           const salida = h.areas?.salida_ruta;
-          if (salida?.ts) mapa[h.ruta] = { ts: salida.ts, km: salida.km ?? null };
+          if (salida?.ts) mapa[h.ruta] = { ts: salida.ts, km: salida.km ?? null, paquetes: salida.paquetes ?? null };
         }
       });
   } catch (e) {
@@ -1461,14 +1461,23 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
     if (editado !== undefined && editado !== "") return Number(editado);
     const kmTiempos = salidasPorRuta[unidad.ruta]?.km;
     if (kmTiempos != null) return Number(kmTiempos);
-    const kmChecklist = revision?.operativo?.kilometraje;
+    const kmChecklist = (revisiones || []).filter((r) => r.unidadId === unidad.id && fechaLocalMX(r.fecha) === hoy && r.operativo?.kilometraje)
+      .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0]?.operativo?.kilometraje || revision?.operativo?.kilometraje;
     return kmChecklist ? Number(kmChecklist) : null;
   }
   const RUTAS_PUEBLO = ["J201", "J203"];
   const conSalida = (u) => !!salidasPorRuta[u.ruta]?.ts;
   const obsDefault = (u) => (conSalida(u) ? "OK" : RUTAS_PUEBLO.includes(u.ruta) ? "OK · RUTA DE PUEBLO" : "SIN REGISTRO DE SALIDA");
   const pideFaltaPaquetes = (u) => conSalida(u) || RUTAS_PUEBLO.includes(u.ruta); // solo las que sí salieron
-  const filaCardex = (u) => ({ paquetes: "", obs: obsDefault(u), ...Object.fromEntries(CHECKS_CARDEX.map(([k]) => [k, true])), ...(cardex.filas?.[u.id] || {}) });
+  // paquetes: lo capturado en el Kardex manda; si no, lo que se capturó junto con el km (Tiempos o pestaña KM)
+  const paquetesCapturados = (u) => {
+    const deTiempos = salidasPorRuta[u.ruta]?.paquetes;
+    if (deTiempos != null && deTiempos !== "") return String(deTiempos);
+    const conPaq = (revisiones || []).filter((r) => r.unidadId === u.id && fechaLocalMX(r.fecha) === hoy && r.operativo?.paquetes != null && r.operativo.paquetes !== "")
+      .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+    return conPaq ? String(conPaq.operativo.paquetes) : "";
+  };
+  const filaCardex = (u) => ({ paquetes: paquetesCapturados(u), obs: obsDefault(u), ...Object.fromEntries(CHECKS_CARDEX.map(([k]) => [k, true])), ...(cardex.filas?.[u.id] || {}) });
   const cambiarCardex = (cambio) => { sucioRef.current = true; setCardex((c) => ({ ...c, ...cambio })); };
   const cambiarFila = (id, k, v) => { sucioRef.current = true; setCardex((c) => ({ ...c, filas: { ...c.filas, [id]: { ...(c.filas?.[id] || {}), [k]: v } } })); };
 
