@@ -88,7 +88,7 @@ function Pill({ activo, onClick, children, color = "#22d3ee" }) {
 function TarjetaPedido({ p, puedeCambiar, onEstado, mostrarRuta }) {
   const est = ESTADOS[p.estado] || ESTADOS.nuevo;
   const productos = Array.isArray(p.productos) ? p.productos : [];
-  const piezas = productos.reduce((s, x) => s + (Number(x.cantidad) || 0), 0);
+  const piezas = productos.reduce((s, x) => s + (Number(x.cantidad) || 0) + (Number(x.regalo) || 0), 0);
   return (
     <div className="card" style={{ padding: 14, marginBottom: 10, borderLeft: `4px solid ${est.color}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
@@ -110,8 +110,9 @@ function TarjetaPedido({ p, puedeCambiar, onEstado, mostrarRuta }) {
         {productos.length ? productos.map((x, i) => (
           <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 0", borderTop: i ? "1px dashed #1E2A42" : "none" }}>
             <span>{x.producto}{x.codigo && x.codigo !== x.producto ? <span style={{ color: "#64748b" }}> ({x.codigo})</span> : null}
-              {x.precio ? <span style={{ color: x.promo ? "#22c55e" : "#64748b" }}> · ${x.precio}{x.promo ? " promo" : ""}</span> : null}</span>
-            <b>{x.cantidad}</b>
+              {x.precio ? <span style={{ color: x.promo ? "#22c55e" : "#64748b" }}> · ${x.precio}{x.promo && !x.regalo ? " promo" : ""}</span> : null}
+              {x.regalo ? <span style={{ color: "#22c55e", fontWeight: 700 }}> · 🎁 +{x.regalo} de regalo</span> : null}</span>
+            <b>{x.cantidad}{x.regalo ? <span style={{ color: "#22c55e" }}> +{x.regalo}</span> : null}</b>
           </div>
         )) : <div style={{ whiteSpace: "pre-wrap" }}>{p.texto}</div>}
         {productos.length > 1 && <div style={{ textAlign: "right", fontSize: 12, color: "#9AA7BD", marginTop: 4 }}>{piezas} piezas{p.total ? ` · $${Number(p.total).toLocaleString("es-MX")}` : ""}</div>}
@@ -457,7 +458,7 @@ export default function PedidosOtcView({ rol = "vendedor", rutaPropia, identidad
     for (const p of visibles) for (const x of p.productos || []) {
       const k = x.codigo || x.producto;
       const prev = m.get(k) || { producto: x.producto, codigo: x.codigo, cantidad: 0 };
-      prev.cantidad += Number(x.cantidad) || 0;
+      prev.cantidad += (Number(x.cantidad) || 0) + (Number(x.regalo) || 0); // a cargar: incluye lo de regalo
       m.set(k, prev);
     }
     return [...m.values()].sort((a, b) => b.cantidad - a.cantidad);
@@ -470,7 +471,7 @@ export default function PedidosOtcView({ rol = "vendedor", rutaPropia, identidad
       for (const x of productos) filas.push({
         Fecha: fechaHora(p.creado_en), Ruta: p.ruta || "", "Día de visita": p.dia_visita || "", Código: p.codigo_cliente || "",
         Cliente: p.nombre || "", Teléfono: p.telefono || "", Origen: p.origen || "", "Código FA": x.codigo || "", Producto: x.producto || "",
-        Cantidad: x.cantidad, Estado: ESTADOS[p.estado]?.label || p.estado,
+        Cantidad: x.cantidad, Regalo: x.regalo || "", Estado: ESTADOS[p.estado]?.label || p.estado,
       });
     }
     const wb = XLSX.utils.book_new();
