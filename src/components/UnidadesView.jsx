@@ -577,6 +577,7 @@ export default function UnidadesView({ data, persistRevisionUnidad, persistConfi
       <VistaPanel
         esGerente={esGerente}
         puesto={puesto}
+        identidad={identidad}
         data={data}
         persistFresco={persistFresco}
         esLiquidacion={esLiquidacion}
@@ -1304,7 +1305,7 @@ async function obtenerSalidasRutaHoy(fecha) {
   return mapa;
 }
 
-function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, persistFresco }) {
+function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, persistFresco, puesto, identidad, cloFiltro }) {
   const capturaRef = useRef(null);
   const [generando, setGenerando] = useState(false);
   const [imagenLista, setImagenLista] = useState(null);
@@ -1420,9 +1421,16 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
     ["mur", "MUR"], ["caja", "Caja de Valores"], ["esclusas", "Esclusas"], ["chapas", "Chapas"],
     ["celular", "Celular"], ["impresora", "Impresora"], ["cigarrera", "Cigarrera"],
   ];
-  const guardado = data?.cardexSalida?.fecha === hoy ? data.cardexSalida : null;
-  const [cardex, setCardex] = useState(() => guardado || { fecha: hoy, clo: "Vallarta", valida: "", filas: {} });
-  const [verTodas, setVerTodas] = useState(false);
+  // un cardex por CLO y por día (Vallarta y Tepic no se mezclan)
+  const cloClave = cloFiltro || "PVR";
+  const cloNombre = cloClave === "TEPIC" ? "Tepic" : "Vallarta";
+  const PUESTOS_TXT = { gerente: "GERENTE", supervisor: "SUPERVISOR", supervisor2: "SUPERVISOR", supervisor1: "SUPERVISOR" };
+  const validaDefault = [PUESTOS_TXT[String(puesto || "").toLowerCase()] || String(puesto || "").toUpperCase(), String(identidad || "").toUpperCase()]
+    .filter(Boolean).join(" ").trim();
+  const vacio = () => ({ fecha: hoy, clo: cloNombre, valida: "", filas: {} });
+  const delDia = (d) => (d?.cardexClo?.[cloClave]?.fecha === hoy ? d.cardexClo[cloClave] : null);
+  const [cardex, setCardex] = useState(() => delDia(data) || vacio());
+  const [verTodas, setVerTodas] = useState(true);
   const [capturando, setCapturando] = useState(false);
   const [estadoGuardado, setEstadoGuardado] = useState("");
   const sucioRef = useRef(false);
@@ -1430,9 +1438,9 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
   // si cambia el día o llega lo que guardó otro usuario (y aquí no hay cambios sin guardar), se toma
   useEffect(() => {
     if (sucioRef.current) return;
-    setCardex(data?.cardexSalida?.fecha === hoy ? data.cardexSalida : { fecha: hoy, clo: "Vallarta", valida: "", filas: {} });
+    setCardex(delDia(data) || vacio());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.cardexSalida, hoy]);
+  }, [data?.cardexClo?.[cloClave], hoy]);
 
   // guardado automático 1.5 s después del último cambio
   useEffect(() => {
@@ -1440,7 +1448,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
     setEstadoGuardado("Guardando…");
     const t = setTimeout(async () => {
       try {
-        await persistFresco(() => ({ cardexSalida: cardex }));
+        await persistFresco((fresca) => ({ cardexClo: { ...(fresca?.cardexClo || {}), [cloClave]: cardex } }));
         sucioRef.current = false;
         setEstadoGuardado("✓ Guardado");
       } catch (e) { setEstadoGuardado("No se pudo guardar: " + (e?.message || e)); }
@@ -1456,11 +1464,15 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
     const kmChecklist = revision?.operativo?.kilometraje;
     return kmChecklist ? Number(kmChecklist) : null;
   }
-  const filaCardex = (u) => ({ paquetes: "", obs: "OK", ...Object.fromEntries(CHECKS_CARDEX.map(([k]) => [k, true])), ...(cardex.filas?.[u.id] || {}) });
+  const RUTAS_PUEBLO = ["J201", "J203"];
+  const conSalida = (u) => !!salidasPorRuta[u.ruta]?.ts;
+  const obsDefault = (u) => (conSalida(u) ? "OK" : RUTAS_PUEBLO.includes(u.ruta) ? "OK · RUTA DE PUEBLO" : "SIN REGISTRO DE SALIDA");
+  const pideFaltaPaquetes = (u) => conSalida(u) || RUTAS_PUEBLO.includes(u.ruta); // solo las que sí salieron
+  const filaCardex = (u) => ({ paquetes: "", obs: obsDefault(u), ...Object.fromEntries(CHECKS_CARDEX.map(([k]) => [k, true])), ...(cardex.filas?.[u.id] || {}) });
   const cambiarCardex = (cambio) => { sucioRef.current = true; setCardex((c) => ({ ...c, ...cambio })); };
   const cambiarFila = (id, k, v) => { sucioRef.current = true; setCardex((c) => ({ ...c, filas: { ...c.filas, [id]: { ...(c.filas?.[id] || {}), [k]: v } } })); };
 
-  // en el cardex van las rutas de venta (J…); con el interruptor se agregan merch, supervisión, etc.
+  // van todas las unidades (también las que no registraron salida); con el interruptor se dejan solo las rutas de venta
   const filasCardex = filas.filter(({ unidad }) => verTodas || /^J\d/i.test(String(unidad.ruta || "")));
   const choferDe = (unidad, revision) => unidad.conductor || revision?.capturadoPor || "";
   const tsSalidas = filasCardex.map(({ unidad }) => salidasPorRuta[unidad.ruta]?.ts).filter(Boolean).map((t) => new Date(t).getTime());
@@ -1468,7 +1480,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
   const salidaPrimera = tsSalidas.length ? horaCorta(Math.min(...tsSalidas)) : "";
   const salidaUltima = tsSalidas.length ? horaCorta(Math.max(...tsSalidas)) : "";
   const fechaElab = hoy.split("-").reverse().join("/");
-  const faltanPaquetes = filasCardex.filter(({ unidad }) => String(filaCardex(unidad).paquetes).trim() === "").map(({ unidad }) => unidad.ruta);
+  const faltanPaquetes = filasCardex.filter(({ unidad }) => pideFaltaPaquetes(unidad) && String(filaCardex(unidad).paquetes).trim() === "").map(({ unidad }) => unidad.ruta);
 
   function validarAntes() {
     if (faltanPaquetes.length) {
@@ -1509,7 +1521,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
       if (logo) ws.addImage(wb.addImage({ buffer: logo, extension: "png" }), { tl: { col: 1.15, row: 0.2 }, ext: { width: 250, height: 123 } });
       ws.getCell("N3").value = fechaElab;
       ws.getCell("F5").value = cardex.clo || "";
-      ws.getCell("F6").value = cardex.valida || "";
+      ws.getCell("F6").value = cardex.valida || validaDefault;
       ws.getCell("N5").value = salidaPrimera;
       ws.getCell("N6").value = salidaUltima;
       const PRIMERA = 10, ULTIMA = 55; // filas de captura del formato
@@ -1535,7 +1547,7 @@ function ResumenSalidaHoyImagen({ unidadesVisibles, revisiones, etiqueta, data, 
       const buf = await wb.xlsx.writeBuffer();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      a.download = `KARDEX_CLO_${(cardex.clo || "CLO").toUpperCase()}_${fechaElab.replaceAll("/", ".")}.xlsx`;
+      a.download = `KARDEX_CLO_${(cardex.clo || cloNombre).toUpperCase()}_${fechaElab.replaceAll("/", ".")}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
     } catch (e) {
       alert("No se pudo generar el Excel: " + (e?.message || e));
@@ -1619,7 +1631,7 @@ ${lineas.join("\n")}
         <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Cardex de salida · {fechaElab}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <label style={{ fontSize: 12, color: T.muted, display: "flex", gap: 5, alignItems: "center" }}>
-            <input type="checkbox" checked={verTodas} onChange={(e) => setVerTodas(e.target.checked)} /> Incluir merch / supervisión
+            <input type="checkbox" checked={!verTodas} onChange={(e) => setVerTodas(!e.target.checked)} /> Solo rutas de venta
           </label>
           <button className="ru-btn" onClick={copiarListaKilometrajes}><Gauge size={14} /> Copiar script de KM</button>
           <button className="ru-btn" onClick={descargarExcelResumenHoy}><Download size={14} /> Excel</button>
@@ -1667,7 +1679,7 @@ ${lineas.join("\n")}
               <tr style={{ height: 29 }}>
                 <td colSpan={2} style={{ borderBottom: bordeG, borderLeft: bordeG, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4, whiteSpace: "nowrap" }}>Nombre de quien valida:</td>
                 <td colSpan={6} style={{ borderBottom: bordeG, borderRight: bordeG, fontSize: 13.5, paddingLeft: 4 }}>
-                  {capturando ? cardex.valida : <input style={{ ...campo, textAlign: "left" }} value={cardex.valida || ""} placeholder="Escribe tu nombre" onChange={(e) => cambiarCardex({ valida: e.target.value })} />}
+                  {capturando ? (cardex.valida || validaDefault) : <input style={{ ...campo, textAlign: "left" }} value={cardex.valida || validaDefault} placeholder="Escribe tu nombre" onChange={(e) => cambiarCardex({ valida: e.target.value || " " })} />}
                 </td>
                 <td colSpan={2} style={{ borderBottom: bordeG, textAlign: "right", fontWeight: 700, fontSize: 13.5, paddingRight: 4, whiteSpace: "nowrap" }}>Salida ultima ruta:</td>
                 <td style={{ borderBottom: bordeG, borderRight: bordeG, textAlign: "center", fontSize: 13.5 }}>{salidaUltima}</td>
@@ -1691,7 +1703,7 @@ ${lineas.join("\n")}
                 const km = kmDeUnidad(unidad, revision);
                 const ultima = i === filasCardex.length - 1;
                 const b = (c) => ({ ...celda, borderLeft: c === 0 ? bordeG : borde, borderRight: c === 12 ? bordeG : borde, borderBottom: ultima ? bordeG : borde });
-                const sinPaq = String(f.paquetes).trim() === "";
+                const sinPaq = pideFaltaPaquetes(unidad) && String(f.paquetes).trim() === "";
                 return (
                   <tr key={unidad.id}>
                     <td style={{ ...b(0), fontWeight: 700, lineHeight: 1.15 }}>{choferDe(unidad, revision) || "—"}</td>
@@ -1770,7 +1782,7 @@ function AuditoriasDeHoy({ unidadesVisibles, revisiones }) {
   );
 }
 
-function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, clavesGasolina, setClavesGasolina, puedeReporteCombinado }) {
+function VistaPanel({ esGerente, puesto, identidad, data, persistFresco, esLiquidacion, scopeGerente, setScopeGerente, rutasVisibles, unidadesVisibles, lastByUnidad, resumen, unidades, setUnidades, asignaciones, setAsignaciones, seguridad, setSeguridad, revisiones, persistConfigUnidades, alcanceIrrestricto, cloFiltro, clavesGasolina, setClavesGasolina, puedeReporteCombinado }) {
   const [gestion, setGestion] = useState("tablero");
   const mostrarGestion = esGerente;
   const [revisionEvidenciaId, setRevisionEvidenciaId] = useState(null);
@@ -1898,7 +1910,7 @@ function VistaPanel({ esGerente, puesto, data, persistFresco, esLiquidacion, sco
             </div>
           )}
 
-          <ResumenSalidaHoyImagen unidadesVisibles={unidadesVisibles} revisiones={revisiones} etiqueta={esGerente ? "gerente" : "supervisor"} data={data} persistFresco={persistFresco} />
+          <ResumenSalidaHoyImagen unidadesVisibles={unidadesVisibles} revisiones={revisiones} etiqueta={esGerente ? "gerente" : "supervisor"} data={data} persistFresco={persistFresco} puesto={puesto} identidad={identidad} cloFiltro={cloFiltro} />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 0 10px" }}>
             <div className="ru-h" style={{ fontWeight: 600, fontSize: 14.5 }}>Bitácora reciente</div>
