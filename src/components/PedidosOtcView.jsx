@@ -141,20 +141,27 @@ function TarjetaPedido({ p, puedeCambiar, onEstado, mostrarRuta }) {
   );
 }
 
-// Manda al cliente (por WhatsApp normal) su link personal al catálogo. Es el mismo link del botón de la plantilla.
-async function enviarLink(c, setEstado) {
+// Manda la plantilla oficial de WhatsApp (imagen + botón CATÁLOGO con su número registrado)
+async function mandarInvitacion(telefono) {
   try {
     const { data } = await supabase.auth.getSession();
-    const r = await fetch(`/api/otc?accion=link&telefono=${c.telefono}`, { headers: { Authorization: `Bearer ${data?.session?.access_token || ""}` } });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || "no se pudo generar el link");
-    const texto = `¡Hola${c.nombre ? " " + c.nombre.split(" ")[0] : ""}! 👋 Haz tu pedido aquí y te lo llevo en mi siguiente visita: ${j.link}`;
-    window.open(`https://wa.me/${c.telefono}?text=${encodeURIComponent(texto)}`, "_blank");
-  } catch (e) { setEstado("❌ " + (e?.message || e)); }
+    const r = await fetch("/api/otc", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${data?.session?.access_token || ""}` },
+      body: JSON.stringify({ accion: "invitar", telefono }) });
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true } : { ok: false, error: j.error || `error ${r.status}` };
+  } catch (e) { return { ok: false, error: e?.message || String(e) }; }
+}
+
+// El vendedor solo puede corregir SUS altas durante 10 minutos (Supabase también lo valida)
+const MIN_CORREGIR = 10;
+export function minutosParaCorregir(c, uid) {
+  if (!c || !uid || c.creado_por !== uid || !c.creado_en) return 0;
+  const quedan = MIN_CORREGIR - (Date.now() - new Date(c.creado_en).getTime()) / 60000;
+  return quedan > 0 ? Math.ceil(quedan) : 0;
 }
 
 // Formulario de alta / edición de un cliente. El teléfono es con lo que el cliente se identifica en el catálogo.
-function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
+function FormCliente({ inicial, rutaFija, esVendedor, uid, onGuardado, onCerrar }) {
   const original = inicial?.telefono || null;
   const [c, setC] = useState({
     ruta: rutaFija || inicial?.ruta || "J201", codigo_cliente: inicial?.codigo_cliente || "", nombre: inicial?.nombre || "",
@@ -162,6 +169,8 @@ function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
   });
   const [estado, setEstado] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  const [invitar, setInvitar] = useState(true); // al dar de alta, mandarle la invitación con el catálogo
+  const quedan = original && esVendedor ? minutosParaCorregir(inicial, uid) : null;
   const set = (k, v) => setC((x) => ({ ...x, [k]: v }));
   const inp = { width: "100%", boxSizing: "border-box", padding: "9px 10px", fontSize: 14 };
   const lab = { display: "block", fontSize: 12, color: "#9AA7BD", margin: "10px 0 4px" };
@@ -170,6 +179,7 @@ function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
     const telefono = normTel(c.telefono);
     if (telefono.length !== 12) return setEstado("⚠️ El teléfono debe ser de 10 dígitos.");
     if (!c.nombre.trim()) return setEstado("⚠️ Falta el nombre del cliente.");
+    if (original && esVendedor && !minutosParaCorregir(inicial, uid)) return setEstado("⚠️ Ya pasaron los 10 minutos para corregirlo. Pide a tu supervisor el cambio.");
     setOcupado(true); setEstado("Guardando…");
     try {
       if (telefono !== original) {
@@ -182,8 +192,16 @@ function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
         ? supabase.from("clientes_otc").update(fila).eq("telefono", original).select().single()
         : supabase.from("clientes_otc").insert(fila).select().single();
       const { data, error } = await q;
-      if (error) throw error;
-      onGuardado(data, original);
+      if (error) throw /row-level security/i.test(error.message) ? new Error("No tienes permiso para cambiar este cliente (ya pasaron los 10 minutos).") : error;
+      let aviso = "";
+      if (!original && invitar) {
+        setEstado("Mandando la invitación por WhatsApp…");
+        const r = await mandarInvitacion(telefono);
+        aviso = r.ok ? " 📩 Ya le llegó la invitación con el catálogo." : ` ⚠️ Se guardó, pero la invitación no salió: ${r.error}`;
+        if (r.ok) data.invitado_en = new Date().toISOString();
+      }
+      if (!original && esVendedor) aviso += ` Tienes ${MIN_CORREGIR} min para corregirlo si hay un error.`;
+      onGuardado(data, original, aviso);
     } catch (e) { setEstado("❌ " + (e?.message || e)); }
     setOcupado(false);
   }
@@ -198,9 +216,10 @@ function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
   return (
     <div className="card" style={{ padding: 14, marginBottom: 12, border: "1px solid #a78bfa66" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>{original ? "✏️ EDITAR CLIENTE" : "➕ NUEVO CLIENTE"}</div>
+        <div className="display" style={{ fontSize: 14, color: "#E8EDF5" }}>{original ? "✏️ CORREGIR CLIENTE" : "➕ NUEVO CLIENTE"}</div>
         <button onClick={onCerrar} style={{ background: "none", border: "none", color: "#9AA7BD", fontSize: 18, cursor: "pointer" }}>✕</button>
       </div>
+      {quedan != null && <div style={{ fontSize: 12.5, color: "#f59e0b", marginTop: 6 }}>⏱️ Te quedan {quedan} min para corregirlo. Después ya no se puede editar.</div>}
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 1 }}><label style={lab}>Ruta</label>
           {rutaFija ? <input style={inp} value={normRuta(rutaFija)} disabled />
@@ -218,11 +237,16 @@ function FormCliente({ inicial, rutaFija, onGuardado, onCerrar }) {
           </select></div>
       </div>
       <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, color: "#E8EDF5", marginTop: 12 }}>
-        <input type="checkbox" checked={c.activo} onChange={(e) => set("activo", e.target.checked)} /> Recibe la invitación / cuponera por WhatsApp
+        <input type="checkbox" checked={c.activo} onChange={(e) => set("activo", e.target.checked)} /> Recibe la invitación un día antes de su visita
       </label>
+      {!original && (
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, color: "#E8EDF5", marginTop: 8 }}>
+          <input type="checkbox" checked={invitar} onChange={(e) => setInvitar(e.target.checked)} /> 📩 Mandarle ahora el WhatsApp con el catálogo para su primer pedido
+        </label>
+      )}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
         <button onClick={guardar} disabled={ocupado} style={{ padding: "10px 22px", borderRadius: 12, border: "none", fontWeight: 800, background: "#22c55e", color: "#04130a", opacity: ocupado ? 0.5 : 1, cursor: "pointer" }}>Guardar</button>
-        {original && <button className="btn-ghost" style={{ fontSize: 13, color: "#f87171" }} onClick={borrar}>Quitar cliente</button>}
+        {original && !esVendedor && <button className="btn-ghost" style={{ fontSize: 13, color: "#f87171" }} onClick={borrar}>Quitar cliente</button>}
         <span style={{ fontSize: 12.5, color: estado.startsWith("❌") || estado.startsWith("⚠️") ? "#f59e0b" : "#9AA7BD" }}>{estado}</span>
       </div>
     </div>
@@ -237,6 +261,24 @@ function ClientesOtc({ rutaFija, puedeImportar }) {
   const [buscar, setBuscar] = useState("");
   const [filtroRuta, setFiltroRuta] = useState("todas");
   const [editando, setEditando] = useState(null); // {} = nuevo, cliente = editar
+  const esVendedor = !!rutaFija;
+  const [uid, setUid] = useState(null);
+  const [, setReloj] = useState(0);
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUid(data?.user?.id || null));
+    const t = setInterval(() => setReloj((n) => n + 1), 30000); // para que el contador de 10 min se actualice
+    return () => clearInterval(t);
+  }, []);
+  const puedeEditar = (c) => !esVendedor || minutosParaCorregir(c, uid) > 0;
+  const [enviando, setEnviando] = useState(null);
+  async function reenviar(c) {
+    if (!window.confirm(`¿Mandarle a ${c.nombre || c.telefono} el WhatsApp con el catálogo?`)) return;
+    setEnviando(c.telefono);
+    const r = await mandarInvitacion(c.telefono);
+    setEnviando(null);
+    if (r.ok) { setClientes((l) => l.map((x) => (x.telefono === c.telefono ? { ...x, invitado_en: new Date().toISOString() } : x))); setEstado(`📩 Invitación enviada a ${c.nombre}.`); }
+    else setEstado("❌ " + r.error);
+  }
 
   async function cargar() {
     setCargando(true);
@@ -271,13 +313,13 @@ function ClientesOtc({ rutaFija, puedeImportar }) {
     }
   }
 
-  function guardado(cli, original) {
+  function guardado(cli, original, aviso = "") {
     setClientes((l) => {
       const sin = l.filter((x) => x.telefono !== original);
       return cli ? [...sin, cli].sort((a, b) => `${a.ruta}${a.nombre}`.localeCompare(`${b.ruta}${b.nombre}`)) : sin;
     });
     setEditando(null);
-    setEstado(cli ? `✅ ${cli.nombre} guardado.` : "Cliente quitado.");
+    setEstado(cli ? `✅ ${cli.nombre} guardado.${aviso}` : "Cliente quitado.");
   }
 
   const q = sinAcento(buscar);
@@ -289,8 +331,9 @@ function ClientesOtc({ rutaFija, puedeImportar }) {
       <div className="card" style={{ padding: 14, marginBottom: 12 }}>
         <div style={{ fontSize: 12.5, color: "#9AA7BD", marginBottom: 10 }}>
           {rutaFija ? <>Tus clientes de la <b style={{ color: "#E8EDF5" }}>{normRuta(rutaFija)}</b>. </> : null}
-          El cliente se identifica con el <b style={{ color: "#E8EDF5" }}>teléfono registrado aquí</b>: la invitación de WhatsApp le llega a ese número con el botón “Hacer mi pedido”, y su pedido entra con su nombre, código y ruta. Con 📲 le mandas tú el link.
-          A los que tienen 🟢 les llega la invitación un día antes de su visita.
+          El cliente se identifica con el <b style={{ color: "#E8EDF5" }}>teléfono registrado aquí</b>: la invitación de WhatsApp le llega a ese número con el botón CATÁLOGO, y su pedido entra con su nombre, código y ruta.
+          A los que tienen 🟢 les llega la invitación un día antes de su visita. Con 📩 se la mandas en ese momento.
+          {esVendedor && <> Al dar de alta un cliente tienes <b style={{ color: "#E8EDF5" }}>10 minutos</b> para corregirlo; después solo tu supervisor puede cambiarlo.</>}
           {puedeImportar && <> También puedes subir un Excel con columnas <b>RUTA, CODIGO, NOMBRE, TELEFONO, DIA_DE_VISITA</b> (actualiza a los que ya existen).</>}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -310,7 +353,7 @@ function ClientesOtc({ rutaFija, puedeImportar }) {
         </div>
       </div>
 
-      {editando && <FormCliente key={editando.telefono || "nuevo"} inicial={editando.telefono ? editando : null} rutaFija={rutaFija} onGuardado={guardado} onCerrar={() => setEditando(null)} />}
+      {editando && <FormCliente key={editando.telefono || "nuevo"} inicial={editando.telefono ? editando : null} rutaFija={rutaFija} esVendedor={esVendedor} uid={uid} onGuardado={guardado} onCerrar={() => setEditando(null)} />}
 
       {!rutaFija && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
@@ -334,10 +377,15 @@ function ClientesOtc({ rutaFija, puedeImportar }) {
                 <div style={{ fontSize: 12, color: "#9AA7BD" }}>
                   {[!rutaFija && c.ruta, c.codigo_cliente && `#${c.codigo_cliente}`, c.telefono.slice(2), c.dia_visita && c.dia_visita.toLowerCase()].filter(Boolean).join(" · ")}
                 </div>
+                {c.invitado_en && <div style={{ fontSize: 11, color: "#64748b" }}>📩 invitado {new Date(c.invitado_en).toLocaleDateString("es-MX", { day: "numeric", month: "short" })}</div>}
               </div>
               <span title={c.activo ? "Recibe la invitación" : "No recibe la invitación"}>{c.activo ? "🟢" : "⚪"}</span>
-              <button className="btn-ghost" style={{ fontSize: 12 }} title="Mandarle su link al catálogo por WhatsApp" onClick={() => enviarLink(c, setEstado)}>📲</button>
-              <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => { setEditando(c); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Editar</button>
+              <button className="btn-ghost" style={{ fontSize: 12 }} title="Mandarle el WhatsApp oficial con el catálogo" disabled={enviando === c.telefono} onClick={() => reenviar(c)}>{enviando === c.telefono ? "…" : "📩"}</button>
+              {puedeEditar(c) && (
+                <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => { setEditando(c); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                  {esVendedor ? `Corregir · ${minutosParaCorregir(c, uid)} min` : "Editar"}
+                </button>
+              )}
             </div>
           ))}
           {visibles.length > 300 && <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>Mostrando 300 de {visibles.length}. Usa el buscador.</div>}
