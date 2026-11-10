@@ -73,7 +73,9 @@ async function linkCliente(req, tel) {
 export function partesLink(c) {
   let t = String(c || '');
   try { t = decodeURIComponent(t); } catch { /* ya venía decodificado */ }
-  const m = t.match(/(\d{12})\D{0,3}([0-9a-f]{16})/i);
+  // si viene pegado al ejemplo de la plantilla (…c=EJEMPLO<real>) se toma el ÚLTIMO, que es el del cliente
+  const todos = [...t.matchAll(/(\d{12})\D{0,3}([0-9a-f]{16})/gi)];
+  const m = todos[todos.length - 1];
   return m ? [m[1], m[2].toLowerCase()] : null;
 }
 async function telDeLink(c) {
