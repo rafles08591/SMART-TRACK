@@ -57,6 +57,7 @@ import MuralCampeonesView from "./MuralCampeonesView";
 import AlmacenView from "./AlmacenView";
 import UsuariosView from "./UsuariosView";
 import PedidosOtcView from "./PedidosOtcView";
+import { usePedidosOtcNuevos } from "./avisoPedidosOtc";
 
 // Módulo ALMACÉN: se agrega aquí si todavía no viene en OBJETIVO_TABS
 // (constants). Si después se agrega allá, no se duplica.
@@ -274,10 +275,14 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
     return () => { activo = false; clearInterval(intervalo); };
   }, []);
 
+  // pedidos OTC sin surtir (todas las rutas): el botón se pone verde y destella
+  const { total: pedidosOtcNuevos } = usePedidosOtcNuevos(null);
+
   // Estado de cada checklist de actividades, para pintar la pestaña
   // parpadeando en rojo (hay pendientes) o en verde (todo completo).
   const rutaPropiaStaff = puesto === "supervisor" ? "SUPERVISOR-1" : puesto === "supervisor2" ? "SUPERVISOR-2" : puesto === "gerente" ? "GERENTE" : null;
   const estadoTabsActividades = {
+    pedidos_otc: pedidosOtcNuevos > 0 ? "pedido_nuevo" : undefined,
     actividades_dia: (data.actividades?.dia?.items || []).length === 0 ? undefined : (data.actividades.dia.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_semana: (data.actividades?.semana?.items || []).length === 0 ? undefined : (data.actividades.semana.items.every((it) => it.hecha) ? "completo" : "pendiente"),
     actividades_mes: (data.actividades?.mes?.items || []).length === 0 ? undefined : (data.actividades.mes.items.every((it) => it.hecha) ? "completo" : "pendiente"),
@@ -477,6 +482,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
               }
               estadoTabs={estadoTabsActividades}
+              conteos={{ pedidos_otc: pedidosOtcNuevos }}
             />
           )}
 
