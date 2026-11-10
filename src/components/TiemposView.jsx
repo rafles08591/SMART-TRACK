@@ -186,6 +186,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
   const [selectedAccion, setSelectedAccion] = useState("");
   const [registrando, setRegistrando] = useState(false);
   const [kmSalida, setKmSalida] = useState("");
+  const [paquetesSalida, setPaquetesSalida] = useState(""); // va al Kardex de rutas y equipamiento
   const [actividadInput, setActividadInput] = useState("");
 
   const activoRef = useRef(activo);
@@ -344,13 +345,16 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
   // ni el flujo de "ruta completa" — es el mismo dato que ya se pedía
   // como campo extra al marcar Salida a ruta, solo que ahora también se
   // puede capturar/corregir como su propia acción, opcional.
-  const marcarKmSalida = async (ruta, kmValor) => {
+  const marcarKmSalida = async (ruta, kmValor, paquetesValor = "") => {
     if (!misAreas.includes("Salida a ruta")) return;
     const hoy = todayStr();
     let fresh = await fetchLatestActivo();
     if (fresh.fecha !== hoy) fresh = { fecha: hoy, rutas: {} };
     const r = normalizarRuta(fresh.rutas[ruta], ruta);
-    const nuevaRuta = { ...r, areas: { ...r.areas, salida_ruta: { ...r.areas.salida_ruta, km: Number(kmValor) } } };
+    const cambios = {};
+    if (String(kmValor).trim() !== "") cambios.km = Number(kmValor);
+    if (String(paquetesValor).trim() !== "") cambios.paquetes = Number(paquetesValor);
+    const nuevaRuta = { ...r, areas: { ...r.areas, salida_ruta: { ...r.areas.salida_ruta, ...cambios } } };
     await guardarActivo({ fecha: hoy, rutas: { ...fresh.rutas, [ruta]: nuevaRuta } });
   };
 
@@ -404,7 +408,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
   const puedeRegistrarActividad = puedeMarcarKm && esRutaSuplente(selectedRuta) && !!data && !!persistFresco;
   const opcionesAccion = [
     ...opcionesAccionBase,
-    ...(puedeMarcarKm ? [{ value: "km|standalone", label: "Marcar / corregir KM de salida" }] : []),
+    ...(puedeMarcarKm ? [{ value: "km|standalone", label: "Marcar / corregir KM y paquetes de salida" }] : []),
     ...(puedeRegistrarActividad ? [{ value: "actividad|standalone", label: "Registrar actividad del Suplente" }] : []),
   ];
 
@@ -432,15 +436,26 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
 
   const registrarAccionSeleccionada = async () => {
     if (!selectedAccion) return;
-    if (mostrarCampoKm && !String(kmSalida).trim()) {
+    // paquetes obligatorios al marcar la salida de una ruta de venta (no suplentes)
+    const pidePaquetes = esSalidaARuta && !esRutaSuplente(selectedRuta);
+    if (esSalidaARuta && !String(kmSalida).trim()) {
       alert("Captura el kilometraje.");
+      return;
+    }
+    if (pidePaquetes && !String(paquetesSalida).trim()) {
+      alert("Captura la cantidad de paquetes.");
+      return;
+    }
+    if (esKmStandalone && !String(kmSalida).trim() && !String(paquetesSalida).trim()) {
+      alert("Captura el kilometraje o los paquetes.");
       return;
     }
     if (esKmStandalone) {
       setRegistrando(true);
       try {
-        await marcarKmSalida(selectedRuta, kmSalida);
+        await marcarKmSalida(selectedRuta, kmSalida, paquetesSalida);
         setKmSalida("");
+        setPaquetesSalida("");
       } finally {
         setRegistrando(false);
       }
@@ -461,9 +476,12 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
     setRegistrando(true);
     try {
       if (modo === "instante") {
-        const extra = esSalidaARuta ? { km: Number(kmSalida) } : {};
+        const extra = esSalidaARuta
+          ? { km: Number(kmSalida), ...(String(paquetesSalida).trim() !== "" ? { paquetes: Number(paquetesSalida) } : {}) }
+          : {};
         await marcarInstante(selectedRuta, area.key, area.nombre, extra);
         setKmSalida("");
+        setPaquetesSalida("");
       }
       else if (modo === "entrada") await marcarEntrada(selectedRuta, area.key, area.nombre);
       else if (modo === "salida") await marcarSalida(selectedRuta, area.key, area.nombre);
@@ -636,14 +654,32 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
                   ? "Kilometraje con el que sale la unidad del CLO (obligatorio)"
                   : "Kilometraje de salida — puedes capturarlo o corregirlo aunque \"Salida a ruta\" ya esté marcada"}
               </div>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={kmSalida}
-                onChange={(e) => setKmSalida(e.target.value)}
-                placeholder="Ej. 21910"
-                style={{ width: "100%", maxWidth: 220, boxSizing: "border-box" }}
-              />
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: "#9AA7BD", flex: "1 1 160px", maxWidth: 220 }}>
+                  Kilometraje
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={kmSalida}
+                    onChange={(e) => setKmSalida(e.target.value)}
+                    placeholder="Ej. 21910"
+                    style={{ width: "100%", boxSizing: "border-box" }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11.5, color: "#9AA7BD", flex: "1 1 160px", maxWidth: 220 }}>
+                  Cantidad de paquetes{esSalidaARuta && !esRutaSuplente(selectedRuta) ? " (obligatorio)" : ""}
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={paquetesSalida}
+                    onChange={(e) => setPaquetesSalida(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") registrarAccionSeleccionada(); }}
+                    placeholder="Ej. 350"
+                    style={{ width: "100%", boxSizing: "border-box" }}
+                  />
+                </label>
+              </div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>Los paquetes se pasan solos al Kardex de rutas y equipamiento.</div>
             </div>
           )}
 
@@ -737,6 +773,7 @@ export default function TiemposView({ identidad, misAreas = [], onLogout, data =
                               <div className="mono" style={{ fontSize: 10, color: "#9AA7BD", display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 {area.ts && <span>{formatHora(area.ts)}</span>}
                                 {area.km != null && <span style={{ color: "#F2B134" }}>· {Number(area.km).toLocaleString("es-MX")} km</span>}
+                                {area.paquetes != null && <span style={{ color: "#a78bfa" }}>· {Number(area.paquetes).toLocaleString("es-MX")} paq</span>}
                                 {area.usuario && <span style={{ color: "#6b7280" }}>· {area.usuario}</span>}
                               </div>
                             </div>
