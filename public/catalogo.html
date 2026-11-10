@@ -172,9 +172,15 @@ const guardar = () => { try { localStorage.setItem(LLAVE, JSON.stringify(carrito
 
 // mismo cálculo que el servidor (el servidor es el que manda)
 function precioDe(p, cant) {
-  if (p.promo && cant >= p.promo.min) return { u: p.promo.precio, promo: true };
-  return { u: p.precio, promo: false };
+  if (p.promo?.tipo === 'regalo') { // ej. 11x10: se cobra normal y por cada 10 se regala 1
+    const regalo = Math.floor(cant / p.promo.paga) * (p.promo.lleva - p.promo.paga);
+    return { u: p.precio, promo: regalo > 0, regalo };
+  }
+  if (p.promo && cant >= p.promo.min) return { u: p.promo.precio, promo: true, regalo: 0 };
+  return { u: p.precio, promo: false, regalo: 0 };
 }
+const esRegalo = (pr) => pr?.tipo === 'regalo';
+const textoRegalo = (pr) => `Por cada ${pr.paga} te regalamos ${pr.lleva - pr.paga}`;
 
 async function cargar() {
   try {
@@ -216,9 +222,11 @@ function pintarChips() {
 function tarjeta(p) {
   const n = carrito[p.id] || 0;
   const pr = p.promo;
-  const directo = pr && pr.min <= 1;
-  const badge = pr ? `<span class="badge">${pr.pct ? '-' + pr.pct + '%' : 'PROMO'}</span>` : '';
-  const precios = directo
+  const directo = pr && !esRegalo(pr) && pr.min <= 1;
+  const badge = !pr ? '' : esRegalo(pr) ? `<span class="badge">🎁 ${pr.lleva}x${pr.paga}</span>` : `<span class="badge">${pr.pct ? '-' + pr.pct + '%' : 'PROMO'}</span>`;
+  const precios = esRegalo(pr)
+    ? `<span class="precio">${money(p.precio)}</span><span class="desde">🎁 ${textoRegalo(pr)}</span>`
+    : directo
     ? `<span class="precio pr">${money(pr.precio)}</span><span class="antes">${money(p.precio)}</span>`
     : `<span class="precio">${money(p.precio)}</span>${pr ? `<span class="desde">${pr.min}+ pzs: ${money(pr.precio)} c/u</span>` : ''}`;
   return `<div class="prod">
@@ -254,16 +262,16 @@ function pintar() {
 }
 
 function resumen() {
-  let piezas = 0, total = 0, normal = 0;
+  let piezas = 0, total = 0, normal = 0, regalos = 0;
   const lineas = [];
   for (const [id, n] of Object.entries(carrito)) {
     const p = productos.find((x) => String(x.id) === id);
     if (!p || !n) continue;
-    const { u, promo } = precioDe(p, n);
-    piezas += n; total += u * n; normal += p.precio * n;
-    lineas.push({ p, n, u, promo });
+    const { u, promo, regalo } = precioDe(p, n);
+    piezas += n; total += u * n; normal += p.precio * (n + regalo); regalos += regalo;
+    lineas.push({ p, n, u, promo, regalo });
   }
-  return { piezas, total, ahorro: normal - total, lineas };
+  return { piezas, total, ahorro: normal - total, lineas, regalos };
 }
 function barra() {
   const r = resumen();
@@ -293,8 +301,9 @@ function verDetalle(id) {
     ${p.imagen ? `<img src="${esc(p.imagen)}" alt="">` : ''}
     <h3 style="margin-top:14px">${esc(p.nombre)}</h3>
     ${p.presentacion ? `<div class="pres">${esc(p.presentacion)}</div>` : ''}
-    <div class="precios" style="margin-top:8px">${pr && pr.min <= 1 ? `<span class="precio pr">${money(pr.precio)}</span><span class="antes">${money(p.precio)}</span>` : `<span class="precio">${money(p.precio)}</span>`}</div>
-    ${pr ? `<div class="ptexto" style="margin-top:8px">🔥 ${esc(pr.texto || 'Promoción')}${pr.min > 1 ? ` · desde ${pr.min} pzs a ${money(pr.precio)} c/u` : ''}${pr.hasta ? ` · hasta el ${new Date(pr.hasta + 'T12:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })}` : ''}</div>` : ''}
+    <div class="precios" style="margin-top:8px">${pr && !esRegalo(pr) && pr.min <= 1 ? `<span class="precio pr">${money(pr.precio)}</span><span class="antes">${money(p.precio)}</span>` : `<span class="precio">${money(p.precio)}</span>`}</div>
+    ${esRegalo(pr) ? `<div class="ptexto" style="margin-top:8px">🎁 Promo ${pr.lleva}x${pr.paga}: ${textoRegalo(pr)}${pr.texto ? ` · ${esc(pr.texto)}` : ''}${pr.hasta ? ` · hasta el ${new Date(pr.hasta + 'T12:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })}` : ''}</div>` : ''}
+    ${pr && !esRegalo(pr) ? `<div class="ptexto" style="margin-top:8px">🔥 ${esc(pr.texto || 'Promoción')}${pr.min > 1 ? ` · desde ${pr.min} pzs a ${money(pr.precio)} c/u` : ''}${pr.hasta ? ` · hasta el ${new Date(pr.hasta + 'T12:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })}` : ''}</div>` : ''}
     ${p.descripcion ? `<p>${esc(p.descripcion)}</p>` : ''}
     ${!puedePedir() ? '' : n ? paso(p.id, n) : `<button class="agregar" data-mas="${p.id}">Agregar al pedido</button>`}
   </div>`, 'detalle');
@@ -305,13 +314,14 @@ function verCarrito(error = '') {
   if (!r.lineas.length) { cerrar(); return; }
   const v = (id) => esc(document.getElementById(id)?.value || '');
   abrir(`<h3>Tu pedido</h3>
-    ${r.lineas.map(({ p, n, u, promo }) => `<div class="linea">
+    ${r.lineas.map(({ p, n, u, promo, regalo }) => `<div class="linea">
       ${p.imagen ? `<img src="${esc(p.imagen)}" alt="">` : `<div class="mini">${ini(p.nombre)}</div>`}
-      <div><div class="nom">${esc(p.nombre)}</div><div class="pres">${money(u)} c/u${p.presentacion ? ' · ' + esc(p.presentacion) : ''}</div>${paso(p.id, n)}</div>
-      <div class="imp">${money(u * n)}${promo ? '<small>promo</small>' : ''}</div>
+      <div><div class="nom">${esc(p.nombre)}</div><div class="pres">${money(u)} c/u${p.presentacion ? ' · ' + esc(p.presentacion) : ''}</div>
+        ${regalo ? `<div class="desde">🎁 +${regalo} de regalo</div>` : esRegalo(p.promo) ? `<div class="pres">🎁 Lleva ${p.promo.paga} y te regalamos ${p.promo.lleva - p.promo.paga}</div>` : ''}${paso(p.id, n)}</div>
+      <div class="imp">${money(u * n)}${regalo ? '<small>+ regalo</small>' : promo ? '<small>promo</small>' : ''}</div>
     </div>`).join('')}
     <div class="tot">
-      <div><span>${r.piezas} pieza${r.piezas === 1 ? '' : 's'}</span><span></span></div>
+      <div><span>${r.piezas} pieza${r.piezas === 1 ? '' : 's'}${r.regalos ? ` + ${r.regalos} de regalo 🎁` : ''}</span><span></span></div>
       ${r.ahorro > 0.009 ? `<div class="ahorro"><span>Te ahorras</span><span>${money(r.ahorro)}</span></div>` : ''}
       <div class="g"><span>Total</span><span>${money(r.total)}</span></div>
     </div>
@@ -340,7 +350,7 @@ async function enviar() {
     }
     abrir(`<div class="ok"><div class="check">✓</div>
       <h3>¡Pedido recibido!</h3>
-      <p>Folio <b>#${esc(j.folio)}</b> · Total <b>${money(j.total)}</b>${j.ahorro > 0.009 ? ` · ahorraste ${money(j.ahorro)}` : ''}</p>
+      <p>Folio <b>#${esc(j.folio)}</b> · Total <b>${money(j.total)}</b>${j.ahorro > 0.009 ? ` · ahorraste ${money(j.ahorro)}` : ''}${j.regalos ? ` · 🎁 ${j.regalos} de regalo` : ''}</p>
       <p>${j.dia_visita ? `Se entrega el <b>${esc(j.dia_visita.toLowerCase())}</b> con tu vendedor.` : 'Tu vendedor te lo entrega en tu día de visita.'}</p>
       ${j.registrado ? '' : '<p>Un supervisor te contactará para confirmar tu día de entrega.</p>'}
       <button class="enviar" data-cerrar>Seguir viendo el catálogo</button></div>`, 'ok');
@@ -357,7 +367,8 @@ document.addEventListener('click', (e) => {
   else if (t.id === 'enviar') enviar();
   else if ('cerrar' in t.dataset) cerrar();
 });
-document.addEventListener('change', (e) => { if (e.target.dataset.cant) cambiar(e.target.dataset.cant, e.target.value); });
+// se difiere un instante: si el cambio llega al salir del cuadro (blur), no se repinta mientras el navegador lo quita
+document.addEventListener('change', (e) => { const t = e.target; if (t.dataset.cant) setTimeout(() => cambiar(t.dataset.cant, t.value), 0); });
 $('#velo').addEventListener('click', cerrar);
 $('#q').addEventListener('input', (e) => { q = e.target.value; pintar(); });
 cargar();
