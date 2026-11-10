@@ -143,6 +143,8 @@ function statusOverride(status) {
     case "pendiente_urgente":
     case "aviso_nuevo":
       return { color: "#f87171", pulse: true, badge: true };
+    case "pedido_nuevo": // cayó un pedido: verde y destellando fuerte
+      return { color: "#22c55e", pulse: true, badge: true, flash: true };
     case "parpadeo_verde":
       return { color: "#4ade80", pulse: true, badge: false };
     case "completo":
@@ -154,7 +156,7 @@ function statusOverride(status) {
   }
 }
 
-const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, intense: intenseProp, onSelect }) {
+const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, badge, intense: intenseProp, flash, count, onSelect }) {
   const [pressed, setPressed] = useState(false);
   const intense = pulse && (badge || intenseProp);
 
@@ -172,12 +174,14 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
         gap: 7, padding: "14px 6px", borderRadius: 14, cursor: "pointer", textAlign: "center",
         border: `1px solid ${active ? color : color + "38"}`,
-        background: `radial-gradient(120% 140% at 50% -10%, ${color}22, transparent 60%), linear-gradient(155deg, #0e1626 0%, #0a1220 100%)`,
+        background: flash
+          ? `radial-gradient(120% 140% at 50% -10%, ${color}66, transparent 70%), linear-gradient(155deg, #0b2a1a 0%, #0a1a12 100%)`
+          : `radial-gradient(120% 140% at 50% -10%, ${color}22, transparent 60%), linear-gradient(155deg, #0e1626 0%, #0a1220 100%)`,
         boxShadow: active ? `0 0 16px -3px ${color}` : "none",
         transform: pressed ? "scale(0.93)" : "scale(1)",
         transition: "transform .12s ease, border-color .2s ease",
         touchAction: "manipulation",
-        animation: intense ? "neonShake 2.4s ease-in-out infinite" : undefined,
+        animation: flash ? "neonShake 1.2s ease-in-out infinite" : intense ? "neonShake 2.4s ease-in-out infinite" : undefined,
       }}
     >
       {pulse && (
@@ -185,8 +189,10 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
           aria-hidden
           style={{
             position: "absolute", inset: -1, borderRadius: 14,
-            boxShadow: intense ? `0 0 26px 2px ${color}` : `0 0 16px -2px ${color}`,
-            animation: intense
+            boxShadow: flash ? `0 0 34px 6px ${color}, inset 0 0 18px ${color}` : intense ? `0 0 26px 2px ${color}` : `0 0 16px -2px ${color}`,
+            animation: flash
+              ? "neonFlash 0.6s ease-in-out infinite"
+              : intense
               ? "neonPulseIntense 0.9s ease-in-out infinite"
               : "neonPulse 2.1s ease-in-out infinite",
             pointerEvents: "none",
@@ -195,7 +201,16 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
         />
       )}
 
-      {badge && (
+      {count > 0 ? (
+        <span
+          aria-label={`${count} nuevos`}
+          style={{
+            position: "absolute", top: -6, right: -6, minWidth: 20, height: 20, padding: "0 5px", borderRadius: 10,
+            background: color, color: "#03140a", fontSize: 11.5, fontWeight: 900, lineHeight: "20px",
+            boxShadow: `0 0 10px ${color}`, animation: "badgeBlink 0.6s ease-in-out infinite", zIndex: 2,
+          }}
+        >{count > 99 ? "99+" : count}</span>
+      ) : badge && (
         <span
           aria-hidden
           style={{
@@ -230,7 +245,7 @@ const Tile = memo(function Tile({ tKey, label, icon, img, color, active, pulse, 
 // Sin acentos y en minúsculas, para buscar "almacen" y encontrar "ALMACÉN"
 const norm = (t) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
-export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} }) {
+export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {}, conteos = {} }) {
   const [busqueda, setBusqueda] = useState("");
   const inputRef = useRef(null);
   const q = norm(busqueda);
@@ -316,6 +331,8 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
                   pulse={!!status?.pulse || !!meta.alwaysPulse}
                   badge={!!status?.badge}
                   intense={!!meta.alwaysPulse}
+                  flash={!!status?.flash}
+                  count={conteos[t.key] || 0}
                   onSelect={elegir}
                 />
               );
@@ -337,6 +354,10 @@ export default function NeonObjetivoTabs({ tab, setTab, tabs, estadoTabs = {} })
           94% { transform: scale(1.03); }
           96% { transform: scale(0.99); }
           98% { transform: scale(1.03); }
+        }
+        @keyframes neonFlash {
+          0%, 100% { opacity: 0.1; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.06); }
         }
         @keyframes badgeBlink {
           0%, 100% { opacity: 1; transform: scale(1); }
