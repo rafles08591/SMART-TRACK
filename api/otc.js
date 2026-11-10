@@ -18,6 +18,10 @@
 //   GET  /api/otc?accion=clientes_dia&dia=LUNES
 //   GET  /api/otc?accion=cliente&telefono=5232…   → incluye "link" al catálogo
 //   POST /api/otc  { accion:'pedido', telefono, nombre, origen, productos:[{codigo,producto,cantidad,precio}], texto, total }
+//   GET  /api/otc?accion=pedidos_cliente&telefono=…   → sus pedidos (texto para Paulina): folio, fecha, productos, total, estado
+//   POST /api/otc  { accion:'cancelar', telefono, folio, motivo? }          → solo pedidos NUEVOS de ese mismo teléfono
+//   POST /api/otc  { accion:'modificar', telefono, folio, productos }       → reemplaza el pedido con la lista completa nueva
+//        productos puede venir como arreglo o como texto JSON: [{ "producto": "Caribe Cooler Durazno", "cantidad": 3 }]
 //
 // Variables opcionales: OTC_LINK_SECRET (si no, usa BOT_TOKEN) · OTC_AVISO_WEBHOOK (webhook de n8n que avisa
 // al supervisor de cada pedido hecho en la página) · OTC_CATALOGO_URL (por defecto <este dominio>/catalogo.html)
@@ -64,6 +68,7 @@ const normRuta = (r) => {
   return m ? `J${m[1] || m[2]}` : String(r || '').trim().toUpperCase();
 };
 const normDia = (d) => String(d || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const texto = (t) => new Response(t, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
 const redondea = (n) => Math.round(n * 100) / 100;
 const hoyMX = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
 
@@ -309,6 +314,68 @@ export default async function handler(req) {
       });
       return json({ ok: true, registrado: !!cli.telefono, pedido: nuevo });
     }
+    if (req.method === 'GET' && accion === 'pedidos_cliente') {
+      const tel = normTel(url.searchParams.get('telefono'));
+      if (tel.length !== 12) return texto('No pude identificar el teléfono del cliente.');
+      const desde = new Date(Date.now() - 30 * 86400000).toISOString();
+      const lista = await rest(`pedidos_otc?telefono=eq.${tel}&creado_en=gte.${desde}&select=id,creado_en,estado,productos,texto,total,dia_visita,origen,nota&order=creado_en.desc&limit=20`);
+      if (!lista.length) return texto('El cliente NO tiene pedidos en los últimos 30 días.');
+      const abiertos = lista.filter((p) => p.estado === 'nuevo').length;
+      const fmt = (p) => {
+        const f = new Date(p.creado_en).toLocaleString('es-MX', { timeZone: 'America/Mexico_City', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        const prods = (p.productos || []).map((x) => `${x.cantidad} x ${x.producto}${x.precio ? ` ($${x.precio} c/u)` : ''}`).join('; ') || p.texto;
+        const est = p.estado === 'nuevo' ? 'PENDIENTE de entregar (se puede cancelar o modificar)' : p.estado === 'entregado' ? 'ENTREGADO' : 'CANCELADO';
+        return `- Folio #${p.id} · ${f} · ${est} · ${prods}${p.total ? ` · Total $${p.total}` : ''}${p.dia_visita ? ` · entrega ${String(p.dia_visita).toLowerCase()}` : ''}`;
+      };
+      return texto(`El cliente tiene ${lista.length} pedido(s) en los últimos 30 días, ${abiertos} pendiente(s):\n${lista.map(fmt).join('\n')}`);
+    }
+
+    if (req.method === 'POST' && (accion === 'cancelar' || accion === 'modificar')) {
+      const tel = normTel(body.telefono);
+      const folio = Number(String(body.folio || '').replace(/\D/g, ''));
+      if (tel.length !== 12 || !folio) return texto('ERROR: falta el folio del pedido. Pregúntale al cliente cuál pedido (folio).');
+      const p = (await rest(`pedidos_otc?id=eq.${folio}&select=*`))[0];
+      if (!p || p.telefono !== tel) return texto(`ERROR: el folio #${folio} no es de este cliente. Consulta sus pedidos y usa un folio de la lista.`);
+      if (p.estado !== 'nuevo') return texto(`ERROR: el pedido #${folio} ya está ${p.estado === 'entregado' ? 'ENTREGADO' : 'CANCELADO'} y no se puede cambiar.`);
+      const ahora = new Date().toISOString();
+      const nota = (extra) => [p.nota, extra].filter(Boolean).join(' · ');
+
+      if (accion === 'cancelar') {
+        await rest(`pedidos_otc?id=eq.${folio}`, { method: 'PATCH', body: JSON.stringify({ estado: 'cancelado', actualizado_por: 'Cliente (WhatsApp)', actualizado_en: ahora,
+          nota: nota(`Cancelado por el cliente por WhatsApp${body.motivo ? ': ' + String(body.motivo).slice(0, 120) : ''}`) }) });
+        return texto(`OK: el pedido #${folio} quedó CANCELADO.`);
+      }
+
+      // modificar: se toma la lista completa nueva y se ponen los precios del catálogo
+      let lista = body.productos;
+      if (typeof lista === 'string') { try { lista = JSON.parse(lista); } catch { lista = []; } }
+      lista = (Array.isArray(lista) ? lista : []).map((x) => ({ producto: String(x.producto || x.nombre || '').trim(), cantidad: Math.floor(Number(x.cantidad)) }))
+        .filter((x) => x.producto && x.cantidad > 0 && x.cantidad <= 999);
+      if (!lista.length) return texto('ERROR: la lista nueva está vacía. Si el cliente ya no quiere nada, usa cancelar.');
+      const hoy = hoyMX();
+      const catalogo = await productosActivos();
+      const n = (t) => normDia(t).replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const buscar = (q) => {
+        const nq = n(q);
+        return catalogo.find((c) => n(c.nombre) === nq || (c.codigo && n(c.codigo) === nq))
+          || catalogo.find((c) => n(c.nombre).includes(nq) || nq.includes(n(c.nombre)));
+      };
+      const faltan = [], productos = [];
+      for (const x of lista) {
+        const c = buscar(x.producto);
+        if (!c) { faltan.push(x.producto); continue; }
+        const pr = precioPara(c, x.cantidad, hoy);
+        productos.push({ id: c.id, codigo: c.codigo || null, producto: c.nombre + (c.presentacion ? ` (${c.presentacion})` : ''), cantidad: x.cantidad,
+          precio: pr.precio, precio_normal: pr.normal, promo: pr.promo, importe: redondea(pr.precio * x.cantidad) });
+      }
+      if (faltan.length) return texto(`ERROR: no encontré en el catálogo: ${faltan.join(', ')}. Consulta el catálogo y usa el nombre exacto. No se cambió nada.`);
+      const total = redondea(productos.reduce((s, x) => s + x.importe, 0));
+      await rest(`pedidos_otc?id=eq.${folio}`, { method: 'PATCH', body: JSON.stringify({ productos, total,
+        texto: productos.map((x) => `${x.cantidad} x ${x.producto} · $${x.importe}${x.promo ? ' (promo)' : ''}`).join('\n'),
+        actualizado_por: 'Cliente (WhatsApp)', actualizado_en: ahora, nota: nota('Modificado por el cliente por WhatsApp') }) });
+      return texto(`OK: el pedido #${folio} quedó así:\n${productos.map((x) => `${x.cantidad} x ${x.producto} = $${x.importe}`).join('\n')}\nTotal: $${total}`);
+    }
+
     return json({ error: 'acción no válida' }, 400);
   } catch (e) {
     return json({ error: String(e.message || e) }, 500);
