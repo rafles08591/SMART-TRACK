@@ -8,15 +8,17 @@ import { supabase } from "../supabaseClient";
 const CATEGORIAS_BASE = ["Cigarros", "Encendedores", "Vualá y dulces", "Bebidas", "Otros"];
 const BUCKET = "catalogo_otc";
 const vacio = () => ({ codigo: "", nombre: "", categoria: "Cigarros", presentacion: "", descripcion: "", precio: "", imagen_url: "", activo: true, destacado: false, orden: 100,
-  descuento_pct: "", precio_promo: "", promo_min: 1, promo_texto: "", promo_desde: "", promo_hasta: "" });
+  descuento_pct: "", precio_promo: "", promo_min: 1, promo_lleva: "", promo_paga: "", promo_texto: "", promo_desde: "", promo_hasta: "" });
 const money = (n) => "$" + (Math.round(Number(n) * 100) / 100).toLocaleString("es-MX", { maximumFractionDigits: 2 });
 const sinAcento = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
 const hoyMX = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 const txt = (v) => String(v ?? "").trim();
 const num = (v) => (v === "" || v == null || isNaN(Number(v)) ? null : Number(v));
 
+// Promo de regalo tipo 11x10: lleva 11, paga 10
+export const esRegalo = (p) => Number(p.promo_paga) > 0 && Number(p.promo_lleva) > Number(p.promo_paga);
 export function promoVigente(p, hoy = hoyMX()) {
-  if (!(Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0)) return false;
+  if (!(Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0 || esRegalo(p))) return false;
   if (p.promo_desde && p.promo_desde > hoy) return false;
   if (p.promo_hasta && p.promo_hasta < hoy) return false;
   return true;
@@ -47,7 +49,7 @@ function Vista({ p }) {
   return (
     <div style={{ width: 170, background: "#fff", borderRadius: 14, overflow: "hidden", color: "#1c1917", position: "relative", boxShadow: "0 4px 14px rgba(0,0,0,.25)" }}>
       {vig && <span style={{ position: "absolute", top: 6, left: 6, background: "#15803d", color: "#fff", fontWeight: 800, fontSize: 11, padding: "3px 7px", borderRadius: 7 }}>
-        {Number(p.precio_promo) > 0 ? `-${Math.round((1 - p.precio_promo / p.precio) * 100)}%` : `-${p.descuento_pct}%`}</span>}
+        {esRegalo(p) ? `🎁 ${p.promo_lleva}x${p.promo_paga}` : Number(p.precio_promo) > 0 ? `-${Math.round((1 - p.precio_promo / p.precio) * 100)}%` : `-${p.descuento_pct}%`}</span>}
       <div style={{ aspectRatio: "1/1", display: "flex", alignItems: "center", justifyContent: "center" }}>
         {p.imagen_url ? <img src={p.imagen_url} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6 }} /> : <span style={{ color: "#d6d3d1", fontWeight: 900, fontSize: 26 }}>FOTO</span>}
       </div>
@@ -56,9 +58,11 @@ function Vista({ p }) {
         {p.presentacion && <div style={{ fontSize: 11, color: "#78716c" }}>{p.presentacion}</div>}
         {vig && p.promo_texto && <div style={{ fontSize: 10.5, fontWeight: 700, color: "#92400e", background: "#fef3c7", borderRadius: 5, padding: "1px 5px", display: "inline-block", marginTop: 3 }}>{p.promo_texto}</div>}
         <div style={{ marginTop: 6, display: "flex", gap: 5, alignItems: "baseline", flexWrap: "wrap" }}>
-          {vig && min <= 1 ? (<><b style={{ color: "#15803d", fontSize: 16 }}>{money(pp)}</b><s style={{ fontSize: 11, color: "#78716c" }}>{money(p.precio)}</s></>)
+          {vig && esRegalo(p) ? (<><b style={{ fontSize: 16 }}>{money(p.precio)}</b>
+            <span style={{ width: "100%", fontSize: 10.5, color: "#15803d", fontWeight: 700 }}>🎁 Por cada {p.promo_paga} te regalamos {p.promo_lleva - p.promo_paga}</span></>)
+          : vig && min <= 1 ? (<><b style={{ color: "#15803d", fontSize: 16 }}>{money(pp)}</b><s style={{ fontSize: 11, color: "#78716c" }}>{money(p.precio)}</s></>)
             : <b style={{ fontSize: 16 }}>{Number(p.precio) > 0 ? money(p.precio) : "$—"}</b>}
-          {vig && min > 1 && <span style={{ width: "100%", fontSize: 10.5, color: "#15803d", fontWeight: 700 }}>{min}+ pzs: {money(pp)} c/u</span>}
+          {vig && !esRegalo(p) && min > 1 && <span style={{ width: "100%", fontSize: 10.5, color: "#15803d", fontWeight: 700 }}>{min}+ pzs: {money(pp)} c/u</span>}
         </div>
       </div>
     </div>
@@ -71,7 +75,7 @@ function Editor({ inicial, categorias, onGuardado, onCerrar }) {
   const [p, setP] = useState({ ...vacio(), ...limpio, precio: inicial.precio ?? "", descuento_pct: inicial.descuento_pct ?? "", precio_promo: inicial.precio_promo ?? "", promo_desde: inicial.promo_desde || "", promo_hasta: inicial.promo_hasta || "" });
   const [estado, setEstado] = useState("");
   const [ocupado, setOcupado] = useState(false);
-  const [tipoPromo, setTipoPromo] = useState(Number(inicial.precio_promo) > 0 ? "precio" : Number(inicial.descuento_pct) > 0 ? "pct" : "no");
+  const [tipoPromo, setTipoPromo] = useState(esRegalo(inicial) ? "regalo" : Number(inicial.precio_promo) > 0 ? "precio" : Number(inicial.descuento_pct) > 0 ? "pct" : "no");
   const set = (k, v) => setP((x) => ({ ...x, [k]: v }));
   const inp = { width: "100%", boxSizing: "border-box", padding: "9px 10px", fontSize: 14 };
   const lab = { display: "block", fontSize: 12, color: "#9AA7BD", margin: "10px 0 4px" };
@@ -99,12 +103,15 @@ function Editor({ inicial, categorias, onGuardado, onCerrar }) {
       presentacion: txt(p.presentacion) || null, descripcion: txt(p.descripcion) || null, precio: num(p.precio),
       imagen_url: p.imagen_url || null, activo: !!p.activo, destacado: !!p.destacado, orden: Number(p.orden) || 100,
       descuento_pct: tipoPromo === "pct" ? num(p.descuento_pct) : null, precio_promo: tipoPromo === "precio" ? num(p.precio_promo) : null,
+      promo_lleva: tipoPromo === "regalo" ? Math.floor(Number(p.promo_lleva)) || null : null,
+      promo_paga: tipoPromo === "regalo" ? Math.floor(Number(p.promo_paga)) || null : null,
       promo_min: Math.max(1, Number(p.promo_min) || 1), promo_texto: tipoPromo === "no" ? null : txt(p.promo_texto) || null,
       promo_desde: tipoPromo === "no" ? null : p.promo_desde || null, promo_hasta: tipoPromo === "no" ? null : p.promo_hasta || null,
       actualizado_en: new Date().toISOString(),
     };
     if (fila.precio_promo && fila.precio && fila.precio_promo >= fila.precio) return setEstado("⚠️ El precio de promoción debe ser menor al normal.");
     if (fila.descuento_pct != null && (fila.descuento_pct <= 0 || fila.descuento_pct >= 100)) return setEstado("⚠️ El descuento va de 1 a 99 %.");
+    if (tipoPromo === "regalo" && !(fila.promo_paga > 0 && fila.promo_lleva > fila.promo_paga)) return setEstado("⚠️ En la promo de regalo, lo que lleva debe ser mayor a lo que paga (ej. lleva 11, paga 10).");
     setOcupado(true); setEstado("Guardando…");
     const q = p.id ? supabase.from("catalogo_otc").update(fila).eq("id", p.id).select().single() : supabase.from("catalogo_otc").insert(fila).select().single();
     const { data, error } = await q;
@@ -152,21 +159,32 @@ function Editor({ inicial, categorias, onGuardado, onCerrar }) {
           <div style={{ marginTop: 14, padding: 12, borderRadius: 12, background: "#0f172a", border: "1px solid #1E2A42" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF5", marginBottom: 8 }}>🔥 Promoción</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {[["no", "Sin promo"], ["pct", "% de descuento"], ["precio", "Precio especial"]].map(([k, l]) => (
+              {[["no", "Sin promo"], ["pct", "% de descuento"], ["precio", "Precio especial"], ["regalo", "🎁 Producto de regalo"]].map(([k, l]) => (
                 <button key={k} onClick={() => setTipoPromo(k)} style={{ padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer",
                   border: `1px solid ${tipoPromo === k ? "#22c55e" : "#1E2A42"}`, background: tipoPromo === k ? "#22c55e22" : "transparent", color: tipoPromo === k ? "#22c55e" : "#9AA7BD" }}>{l}</button>
               ))}
             </div>
             {tipoPromo !== "no" && (
               <>
+                {tipoPromo === "regalo" ? (
+                  <>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                      <div style={{ flex: 1 }}><label style={lab}>Lleva</label><input style={inp} inputMode="numeric" value={p.promo_lleva} onChange={(e) => set("promo_lleva", e.target.value)} placeholder="11" /></div>
+                      <div style={{ paddingBottom: 10, color: "#9AA7BD", fontWeight: 800 }}>x</div>
+                      <div style={{ flex: 1 }}><label style={lab}>Paga</label><input style={inp} inputMode="numeric" value={p.promo_paga} onChange={(e) => set("promo_paga", e.target.value)} placeholder="10" /></div>
+                    </div>
+                    {esRegalo(p) && <div style={{ fontSize: 12, color: "#22c55e", marginTop: 6 }}>🎁 Por cada {p.promo_paga} que compre se le regala{p.promo_lleva - p.promo_paga > 1 ? "n" : ""} {p.promo_lleva - p.promo_paga}. Ej.: pide {p.promo_paga * 2} → recibe {p.promo_lleva * 2} y paga {p.promo_paga * 2}.</div>}
+                  </>
+                ) : (
                 <div style={{ display: "flex", gap: 8 }}>
                   {tipoPromo === "pct"
                     ? <div style={{ flex: 1 }}><label style={lab}>Descuento %</label><input style={inp} inputMode="decimal" value={p.descuento_pct} onChange={(e) => set("descuento_pct", e.target.value)} placeholder="10" /></div>
                     : <div style={{ flex: 1 }}><label style={lab}>Precio en promo</label><input style={inp} inputMode="decimal" value={p.precio_promo} onChange={(e) => set("precio_promo", e.target.value)} placeholder="0.00" /></div>}
                   <div style={{ flex: 1 }}><label style={lab}>Desde cuántas piezas</label><input style={inp} inputMode="numeric" value={p.promo_min} onChange={(e) => set("promo_min", e.target.value)} /></div>
                 </div>
+                )}
                 <label style={lab}>Texto de la promo (opcional)</label>
-                <input style={inp} value={p.promo_texto || ""} onChange={(e) => set("promo_texto", e.target.value)} placeholder="Precio de lanzamiento" />
+                <input style={inp} value={p.promo_texto || ""} onChange={(e) => set("promo_texto", e.target.value)} placeholder={tipoPromo === "regalo" ? "Llévate 11 y paga 10" : "Precio de lanzamiento"} />
                 <div style={{ display: "flex", gap: 8 }}>
                   <div style={{ flex: 1 }}><label style={lab}>Empieza</label><input type="date" style={inp} value={p.promo_desde} onChange={(e) => set("promo_desde", e.target.value)} /></div>
                   <div style={{ flex: 1 }}><label style={lab}>Termina</label><input type="date" style={inp} value={p.promo_hasta} onChange={(e) => set("promo_hasta", e.target.value)} /></div>
@@ -184,7 +202,8 @@ function Editor({ inicial, categorias, onGuardado, onCerrar }) {
         </div>
         <div style={{ flex: "0 0 auto" }}>
           <div style={{ fontSize: 12, color: "#9AA7BD", margin: "10px 0 6px" }}>Así lo ve el cliente</div>
-          <Vista p={{ ...p, descuento_pct: tipoPromo === "pct" ? p.descuento_pct : null, precio_promo: tipoPromo === "precio" ? p.precio_promo : null, promo_desde: tipoPromo === "no" ? null : p.promo_desde, promo_hasta: tipoPromo === "no" ? null : p.promo_hasta }} />
+          <Vista p={{ ...p, descuento_pct: tipoPromo === "pct" ? p.descuento_pct : null, precio_promo: tipoPromo === "precio" ? p.precio_promo : null,
+            promo_lleva: tipoPromo === "regalo" ? p.promo_lleva : null, promo_paga: tipoPromo === "regalo" ? p.promo_paga : null, promo_desde: tipoPromo === "no" ? null : p.promo_desde, promo_hasta: tipoPromo === "no" ? null : p.promo_hasta }} />
         </div>
       </div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 16 }}>
@@ -316,8 +335,9 @@ export default function CatalogoOtcAdmin() {
               <div style={{ fontSize: 12, color: "#9AA7BD" }}>{[p.codigo, p.categoria, p.presentacion].filter(Boolean).join(" · ")}</div>
               <div style={{ fontSize: 13, marginTop: 2 }}>
                 {Number(p.precio) > 0 ? <b style={{ color: "#E8EDF5" }}>{money(p.precio)}</b> : <span style={{ color: "#f59e0b" }}>sin precio</span>}
-                {vig && <span style={{ color: "#22c55e", fontWeight: 700 }}> → {money(precioPromo(p))}{Number(p.promo_min) > 1 ? ` desde ${p.promo_min} pzs` : ""}</span>}
-                {!vig && (Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0) && <span style={{ color: "#64748b" }}> · promo fuera de fecha</span>}
+                {vig && esRegalo(p) && <span style={{ color: "#22c55e", fontWeight: 700 }}> · 🎁 {p.promo_lleva}x{p.promo_paga}</span>}
+                {vig && !esRegalo(p) && <span style={{ color: "#22c55e", fontWeight: 700 }}> → {money(precioPromo(p))}{Number(p.promo_min) > 1 ? ` desde ${p.promo_min} pzs` : ""}</span>}
+                {!vig && (Number(p.precio_promo) > 0 || Number(p.descuento_pct) > 0 || esRegalo(p)) && <span style={{ color: "#64748b" }}> · promo fuera de fecha</span>}
               </div>
             </div>
             <button onClick={() => alternar(p)} title={p.activo ? "Visible: toca para ocultar" : "Oculto: toca para mostrar"} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer" }}>{p.activo ? "🟢" : "⚪"}</button>
