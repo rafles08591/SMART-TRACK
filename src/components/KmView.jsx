@@ -41,14 +41,23 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
     .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
 
   const [km, setKm] = useState("");
+  const [paquetes, setPaquetes] = useState(""); // va al Kardex de rutas y equipamiento
+  const ultimaConPaq = revisionesHoy
+    .filter((r) => r.operativo?.paquetes != null && r.operativo.paquetes !== "")
+    .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
   const [guardando, setGuardando] = useState(false);
   const [enviado, setEnviado] = useState(false);
   const [error, setError] = useState(null);
 
   async function guardar() {
     const valor = String(km).trim();
-    if (!valor) {
-      setError("Escribe el kilometraje.");
+    const paq = String(paquetes).trim();
+    if (!valor && !paq) {
+      setError("Escribe el kilometraje y la cantidad de paquetes.");
+      return;
+    }
+    if (!paq && !ultimaConPaq) {
+      setError("Escribe también la cantidad de paquetes.");
       return;
     }
     if (!unidadId) {
@@ -65,10 +74,11 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
         fecha: new Date().toISOString(),
         capturadoPor: identidad,
         esSoloKm: true,
-        operativo: { kilometraje: valor },
+        operativo: { ...(valor ? { kilometraje: valor } : {}), ...(paq ? { paquetes: paq } : {}) },
       });
       setEnviado(true);
       setKm("");
+      setPaquetes("");
     } catch (err) {
       console.error("Error guardando km:", err);
       setError("No se pudo guardar. Revisa tu conexión e intenta de nuevo.");
@@ -81,30 +91,45 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
     <div>
       <div className="display" style={{ fontSize: 16, color: "#E8EDF5", marginBottom: 6 }}>KILOMETRAJE</div>
       <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 16 }}>
-        Captura aquí el kilometraje de tu unidad{unidad?.placas ? ` (${unidad.placas})` : ""} — se refleja directo en "Salida de hoy".
+        Captura aquí el kilometraje de tu unidad{unidad?.placas ? ` (${unidad.placas})` : ""} y los paquetes con los que sales — se reflejan directo en el Kardex de salida.
       </div>
 
-      {ultimaConKm && (
-        <div className="card" style={{ padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {(ultimaConKm || ultimaConPaq) && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div style={{ fontSize: 12, color: "#9AA7BD" }}>Ya capturado hoy</div>
-          <div className="mono" style={{ fontSize: 16, color: "#3DDC97", fontWeight: 700 }}>
-            {Number(ultimaConKm.operativo.kilometraje).toLocaleString("es-MX")} km
+          <div className="mono" style={{ fontSize: 16, color: "#3DDC97", fontWeight: 700, textAlign: "right" }}>
+            {ultimaConKm && <>{Number(ultimaConKm.operativo.kilometraje).toLocaleString("es-MX")} km</>}
+            {ultimaConPaq && <span style={{ color: "#a78bfa" }}>{ultimaConKm ? " · " : ""}{Number(ultimaConPaq.operativo.paquetes).toLocaleString("es-MX")} paq</span>}
           </div>
         </div>
       )}
 
       <div className="card" style={{ padding: 16 }}>
-        <div style={{ fontSize: 12, color: "#9AA7BD", marginBottom: 8 }}>Kilometraje actual</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <input
-            type="number"
-            inputMode="numeric"
-            value={km}
-            onChange={(e) => setKm(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") guardar(); }}
-            placeholder="Ej. 42150"
-            style={{ flex: "1 1 160px", boxSizing: "border-box" }}
-          />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#9AA7BD", flex: "1 1 140px" }}>
+            Kilometraje actual
+            <input
+              type="number"
+              inputMode="numeric"
+              value={km}
+              onChange={(e) => setKm(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") guardar(); }}
+              placeholder="Ej. 42150"
+              style={{ width: "100%", boxSizing: "border-box" }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#9AA7BD", flex: "1 1 140px" }}>
+            Cantidad de paquetes
+            <input
+              type="number"
+              inputMode="numeric"
+              value={paquetes}
+              onChange={(e) => setPaquetes(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") guardar(); }}
+              placeholder="Ej. 350"
+              style={{ width: "100%", boxSizing: "border-box" }}
+            />
+          </label>
           <button className="btn" onClick={guardar} disabled={guardando}>
             <Gauge size={14} style={{ verticalAlign: "-2px" }} /> {guardando ? "Guardando..." : "Guardar"}
           </button>
@@ -112,7 +137,7 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
         {error && <div style={{ fontSize: 12, color: "#FF6B6B", marginTop: 10 }}>{error}</div>}
         {enviado && !error && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#3DDC97", marginTop: 10 }}>
-            <Check size={13} /> Kilometraje guardado.
+            <Check size={13} /> Guardado. Ya aparece en el Kardex de salida.
           </div>
         )}
       </div>
