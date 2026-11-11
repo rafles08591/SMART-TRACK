@@ -1285,6 +1285,11 @@ const normTxt = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[
 
 function casiIgual(a, b) { // distancia de edición ≤ 1 (para faltas de ortografía: swich / siwch / switch)
   if (a === b) return true;
+  // dos letras volteadas cuentan como una sola falta (siwch ↔ swich)
+  if (a.length === b.length) {
+    const d = [...a].map((c, i) => (c !== b[i] ? i : -1)).filter((i) => i >= 0);
+    if (d.length === 2 && d[1] === d[0] + 1 && a[d[0]] === b[d[1]] && a[d[1]] === b[d[0]]) return true;
+  }
   if (Math.abs(a.length - b.length) > 1) return false;
   let i = 0, j = 0, dif = 0;
   while (i < a.length && j < b.length) {
@@ -1375,14 +1380,36 @@ async function ventasPorProducto(texto, cfg) {
     && (!rutasPedidas.size || rutasPedidas.has(claveRuta(vendedor)));
   av = av.filter((x) => esMia(x.vendedor));
   otc = otc.filter((x) => esMia(x.vendedor));
-  const fecha = [...av.map((x) => x.fecha), ...otc.map((x) => x.fecha)].filter(Boolean).sort().pop() || null;
+  // Cada reporte con SU fecha más reciente: el de avance y el de OTC no siempre se cargan el mismo día
+  // (antes se tomaba la más nueva de los dos y el OTC de un día antes se quedaba fuera).
+  const fechaAv = av.map((x) => x.fecha).filter(Boolean).sort().pop() || null;
+  const fechaOtc = otc.map((x) => x.fecha).filter(Boolean).sort().pop() || null;
+  // Solo se usa el detalle de HOY: si un reporte no se ha actualizado hoy, no se dan datos de otro día
+  const hoyMx = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+  const avHoy = fechaAv === hoyMx, otcHoy = fechaOtc === hoyMx;
+  const fecha = hoyMx;
+  const sinActualizar = [!avHoy && `avance (último cargado: ${fechaAv || 'ninguno'})`, !otcHoy && `OTC (último cargado: ${fechaOtc || 'ninguno'})`].filter(Boolean);
+  const codigoNum = (c) => String(c || '').replace(/\D/g, '').replace(/^0+/, ''); // FA0316 = 0316 = 316
+  const compacto = (t) => normTxt(t).replace(/\s+/g, '');
+  const codigosApodo = porApodo ? new Set([...porApodo.codigos].map(codigoNum).filter(Boolean)) : new Set();
+  const articulosApodo = porApodo ? [...porApodo.articulos].map(compacto).filter(Boolean) : [];
+  // Si no hubo apodo y ninguna palabra se parece a ningún artículo vendido (de ningún día), no era una
+  // pregunta de producto ("ya te moriste otra vez?") → que conteste la IA normal
+  if (!porApodo && !general) {
+    const nombres = new Set();
+    for (const x of [...av, ...otc]) for (const k of normTxt(`${x.articulo} ${x.marca || ''}`).split(' ')) if (k.length >= 3) nombres.add(k);
+    const parece = (w) => [...nombres].some((k) => k.includes(w) || casiIgual(w, k) || (w.length >= 4 && casiIgual(w, k.slice(0, w.length))));
+    if (!palabras.some(parece)) return null;
+  }
   const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   // Cuántas de las palabras trae el artículo (se quedan los que traen más: "marlboro ice" → los ICE)
   const coincide = (...campos) => {
     if (general) return 1;
     if (porApodo) { // con apodo: los artículos dados de alta para ese nombre valen más
       const [articulo, codigo] = campos;
-      if (porApodo.articulos.has(normTxt(articulo)) || (codigo && porApodo.codigos.has(String(codigo).trim().toUpperCase()))) return 100;
+      const art = compacto(articulo);
+      if (articulosApodo.some((a) => a && (art === a || art.includes(a) || a.includes(art) && art.length >= 6))) return 100;
+      if (codigo && codigosApodo.has(codigoNum(codigo))) return 100;
     }
     // Además del apodo, se busca por nombre con todas las palabras (por si el artículo vendido
     // todavía no tiene apodo, p. ej. una presentación nueva)
@@ -1393,7 +1420,8 @@ async function ventasPorProducto(texto, cfg) {
     // Coincide si la palabra está dentro del nombre, o si se parece a un pedazo del nombre
     // (una letra de diferencia, o el pedazo empieza con la palabra: "swich" ~ "swichc")
     return lista.filter((w) => h.includes(w) || tokens.some((k) => casiIgual(w, k)
-      || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2))).length;
+      || (w.length >= 4 && (k.startsWith(w) || w.startsWith(k)) && Math.abs(k.length - w.length) <= 2)
+      || (w.length >= 4 && k.length > w.length && k.length - w.length <= 2 && casiIgual(w, k.slice(0, w.length))))).length;
   };
   const productos = {};
   const sumar = (clave, nombre, tipo, ruta, cant, monto, puntos) => {
@@ -1403,12 +1431,12 @@ async function ventasPorProducto(texto, cfg) {
     rr.cantidad += cant; rr.pesos += monto;
   };
   for (const x of av) {
-    const pts = x.fecha === fecha ? coincide(x.articulo, x.marca) : 0;
+    const pts = avHoy && x.fecha === hoyMx ? coincide(x.articulo, x.marca) : 0;
     if (!pts) continue;
     sumar(`av:${x.articulo}`, x.articulo + (x.marca ? ` (${x.marca})` : ''), 'paquetes', claveRuta(x.vendedor), Number(x.paquetes) || 0, Number(x.monto) || 0, pts);
   }
   for (const x of otc) {
-    const pts = x.fecha === fecha ? coincide(x.articulo, x.codigoArticulo) : 0;
+    const pts = otcHoy && x.fecha === hoyMx ? coincide(x.articulo, x.codigoArticulo) : 0;
     if (!pts) continue;
     sumar(`otc:${x.codigoArticulo || x.articulo}`, `${x.articulo}${x.codigoArticulo ? ` [${x.codigoArticulo}]` : ''} (OTC)`, 'piezas', claveRuta(x.vendedor), Number(x.unidadesVendidas) || 0, Number(x.monto) || 0, pts);
   }
@@ -1425,18 +1453,21 @@ async function ventasPorProducto(texto, cfg) {
     // Totales exactos por ruta (para que la IA no sume a mano): mismos que la tabla de la app
     const totales = {};
     for (const x of av) {
-      if (x.fecha !== fecha) continue;
+      if (!avHoy || x.fecha !== hoyMx) continue;
       const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
       t.paquetes += Number(x.paquetes) || 0; t.venta_pesos += Number(x.monto) || 0;
     }
     for (const x of otc) {
-      if (x.fecha !== fecha) continue;
+      if (!otcHoy || x.fecha !== hoyMx) continue;
       const t = totales[claveRuta(x.vendedor)] || (totales[claveRuta(x.vendedor)] = { paquetes: 0, venta_pesos: 0, otc_pesos: 0, otc_piezas: 0 });
       t.otc_pesos += Number(x.monto) || 0; t.otc_piezas += Number(x.unidadesVendidas) || 0;
     }
     const redondear = (t) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v)]));
     return {
       fecha_del_detalle: fecha,
+      fecha_detalle_avance: fechaAv, fecha_detalle_otc: fechaOtc,
+      ...(sinActualizar.length ? { sin_actualizar_hoy: sinActualizar,
+        aviso: `Todavía NO se ha cargado hoy el detalle de: ${sinActualizar.join(' y ')}. NO des datos de otro día de ese reporte; dile al jefe que aún no está actualizado.` } : {}),
       tipo_consulta: 'detalle general por producto',
       rutas_del_equipo: [...misRutas].sort(),
       ...(rutasPedidas.size ? { solo_rutas: [...rutasPedidas] } : {}),
@@ -1459,13 +1490,17 @@ async function ventasPorProducto(texto, cfg) {
     .slice(0, 15);
   return {
     fecha_del_detalle: fecha,
+    fecha_detalle_avance: fechaAv, fecha_detalle_otc: fechaOtc,
+    ...(sinActualizar.length ? { sin_actualizar_hoy: sinActualizar } : {}),
     palabras_buscadas: porApodo ? porApodo.frases : palabras,
     ...(porApodo ? { buscado_por_apodo: true } : {}),
     encontrado: lista.length > 0,
     productos: lista,
     nota: lista.length
-      ? `Venta real por artículo del detalle del día, SOLO de las rutas del equipo (${[...misRutas].sort().join(', ')}). Paquetes en avance, piezas en OTC. Las rutas que no aparecen no vendieron ese producto.`
-      : `En el detalle de ventas del día NO hay ninguna venta de ese producto en las rutas del equipo (${[...misRutas].sort().join(', ')}).`,
+      ? `Venta real de HOY por artículo, SOLO de las rutas del equipo (${[...misRutas].sort().join(', ')}). Paquetes en avance, piezas en OTC. Las rutas que no aparecen no vendieron ese producto.${sinActualizar.length ? ` OJO: todavía no se ha cargado hoy el detalle de ${sinActualizar.join(' y ')}; dilo, y NO des datos de otro día.` : ''}`
+      : sinActualizar.length
+        ? `No se puede responder todavía: hoy aún NO se ha cargado el detalle de ${sinActualizar.join(' y ')}. NO digas que no hay venta y NO des datos de otro día: dile al jefe que ese reporte todavía no está actualizado hoy.`
+        : `En el detalle de HOY no hay ninguna venta de ese producto en las rutas del equipo (${[...misRutas].sort().join(', ')}).`,
   };
 }
 
