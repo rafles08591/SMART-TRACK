@@ -840,6 +840,10 @@ async function datosRetro(fecha, cfg) {
   } catch {}
 
   const vuala = await vualaPorRuta(fecha, todos);
+  // Swich y Vualá Vainilla contra visitas (1 por cada 10), solo si están prendidos para la retro
+  const indsCfg = indicadoresConfig(cfg, filas);
+  const conf = (k) => indsCfg.find((i) => i.clave === k);
+  const piezasVis = ['swich_visitas', 'vainilla_visitas'].some((k) => conf(k)?.retro) ? await piezasPorVisitasHoy(fecha, cfg) : null;
   const rutas = [];
   for (const c of todos) {
     if (c.tipo !== 'vendedor' || !c.activo) continue;
@@ -878,6 +882,8 @@ async function datosRetro(fecha, cfg) {
       blossom: marcas.blossom,
       summer: marcas.summer,
       faronet: marcas.faronet,
+      swich: conf('swich_visitas')?.retro ? valorIndicador('swich_visitas', fila, m, null, piezasVis) : null,
+      vainilla: conf('vainilla_visitas')?.retro ? valorIndicador('vainilla_visitas', fila, m, null, piezasVis) : null,
     });
   }
 
@@ -885,9 +891,16 @@ async function datosRetro(fecha, cfg) {
   const { h } = horaActualMX();
   const lider = rutas[0] || null;
   const enCero = rutas.filter(r => r.venta_dia === 0);
-  // Candidatos: los 3 con menor % de su meta del día (sin contar al líder)
-  const pachuco = rutas.filter((r) => r.ruta !== lider?.ruta)
-    .sort((a, b) => (a.pct_dia ?? 999) - (b.pct_dia ?? 999) || a.venta_dia - b.venta_dia).slice(0, 3);
+  // Tercera Mano del Pachuco (castigo): los 3 con el RENDIMIENTO GENERAL más bajo (todos los indicadores
+  // con su valor). Se salvan las 3 mejores y quien pase de 60%.
+  let pachuco = [];
+  try {
+    const t = await tablaIndicadores(fecha, cfg, { filas, todos });
+    const rend = rendimientoGeneral(t, false);
+    const conRend = rutas.filter((r) => rend[claveRuta(r.ruta)]);
+    for (const r of conRend) Object.assign(r, rend[claveRuta(r.ruta)]);
+    pachuco = marcarTercera(conRend).expuestos.slice(0, 3);
+  } catch (e) { console.error('tercera mano retro', e); }
 
   return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, pachuco, rutas };
 }
@@ -910,8 +923,12 @@ function textoRetroFijo(d) {
   const sinVuala = d.rutas.filter((r) => !r.vuala);
   L.push(sinVuala.length ? `🥤 Sin vender Vuala: ${sinVuala.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '🥤 ¡Todas las rutas ya vendieron Vuala!');
   if (d.pachuco.length) {
-    L.push('', '🖐️ *Candidatos a la Tercera Mano del Pachuco:*');
-    d.pachuco.forEach((r, i) => L.push(`${i + 1}. ${tag(r)} (${ruta(r)}) · ${r.pct_dia ?? '—'}% · le faltan ${miles(r.falta)} paq`));
+    L.push('', '🖐️ *En riesgo de la Tercera Mano del Pachuco:*');
+    d.pachuco.forEach((r, i) => {
+      L.push(`${i + 1}. ${tag(r)} (${ruta(r)}) · rendimiento general *${r.indice}%* · le faltan ${r.puntos_para_salvarse} pts`);
+      if (r.como_salvarse?.length) L.push(`   🛟 ${r.como_salvarse.map(accionCorta).join(' · ')}`);
+    });
+    L.push('_Rendimiento general = todos los indicadores con su valor. Se salvan las 3 mejores y quien pase de 60%._');
   }
   L.push('', '━━━━━━━━━━━━━━━');
   for (const r of d.rutas) {
@@ -920,8 +937,14 @@ function textoRetroFijo(d) {
     if (marcas.length) L.push(`   ${marcas.join(' · ')}`);
     const sv = r.sinVuala ? `S/Vuala ${r.sinVuala.piezas}/${r.sinVuala.minimo} ${r.sinVuala.piezas >= r.sinVuala.minimo ? '✅' : '❌'}` : null;
     L.push(`   OTC ${dinero(r.otc)}${r.otc_meta ? `/${dinero(r.otc_meta)}` : ''}${sv ? ` · ${sv}` : ''} · Vuala ${r.vuala ? `${r.vuala} pz ✅` : '❌'}`);
+    // 1 Swich y 1 Vualá Vainilla por cada 10 clientes visitados
+    const pv = (nom, x) => (x && x.meta ? `${nom} ${x.avance}/${x.meta} ${x.avance >= x.meta ? '✅' : '❌'}` : null);
+    const porVis = [pv('Swich', r.swich), pv('Vainilla', r.vainilla)].filter(Boolean);
+    if (porVis.length) L.push(`   ${porVis.join(' · ')} _(${r.swich?.visitas ?? r.vainilla?.visitas} visitas)_`);
   }
-  L.push('', '━━━━━━━━━━━━━━━', '🟢 meta del día cubierta · 🟡 80% o más · 🔴 abajo', '¡Vamos equipo, a cerrar fuerte! 💪');
+  L.push('', '━━━━━━━━━━━━━━━', '🟢 meta del día cubierta · 🟡 80% o más · 🔴 abajo');
+  if (d.rutas.some((r) => r.swich?.meta || r.vainilla?.meta)) L.push('Swich / Vainilla: 1 por cada 10 clientes visitados');
+  L.push('¡Vamos equipo, a cerrar fuerte! 💪');
   return L.join('\n');
 }
 
@@ -931,22 +954,28 @@ async function chispaRetro(d, cfg) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
   const tono = TONOS[cfg?.tonoBot] || TONOS.compa;
-  const r = (x) => ({ ruta: claveRuta(x.ruta), nombre: x.nombre, paquetes: x.venta_dia, meta: x.obj, pct: x.pct_dia, le_faltan: x.falta });
+  const r = (x) => ({ ruta: claveRuta(x.ruta), nombre: x.nombre, paquetes: x.venta_dia, meta: x.obj, pct: x.pct_dia, le_faltan_para_su_meta: x.falta });
+  const riesgo = (x) => ({ ...r(x), rendimiento_general: x.indice, puntos_para_salvarse: x.puntos_para_salvarse,
+    como_salvarse: (x.como_salvarse || []).map((y) => ({ indicador: y.indicador, lleva: y.avance, meta: y.meta, falta: y.falta, unidad: y.unidad, le_sube_puntos: y.sube })) });
   const datos = {
     hora: d.hora,
     lider: d.lider_dia ? { ...r(d.lider_dia), ya_cumplio_meta: (d.lider_dia.pct_dia ?? 0) >= 100 } : null,
     ya_cumplieron_meta_del_dia: d.rutas.filter((x) => (x.pct_dia ?? 0) >= 100).map(r),
     cerca_80_a_99: d.rutas.filter((x) => (x.pct_dia ?? 0) >= 80 && (x.pct_dia ?? 0) < 100).map(r),
-    candidatos_tercera_mano: d.pachuco.map(r),
+    tercera_mano_es_castigo: 'La Tercera Mano del Pachuco es un CASTIGO para las rutas con el rendimiento general más bajo (todos los indicadores con su valor), NO un premio ni una meta. Se salvan las 3 mejores y quien pase de 60% de rendimiento general.',
+    en_riesgo_tercera_mano: d.pachuco.map(riesgo),
     en_cero: d.en_cero.map(r),
     sin_vender_vuala: d.rutas.filter((x) => !x.vuala).map((x) => claveRuta(x.ruta)),
+    // 1 Swich y 1 Vualá Vainilla por cada 10 clientes visitados
+    les_falta_swich: d.rutas.filter((x) => x.swich?.meta && x.swich.avance < x.swich.meta).map((x) => ({ ruta: claveRuta(x.ruta), lleva: x.swich.avance, deberia: x.swich.meta })),
+    les_falta_vainilla: d.rutas.filter((x) => x.vainilla?.meta && x.vainilla.avance < x.vainilla.meta).map((x) => ({ ruta: claveRuta(x.ruta), lleva: x.vainilla.avance, deberia: x.vainilla.meta })),
   };
   const sistema = [
     'Eres ROBOTINA, la compañera bot del equipo de ventas de ruta de JMD (cigarros) en Puerto Vallarta.',
     tono,
     'Vas a escribir DOS partes cortas para la retro de la hora en el grupo de WhatsApp. La tabla con los números ya va aparte; tú solo pones la chispa.',
     '"intro" (2-3 líneas): saluda según la hora (buenos días / buenas tardes / buenas noches), con energía, y reconoce al líder del día. Solo FELICITA a quien ya cumplió su meta del día (100% o más); si el líder no ha llegado al 100%, reconoce que va adelante pero rétalo a cerrarla.',
-    '"cierre" (4-6 líneas): rétalos y motívalos. Dirígete con nombre a los candidatos a la Tercera Mano del Pachuco con un reto concreto usando cuántos paquetes les faltan; empuja a los que van cerca (80-99%) a pasar el 100%; si alguien no ha vendido Vuala, recuérdaselo. Termina con una frase de aliento que los haga crecer (actitud, disciplina, constancia). Varía las frases, nada repetitivo.',
+    '"cierre" (4-6 líneas): rétalos y motívalos. La Tercera Mano del Pachuco es un CASTIGO (nunca digas "alcanzar la Tercera Mano"): a los que están en riesgo dirígete con nombre y dales cómo SALVARSE con "como_salvarse" (qué vender y cuántos puntos les sube); ahorita el foco es Swich y Vualá Vainilla (1 por cada 10 visitas), menciónalos primero si les faltan; empuja a los que van cerca (80-99%) a pasar el 100%; si alguien no ha vendido Vuala, recuérdaselo. Termina con una frase de aliento que los haga crecer (actitud, disciplina, constancia). Varía las frases, nada repetitivo.',
     'MENCIONES: escribe @ + la ruta y el nombre, ej. "@J203 Ana". Nunca escribas teléfonos.',
     'Usa SOLO los números de los datos; no inventes cifras ni hagas cuentas nuevas. Formato WhatsApp (*negritas*), pocos emojis.',
     'Responde SOLO con JSON: {"intro":"...","cierre":"..."}',
@@ -984,7 +1013,7 @@ async function textoRetroIA(d, cfg) {
     'Estructura:',
     '1) Saludo con hora y líder (más paquetes).',
     '2) Si hay rutas en cero, menciónalas. Si no, di que no hay.',
-    '3) "Candidatos para la mano del pachuco": las 3 rutas más bajas (excluyendo al líder).',
+    '3) "En riesgo de la Tercera Mano del Pachuco" (es un castigo): las 3 rutas con el rendimiento general más bajo (pachuco: indice y como_salvarse); se salvan las 3 mejores y quien pase de 60% de rendimiento general.',
     '4) Resumen por ruta: paquetes (%), OTC $, Sin Vuala (✅ si 2 o más, ❌ si menos), ICE, BLOSSOM, SUMMER, FARONET (del día).',
     '5) Cierre motivacional.',
     'Usa @número para mencionar. Usa solo los números del JSON.',
@@ -1092,57 +1121,111 @@ async function contextoDatos(c) {
 // ------------------------------------------------------------------ 🔄 REFRESCO ANTES DE CONTESTAR
 // Si el robot actualizó hace menos de MIN_FRESCO minutos, se contesta directo sin volver a refrescar.
 
-async function candidatosTercera(cfg, equipo) {
-  const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
-  if (!fecha) return null;
-  const t = await tablaIndicadores(fecha, cfg);
-  const vend = {};
-  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
-  const inds = t.inds.filter((i) => i.ia && (equipo || !i.exclusivo));
-  const rutas = t.rutas.filter((x) => vend[x.ruta]).map(({ ruta, f, valores }) => {
-    const c = vend[ruta];
+// 🖐️ La Tercera Mano del Pachuco es un CASTIGO para las rutas con el RENDIMIENTO GENERAL más bajo.
+// Rendimiento general = promedio PONDERADO del cumplimiento de cada indicador marcado para la
+// Tercera Mano (tope 100% cada uno). Cada indicador tiene su "valor" (peso), configurable en
+// SMART-TRACK → Indicadores de Robotina. Se SALVAN: las 3 mejores y quien pase de 60%.
+const RENDIMIENTO_SALVA = 60;
+const MEJORES_SALVADOS = 3;
+// Valor por defecto de cada indicador (si no se configuró). Swich y Vainilla pesan más: son el foco.
+const PESO_DEF = { venta_dia: 3, swich_visitas: 3, vainilla_visitas: 3 };
+function pesoDe(i) {
+  const p = Number(i?.peso);
+  return Number.isFinite(p) && p >= 0 && i?.peso !== null && i?.peso !== '' ? p : (PESO_DEF[i?.clave] ?? 1);
+}
+
+// Rendimiento general por ruta: { J201: { indice, lista:[...], ... } }. "sube" = puntos de rendimiento
+// que gana la ruta si cumple ese indicador al 100% (así se sabe qué le conviene más).
+function rendimientoGeneral(t, equipo) {
+  const valida = (i) => (equipo || !i.exclusivo) && pesoDe(i) > 0;
+  let inds = t.inds.filter((i) => i.tercera && valida(i));
+  if (!inds.length) inds = t.inds.filter((i) => i.ia && valida(i));
+  const out = {};
+  for (const { ruta, m, valores } of t.rutas) {
     const lista = inds
       .map((i) => {
         const v = valores[i.clave];
         if (!v) return null;
         const comp = v.comp ?? v.pct;
         if (comp === null || comp === undefined) return null;
-        return { indicador: i.nombre, unidad: i.unidad, avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
+        return { clave: i.clave, indicador: i.nombre, unidad: i.unidad, peso: pesoDe(i), avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
       })
       .filter(Boolean);
-    const indice = lista.length ? Math.round(lista.reduce((s, x) => s + Math.min(100, x.comp), 0) / lista.length) : null;
-    return {
-      ruta,
-      nombre: primerNombre(c?.nombre || f.nombre || '', ruta),
-      mencion: mencion(c?.telefono),
+    const sumP = lista.reduce((s, x) => s + x.peso, 0);
+    if (!sumP) continue;
+    const indice = Math.round(lista.reduce((s, x) => s + Math.min(100, x.comp) * x.peso, 0) / sumP);
+    for (const x of lista) x.sube = Math.round((x.peso * (100 - Math.min(100, x.comp))) / sumP);
+    out[ruta] = {
       indice,
       indicadores_medidos: lista.length,
       cumplidos: lista.filter((x) => x.comp >= 100).length,
-      // Donde más le falta (lo que lo hace candidato)
-      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => a.comp - b.comp).slice(0, 6),
+      // Donde más gana si lo cumple (primero lo que más sube su rendimiento)
+      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => b.sube - a.sube || a.comp - b.comp),
+      efectividad_visitas: m?.efectividad === null || m?.efectividad === undefined ? null : Math.round(m.efectividad),
     };
-  }).filter((r) => r.indice !== null).sort((a, b) => a.indice - b.indice);
-  const candidatos = rutas.slice(0, 3);
-  const corte = rutas[3] || null; // el 4° lugar desde abajo: a ese nivel hay que llegar para salir
+  }
+  return out;
+}
+
+// Marca quién se salva y arma su "cómo salvarse" (los indicadores que más le suben, hasta pasar de 60%).
+function marcarTercera(rutas) {
+  const mejores = new Set([...rutas].sort((a, b) => b.indice - a.indice).slice(0, MEJORES_SALVADOS).map((r) => r.ruta));
+  for (const r of rutas) {
+    r.salvado_por_top = mejores.has(r.ruta);
+    r.salvado_por_rendimiento = r.indice > RENDIMIENTO_SALVA;
+    r.salvado = r.salvado_por_top || r.salvado_por_rendimiento;
+    r.puntos_para_salvarse = r.salvado_por_rendimiento ? 0 : RENDIMIENTO_SALVA + 1 - r.indice;
+    const acciones = [];
+    let suma = 0;
+    for (const x of r.debajo || []) {
+      if (!x.sube) continue;
+      acciones.push(x);
+      suma += x.sube;
+      if (suma >= r.puntos_para_salvarse && acciones.length >= 2) break;
+    }
+    r.como_salvarse = acciones.slice(0, 4);
+  }
+  const expuestos = rutas.filter((r) => !r.salvado).sort((a, b) => a.indice - b.indice);
+  return { mejores, expuestos };
+}
+
+async function candidatosTercera(cfg, equipo) {
+  const fecha = await fechaUltimoCorte({ hasta: fechaMX() });
+  if (!fecha) return null;
+  const t = await tablaIndicadores(fecha, cfg);
+  const vend = {};
+  for (const c of t.todos) if (c.tipo === 'vendedor' && c.activo) vend[claveRuta(c.ruta)] = c;
+  const rend = rendimientoGeneral(t, equipo);
+  const rutas = Object.entries(rend).filter(([ruta]) => vend[ruta]).map(([ruta, x]) => {
+    const c = vend[ruta];
+    const f = t.rutas.find((y) => y.ruta === ruta)?.f || {};
+    return { ruta, nombre: primerNombre(c?.nombre || f.nombre || '', ruta), mencion: mencion(c?.telefono), ...x };
+  }).sort((a, b) => a.indice - b.indice);
+  const { expuestos } = marcarTercera(rutas);
+  const candidatos = expuestos.slice(0, 3).map((r) => ({ ...r, debajo: r.debajo.slice(0, 6) }));
   return {
     fecha,
-    regla: 'índice = promedio del cumplimiento de cada indicador (tope 100%); del día contra su meta, del periodo contra el ritmo esperado',
+    que_es: 'La Tercera Mano del Pachuco es un CASTIGO para las rutas con el rendimiento general más bajo (no es premio ni meta). Se salvan las 3 mejores y cualquiera con rendimiento general mayor a 60%.',
+    regla: 'rendimiento general = promedio ponderado del cumplimiento de cada indicador (cada uno con su "peso", tope 100%); del día contra su meta, del periodo contra el ritmo esperado. "sube" = puntos de rendimiento que gana si cumple ese indicador.',
+    salvados_por_rendimiento: rutas.filter((r) => r.salvado_por_rendimiento && !r.salvado_por_top).map((r) => ({ ruta: r.ruta, nombre: r.nombre, rendimiento: r.indice })),
     candidatos,
-    para_salir_superar_a: corte ? { ruta: corte.ruta, nombre: corte.nombre, indice: corte.indice } : null,
-    ranking_desde_abajo: rutas.map((r) => ({ ruta: r.ruta, nombre: r.nombre, indice: r.indice })),
+    ranking_desde_abajo: rutas.map((r) => ({ ruta: r.ruta, nombre: r.nombre, rendimiento: r.indice, salvado: r.salvado })),
   };
 }
 
+const fmtUnidad = (v, u) => (u === '$' ? `$${Math.round(v || 0).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v || 0)} ${u}`);
+// "Swich 1/4 pz (+9)": avance/meta y los puntos de rendimiento que gana si lo cumple
+const accionCorta = (x) => `${x.indicador.replace(/ \(1 por cada 10 visitas\)/, '')} ${x.meta !== null && x.meta !== undefined ? `${fmtUnidad(x.avance, x.unidad)} de ${fmtUnidad(x.meta, x.unidad)}` : fmtUnidad(x.avance, x.unidad)} (+${x.sube})`;
+
 function textoTerceraFijo(d, saludo) {
-  const fmtU2 = (v, u) => (u === '$' ? `$${Math.round(v || 0).toLocaleString('es-MX')}` : u === '%' ? `${v}%` : `${Math.round(v || 0)} ${u}`);
-  const L = [saludo ? `${saludo}\n` : '', `🖐️ *Candidatos a La Tercera Mano del Pachuco* · corte ${fechaCorta(d.fecha)}`].filter(Boolean);
+  const L = [saludo ? `${saludo}\n` : '', `🖐️ *En riesgo de la Tercera Mano del Pachuco* · corte ${fechaCorta(d.fecha)}`].filter(Boolean);
+  if (!d.candidatos.length) L.push('', '🛟 ¡Nadie en riesgo! Todas las rutas están arriba de 60% de rendimiento general o entre las 3 mejores.');
   d.candidatos.forEach((c, i) => {
-    L.push('', `${i + 1}. @${c.mencion} (${c.ruta} ${c.nombre}) · rendimiento *${c.indice}%* · cumple ${c.cumplidos} de ${c.indicadores_medidos} indicadores`);
-    for (const x of c.debajo.slice(0, 4)) {
-      L.push(`   • ${x.indicador}: ${fmtU2(x.avance, x.unidad)} de ${fmtU2(x.meta, x.unidad)}${x.falta ? ` (le faltan ${fmtU2(x.falta, x.unidad)})` : ''}`);
-    }
+    L.push('', `${i + 1}. @${c.mencion} (${c.ruta} ${c.nombre}) · rendimiento general *${c.indice}%* · cumple ${c.cumplidos} de ${c.indicadores_medidos} indicadores`);
+    L.push(`   🛟 Para salvarse le faltan *${c.puntos_para_salvarse} puntos*:`);
+    for (const x of c.como_salvarse) L.push(`   • ${accionCorta(x)}`);
   });
-  if (d.para_salir_superar_a) L.push('', `👉 Para salir tienen que subir de *${d.para_salir_superar_a.indice}%* (${d.para_salir_superar_a.ruta} ${d.para_salir_superar_a.nombre}), cerrando lo que les falta arriba.`);
+  L.push('', '_Rendimiento general = todos los indicadores con su valor. Se salvan las 3 mejores y quien pase de 60%._');
   return L.join('\n');
 }
 
@@ -1150,7 +1233,8 @@ async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = 
   const esJefe = c.tipo === 'equipo';
   const titulo = tratoDe(c);
   const d = await candidatosTercera(cfg, esJefe);
-  if (!d || !d.candidatos.length) return { texto: 'Todavía no hay datos cargados para calcular candidatos.', mencionados: [] };
+  if (!d) return { texto: 'Todavía no hay datos cargados para calcular candidatos.', mencionados: [] };
+  if (!d.candidatos.length) return { texto: textoTerceraFijo(d, esJefe ? `A la orden, ${titulo} 🫡` : ''), mencionados: [] };
   const mencionados = d.candidatos.map((x) => x.mencion).filter(Boolean);
   const saludo = esJefe ? `A la orden, ${titulo} 🫡` : '';
   const key = process.env.OPENAI_API_KEY;
@@ -1159,11 +1243,10 @@ async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = 
   const sistema = [
     'Eres ROBOTINA, la bot de SMART-TRACK de JMD (cigarros y bebidas, Puerto Vallarta).',
     tono,
-    'Te piden los candidatos a "La Tercera Mano del Pachuco": las 3 rutas con el rendimiento más bajo considerando TODOS los indicadores (ver "regla").',
-    'Para CADA uno de los 3 candidatos, en este orden:',
-    '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento (índice %).',
-    '  b) POR QUÉ es candidato: sus 2 a 4 indicadores más débiles de "debajo", con números exactos (avance de meta, lo que falta, unidad). En los del periodo usa "ritmo" y "necesita_por_dia".',
-    '  c) CÓMO DEJAR DE SERLO: acciones concretas y medibles (cuánto vender de qué, cubrir Sin Vuala, qué marca empujar) para superar el índice de "para_salir_superar_a".',
+    'Te piden los candidatos a "La Tercera Mano del Pachuco": es un CASTIGO (no un premio ni una meta) para las rutas con el RENDIMIENTO GENERAL más bajo: todos los indicadores juntos, cada uno con su valor (ver "regla"). Se salvan las 3 mejores y cualquiera con rendimiento general mayor a 60% (ver "salvados_por_rendimiento"). Nunca digas "alcanzar la Tercera Mano": se trata de SALVARSE de ella. "Efectividad" aquí es el rendimiento general, no las visitas.',
+    'Para CADA uno de los candidatos, en este orden:',
+    '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento general (indice %).',
+    '  b) CÓMO SALVARSE: los "puntos_para_salvarse" que le faltan y, de "como_salvarse", qué vender de cada indicador (avance de meta, lo que falta con su unidad) y cuántos puntos le sube ("sube"). Empieza por los que más suben; ahorita el foco es Swich y Vualá Vainilla (1 por cada 10 visitas). En los del periodo usa "ritmo" y "necesita_por_dia".',
     'Formato WhatsApp, *negritas*, sin tablas, máximo 22 líneas en total. Al final una línea corta que motive.',
     'Usa SOLO los números del JSON; no inventes cifras ni premios. paq = paquetes, pz = piezas, $ = pesos. No felicites a nadie.',
     'Límites: nada humillante ni sobre físico, familia, género, orientación, religión u origen.',
@@ -1541,9 +1624,12 @@ const INDICADORES_BASE = {
   venta_dia:   { nombre: 'Venta del día',          unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
   sin_vuala:   { nombre: 'OTC Sin Vuala',          unidad: 'pz',  def: { retro: true,  ia: true, tercera: true } },
   reto:        { nombre: 'Reto del día',           unidad: 'paq', def: { retro: true,  ia: true, tercera: true } },
-  otc_dia:     { nombre: 'OTC del día',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
+  otc_dia:     { nombre: 'OTC del día',            unidad: '$',   def: { retro: false, ia: true, tercera: true } },
   otc_semana:  { nombre: 'OTC semanal',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
-  efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: false } },
+  efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: true } },
+  // Producto por visitas: por cada 10 clientes visitados debe salir 1 pieza (piezas del OTC de hoy)
+  swich_visitas:    { nombre: 'Swich (1 por cada 10 visitas)',          unidad: 'pz', def: { retro: true, ia: true, tercera: true } },
+  vainilla_visitas: { nombre: 'Vualá Vainilla (1 por cada 10 visitas)', unidad: 'pz', def: { retro: true, ia: true, tercera: true } },
   // Del periodo (mes): se comparan contra el ritmo esperado a la fecha, no contra la meta completa
   mes_max:       { nombre: 'MAX del periodo',       unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
   mes_open:      { nombre: 'OPEN del periodo',      unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
@@ -1622,8 +1708,51 @@ const medidaPeriodo = (avance, meta, porDia, esperado) => {
 
 // Valor de cada indicador para una ruta.
 
-function valorIndicador(clave, f, m, rt) {
+// Productos que se miden contra las visitas: apodo para encontrarlo en el OTC y cada cuántas visitas 1 pieza
+const PRODUCTO_POR_VISITAS = {
+  swich_visitas:    { apodo: 'SWICH',          cada: 10 },
+  vainilla_visitas: { apodo: 'VUALA VAINILLA', cada: 10 },
+};
+
+// Piezas vendidas HOY por ruta de cada producto medido (del detalle de OTC). Si el OTC de hoy
+// todavía no se carga, regresa null y esos indicadores no se miden (no se usan datos de otro día).
+async function piezasPorVisitasHoy(fecha, cfg) {
+  let otc = [];
+  try {
+    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
+    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+  } catch { return null; }
+  const hoy = otc.filter((x) => x.fecha === fecha);
+  if (!hoy.length) return null;
+  const apodos = [...(Array.isArray(cfg?.apodos) ? cfg.apodos : []), ...APODOS_BASE];
+  const codigoNum = (c) => String(c || '').replace(/\D/g, '').replace(/^0+/, '');
+  const compacto = (t) => normTxt(t).replace(/\s+/g, '');
+  const out = {};
+  for (const [clave, p] of Object.entries(PRODUCTO_POR_VISITAS)) {
+    const ap = productosPorApodo(p.apodo, apodos);
+    const codigos = new Set([...(ap?.codigos || [])].map(codigoNum).filter(Boolean));
+    const arts = [...(ap?.articulos || [])].map(compacto).filter(Boolean);
+    const porRuta = {};
+    for (const x of hoy) {
+      const art = compacto(x.articulo);
+      const es = (x.codigoArticulo && codigos.has(codigoNum(x.codigoArticulo))) || arts.some((a) => art === a || art.includes(a));
+      if (!es) continue;
+      const ruta = claveRuta(x.vendedor);
+      porRuta[ruta] = (porRuta[ruta] || 0) + (Number(x.unidadesVendidas) || 0);
+    }
+    out[clave] = porRuta;
+  }
+  return out;
+}
+
+function valorIndicador(clave, f, m, rt, piezasVisitas) {
   const ex = f.extra || {};
+  if (PRODUCTO_POR_VISITAS[clave]) {
+    if (!piezasVisitas || m.vis === null || m.vis === undefined) return null; // sin OTC de hoy o sin visitas
+    const meta = Math.floor(Number(m.vis) / PRODUCTO_POR_VISITAS[clave].cada);
+    const vendido = piezasVisitas[clave]?.[claveRuta(f.ruta)] || 0;
+    return { avance: vendido, meta, falta: Math.max(0, meta - vendido), pct: meta ? Math.round((vendido / meta) * 100) : null, visitas: Number(m.vis) };
+  }
   const t = ex.tabs || {};
   if (clave === 'mes_max') return medidaPeriodo(t.max?.avance ?? f.venta_mes, t.max?.objetivo ?? f.objetivo_mes, t.max?.por_dia ?? ex.necesita_diario, m.esperado);
   if (clave === 'mes_open') return medidaPeriodo(t.open?.avance, t.open?.objetivo, t.open?.por_dia, m.esperado);
@@ -1666,12 +1795,14 @@ async function tablaIndicadores(fecha, cfg, { filas = null, todos = null } = {})
   const av = avanceReto(await retoDe(fecha, cfg, { [fecha]: filas }), filas, todos);
   const retoPorRuta = Object.fromEntries((av?.tabla || []).map((r, i) => [r.ruta, { ...r, lugar: i + 1 }]));
   const inds = indicadoresConfig(cfg, filas);
+  const piezasVisitas = inds.some((i) => PRODUCTO_POR_VISITAS[i.clave] && (i.retro || i.ia || i.tercera))
+    ? await piezasPorVisitasHoy(fecha, cfg) : null;
   const rutas = filas.map((f) => {
     const ruta = claveRuta(f.ruta);
     const m = calcular(f, filas);
     const valores = {};
     for (const i of inds) {
-      const v = valorIndicador(i.clave, f, m, retoPorRuta[ruta]);
+      const v = valorIndicador(i.clave, f, m, retoPorRuta[ruta], piezasVisitas);
       if (v) valores[i.clave] = v;
     }
     return { ruta, f, m, valores };
