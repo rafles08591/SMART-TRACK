@@ -62,11 +62,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     if (!window.confirm(`¿Reactivar ${nombreRuta}? La ruta podrá modificar su carga y tendrá que volver a enviarla.`)) return;
     setReactivando(nombreRuta);
     try {
-      await persistCargas(cargaActivoDia, (c) => {
-        const envios = { ...(c.enviosPorRuta || {}) };
-        delete envios[nombreRuta];
-        return { ...c, enviosPorRuta: envios };
-      });
+      await persistCargas(cargaActivoDia, { ruta: nombreRuta, enviado: false });
     } finally {
       setReactivando(null);
     }
@@ -118,14 +114,15 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
 
   async function enviarPara(nombreRuta) {
     if (!cargaActivoDia) return;
-    await persistCargas(cargaActivoDia, (cargasFrescas) => {
-      const items = cargasFrescas.items.map((it, i) => {
-        if (borrador[i] === undefined) return it;
-        const valor = borrador[i];
-        return { ...it, porRuta: { ...it.porRuta, [nombreRuta]: { ...it.porRuta[nombreRuta], modificada: valor === "" ? null : Number(valor) } } };
-      });
-      return { ...cargasFrescas, items, enviosPorRuta: { ...(cargasFrescas.enviosPorRuta || {}), [nombreRuta]: true } };
+    // Solo se mandan las cantidades de ESTA ruta (fila + artículo) y su "enviado": nunca una copia de
+    // toda la carga, para que un envío viejo o sin señal no pueda tocar lo de otras rutas.
+    const valores = {};
+    (cargaActiva?.items || []).forEach((it, i) => {
+      if (borrador[i] === undefined) return;
+      const v = borrador[i];
+      valores[i] = { fa: it.fa, valor: v === "" ? null : Number(v) };
     });
+    await persistCargas(cargaActivoDia, { ruta: nombreRuta, valores, enviado: true });
     setBorrador({});
   }
 
@@ -169,7 +166,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
     XLSX.writeFile(wb, `Cargas_${cargaActiva.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     
     if (bloquear && esGerente && !cargaActiva.bloqueado) {
-      persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: true }));
+      persistCargas(cargaActivoDia, { campos: { bloqueado: true, bloqueadoPor: vendedorActual || puesto || "Gerente", bloqueadoEn: new Date().toISOString() } });
     }
   }
 
@@ -235,6 +232,9 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
                 <div className="display" style={{ fontSize: 13, color: "#9AA7BD" }}>
                   Carga activa · {DIA_LABEL[cargaActiva.dia]} {cargaActiva.bloqueado && <span style={{ color: "#FF6B6B" }}>· BLOQUEADA</span>}
+                  {cargaActiva.bloqueado && (cargaActiva.bloqueadoPor || cargaActiva.bloqueadoEn) && (
+                    <span style={{ fontSize: 11, color: "#9AA7BD", fontFamily: "inherit" }}> (por {cargaActiva.bloqueadoPor || "?"}{cargaActiva.bloqueadoEn ? ` · ${formatFechaHora(cargaActiva.bloqueadoEn)}` : ""})</span>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button className="btn-ghost" onClick={() => setVerPivote(!verPivote)}>{verPivote ? "Ocultar" : "Ver"} pivote</button>
@@ -248,7 +248,7 @@ export default function CargasView({ data, persist, persistCargas, puesto, rol, 
               {verPivote && <TablaPivote items={cargaActiva.items} />}
 
               {cargaActiva.bloqueado && esGerente && (
-                <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, (c) => ({ ...c, bloqueado: false }))} style={{ marginTop: 8 }}>
+                <button className="btn-ghost" onClick={() => persistCargas(cargaActivoDia, { campos: { bloqueado: false, bloqueadoPor: null, bloqueadoEn: null } })} style={{ marginTop: 8 }}>
                   <RefreshCw size={13} /> Reactivar edición
                 </button>
               )}
