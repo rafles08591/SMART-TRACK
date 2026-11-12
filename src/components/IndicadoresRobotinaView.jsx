@@ -6,15 +6,19 @@ import { MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA } from "../constants";
 // data.whatsappBot.indicadores y los lee api/wa-resumen.js.
 //   retro   → sale en la retro de cada hora al grupo
 //   ia      → Robotina lo conoce cuando le preguntan
-//   tercera → cuenta para elegir candidatos a La Tercera Mano del Pachuco
+//   tercera → cuenta para el rendimiento general (Tercera Mano del Pachuco)
+//   peso    → valor del indicador dentro del rendimiento general
 // Deben coincidir con INDICADORES_BASE de api/wa-resumen.js.
 const BASE = [
   { clave: "venta_dia", nombre: "Venta del día", unidad: "paq", def: { retro: true, ia: true, tercera: true } },
   { clave: "sin_vuala", nombre: "OTC Sin Vuala", unidad: "pz", def: { retro: true, ia: true, tercera: true } },
   { clave: "reto", nombre: "Reto del día", unidad: "paq", def: { retro: true, ia: true, tercera: true } },
-  { clave: "otc_dia", nombre: "OTC del día", unidad: "$", def: { retro: false, ia: true, tercera: false } },
+  { clave: "otc_dia", nombre: "OTC del día", unidad: "$", def: { retro: false, ia: true, tercera: true } },
   { clave: "otc_semana", nombre: "OTC semanal", unidad: "$", def: { retro: false, ia: true, tercera: false } },
-  { clave: "efectividad", nombre: "Efectividad de visitas", unidad: "%", def: { retro: false, ia: true, tercera: false } },
+  { clave: "efectividad", nombre: "Efectividad de visitas", unidad: "%", def: { retro: false, ia: true, tercera: true } },
+  // 1 pieza por cada 10 clientes visitados (piezas del OTC de hoy)
+  { clave: "swich_visitas", nombre: "Swich (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true } },
+  { clave: "vainilla_visitas", nombre: "Vualá Vainilla (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true } },
 ];
 // Del periodo: Robotina los compara contra el ritmo esperado a la fecha.
 const PERIODO = [
@@ -26,10 +30,14 @@ const DEF_MARCA = { retro: false, ia: true, tercera: false };
 const nomChamp = (t) => String(t || "").replace(/^CHAM[_ ]/i, "");
 const DEF_RALLY = { retro: true, ia: true, tercera: true };
 
+// Valor por defecto en el rendimiento general (igual que PESO_DEF de api/wa-resumen.js)
+const PESO_DEF = { venta_dia: 3, swich_visitas: 3, vainilla_visitas: 3 };
+const pesoDefDe = (clave) => PESO_DEF[clave] ?? 1;
+
 const COLUMNAS = [
   { campo: "retro", titulo: "Retro al grupo", ayuda: "Sale en el mensaje de cada hora" },
   { campo: "ia", titulo: "Robotina lo conoce", ayuda: "Lo usa al contestar preguntas" },
-  { campo: "tercera", titulo: "Tercera Mano", ayuda: "Cuenta para elegir a los 3 más bajos" },
+  { campo: "tercera", titulo: "Tercera Mano", ayuda: "Cuenta en el rendimiento general (castigo a los 3 más bajos)" },
 ];
 
 export default function IndicadoresRobotinaView({ data, persistFresco, puedeEditar = true }) {
@@ -93,6 +101,18 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
     setEstado("");
   }
 
+  const pesoActual = (f) => {
+    const p = guardado[f.clave]?.peso;
+    return typeof p === "number" && p >= 0 ? p : pesoDefDe(f.clave);
+  };
+  function cambiarPeso(f, txt) {
+    if (!puedeEditar || guardando) return;
+    const num = Math.max(0, Math.min(10, Math.round(Number(String(txt).replace(/[^\d]/g, "")) || 0)));
+    setLocal((g) => ({ ...g, [f.clave]: { ...f.def, ...(g[f.clave] || {}), peso: num } }));
+    setSucio(true);
+    setEstado("");
+  }
+
   function descartar() {
     setLocal(indGuardados);
     setRetroActiva(retroGuardada);
@@ -124,6 +144,11 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
         Prende o apaga qué sigue Robotina y da clic en <b>Guardar</b> al final. Los cambios aplican desde la siguiente retro o pregunta.
         Los rallies activos aparecen solos aquí.
       </div>
+      <div style={{ fontSize: 12, color: "#cbd5e1", background: "#131c2e", border: "1px solid #1E2A42", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
+        🖐️ <b>Tercera Mano del Pachuco = castigo.</b> Se calcula con el <b>rendimiento general</b>: el cumplimiento de cada indicador
+        prendido en "Tercera Mano" (tope 100%) por su <b>Valor</b>. Se salvan las <b>3 mejores</b> y quien pase de <b>60%</b>.
+        A más valor, más pesa ese indicador (0 = no cuenta).
+      </div>
       <button
         disabled={!puedeEditar || guardando}
         onClick={cambiarRetro}
@@ -144,12 +169,13 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
               {COLUMNAS.map((c) => (
                 <th key={c.campo} title={c.ayuda} style={{ padding: "8px 10px", textAlign: "center", whiteSpace: "nowrap" }}>{c.titulo}</th>
               ))}
+              <th title="Cuánto pesa en el rendimiento general" style={{ padding: "8px 10px", textAlign: "center", whiteSpace: "nowrap" }}>Valor</th>
             </tr>
           </thead>
           {secciones.filter((sec) => sec.filas.length).map((sec) => (
           <tbody key={sec.titulo}>
             <tr>
-              <td colSpan={1 + COLUMNAS.length} className="display" style={{ padding: "14px 10px 6px", fontSize: 11, color: "#5AA9E6" }}>{sec.titulo}</td>
+              <td colSpan={2 + COLUMNAS.length} className="display" style={{ padding: "14px 10px 6px", fontSize: 11, color: "#5AA9E6" }}>{sec.titulo}</td>
             </tr>
             {sec.filas.map((f) => (
               <tr key={f.clave} style={{ borderTop: "1px solid #1E2A42" }}>
@@ -187,6 +213,19 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
                     </td>
                   );
                 })}
+                <td style={{ textAlign: "center", padding: "8px" }}>
+                  {!(f.exclusivo) && valor(f, "tercera") ? (
+                    <input
+                      type="number" inputMode="numeric" min={0} max={10}
+                      value={pesoActual(f)}
+                      disabled={!puedeEditar || guardando}
+                      onChange={(e) => cambiarPeso(f, e.target.value)}
+                      style={{ width: 52, padding: "4px 6px", borderRadius: 8, border: "1px solid #334155", background: "#0B1220", color: "#E8EDF5", textAlign: "center", fontWeight: 700 }}
+                    />
+                  ) : (
+                    <span style={{ color: "#5b6478" }}>—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
