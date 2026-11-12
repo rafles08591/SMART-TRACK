@@ -160,6 +160,58 @@ function quitarDeColaGuardadoPendiente(id) {
   escribirColaGuardadoPendiente(leerColaGuardadoPendiente().filter((it) => it.id !== id));
 }
 
+// Un pendiente guarda una FOTO del dato (p. ej. todas las cargas de la semana con su candado). Si se
+// reintenta horas o días después, esa foto vieja pisa lo nuevo: así se "bloqueaban solas" las cargas.
+// Por eso un pendiente solo vale unos minutos; después se descarta.
+const MINUTOS_VIGENCIA_PENDIENTE = 15;
+function pendienteVigente(item) {
+  const t = new Date(item?.creadoEn || 0).getTime();
+  return Number.isFinite(t) && Date.now() - t < MINUTOS_VIGENCIA_PENDIENTE * 60 * 1000;
+}
+function actualizarCambiosPendiente(id, cambios) {
+  escribirColaGuardadoPendiente(leerColaGuardadoPendiente().map((it) => (it.id === id ? { ...it, cambios } : it)));
+}
+
+// Aplica un cambio sobre el documento fresco. Los cambios de cargas vienen marcados con el día
+// (__soloCargaDia): solo se toca ESA carga, y solo si sigue siendo la misma que se subió
+// (misma fechaSubida); si ya subieron otra carga para ese día, el cambio viejo se descarta.
+function aplicarCambiosSobreFresca(fresca, cambios) {
+  if (!cambios) return null;
+  // Parche de UNA carga: solo los campos que cambió esa persona (las cantidades de SU ruta, su "enviado",
+  // o el candado). Se aplica sobre lo más reciente, así nunca se lleva de corbata lo de otras rutas.
+  if (cambios.__parcheCarga) {
+    const p = cambios.__parcheCarga;
+    const actual = fresca.cargasPorDia?.[p.dia];
+    if (!actual) return null;
+    if ((actual.fechaSubida || null) !== (p.fechaSubida || null)) return null; // es de otra semana
+    // un envío de ruta que llega cuando la carga ya está cerrada no se aplica (llegó tarde)
+    if (p.ruta && p.enviado === true && actual.bloqueado) return null;
+    let c = { ...actual };
+    if (p.ruta && p.valores) {
+      c.items = (c.items || []).map((it, i) => {
+        const v = p.valores[i];
+        if (!v || v.fa !== it.fa) return it; // si la fila no coincide con el artículo, no se toca
+        return { ...it, porRuta: { ...it.porRuta, [p.ruta]: { ...(it.porRuta?.[p.ruta] || {}), modificada: v.valor } } };
+      });
+    }
+    if (p.ruta && p.enviado !== undefined) {
+      const envios = { ...(c.enviosPorRuta || {}) };
+      if (p.enviado) envios[p.ruta] = true; else delete envios[p.ruta];
+      c.enviosPorRuta = envios;
+    }
+    if (p.campos) c = { ...c, ...p.campos };
+    return { ...fresca, cargasPorDia: { ...(fresca.cargasPorDia || {}), [p.dia]: c } };
+  }
+  const { __soloCargaDia: dia, ...resto } = cambios;
+  if (!dia) return { ...fresca, ...resto };
+  const nueva = resto.cargasPorDia?.[dia];
+  const actual = fresca.cargasPorDia?.[dia];
+  if (!nueva) return null;
+  if (actual && (actual.fechaSubida || null) !== (nueva.fechaSubida || null)) return null; // es de otra semana
+  const { cargasPorDia: _c, ...otros } = resto;
+  return { ...fresca, ...otros, cargasPorDia: { ...(fresca.cargasPorDia || {}), [dia]: nueva } };
+}
+
 
 // Suma (o resta) días a una fecha "YYYY-MM-DD" sin depender de la zona
 // horaria del navegador (arma la fecha en UTC puro). Se usa para calcular
@@ -781,8 +833,12 @@ export default function App() {
         try {
           setEstadoGuardado(intento === 1 ? "guardando" : "reintentando");
           const fresca = await obtenerDataFresca();
-          if (cambios === null) {
-            cambios = calcularCambios(fresca);
+          // Se recalcula en CADA intento sobre lo más reciente (antes se calculaba una sola vez y los
+          // reintentos guardaban esa foto aunque alguien más ya hubiera cambiado algo).
+          const anterior = cambios;
+          cambios = calcularCambios(fresca);
+          if (anterior !== null && idPendiente) actualizarCambiosPendiente(idPendiente, cambios);
+          if (anterior === null) {
             // En cuanto se conoce el cambio exacto a guardar (un objeto
             // plano, ya no la función), se registra en la cola durable de
             // localStorage — así, aunque la app se cierre a medio intento,
@@ -791,7 +847,13 @@ export default function App() {
             // acción a mano.
             idPendiente = agregarAColaGuardadoPendiente(cambios);
           }
-          const resultado = await persist({ ...fresca, ...cambios });
+          const siguiente = aplicarCambiosSobreFresca(fresca, cambios);
+          if (!siguiente) { // el cambio ya no aplica (p. ej. la carga de ese día se volvió a subir)
+            if (idPendiente) quitarDeColaGuardadoPendiente(idPendiente);
+            setEstadoGuardado(null);
+            return;
+          }
+          const resultado = await persist(siguiente);
           if (resultado?.ok) {
             if (idPendiente) quitarDeColaGuardadoPendiente(idPendiente);
             setEstadoGuardado(null);
@@ -836,9 +898,16 @@ export default function App() {
     const intentar = async () => {
       setEstadoGuardado((actual) => (actual === "guardando" ? actual : "reintentando"));
       for (const item of leerColaGuardadoPendiente()) {
+        if (!pendienteVigente(item)) { // foto vieja: no se vuelve a escribir encima de lo nuevo
+          console.warn("Se descartó un guardado pendiente viejo:", item.creadoEn, Object.keys(item.cambios || {}));
+          quitarDeColaGuardadoPendiente(item.id);
+          continue;
+        }
         try {
           const fresca = await obtenerDataFresca();
-          const resultado = await persist({ ...fresca, ...item.cambios });
+          const siguiente = aplicarCambiosSobreFresca(fresca, item.cambios);
+          if (!siguiente) { quitarDeColaGuardadoPendiente(item.id); continue; }
+          const resultado = await persist(siguiente);
           if (resultado?.ok) {
             quitarDeColaGuardadoPendiente(item.id);
           }
@@ -866,12 +935,23 @@ export default function App() {
   // a la vez, pero solo UNA está "activa" para los vendedores
   // (data.cargaActivoDia). `persistCargas` opera siempre sobre el día
   // que se le indique, partiendo del documento más reciente en Supabase.
+  // calcularNuevoCargas puede ser:
+  //  · un PARCHE (objeto) → { ruta, valores: { [indice]: { fa, valor } }, enviado } o { campos: { bloqueado… } }.
+  //    Es lo que usan los vendedores y el candado: solo se guarda lo que cambió (lo de esa ruta).
+  //  · una función (carga fresca → carga nueva), para cambios de toda la carga.
   async function persistCargas(dia, calcularNuevoCargas) {
     if (!dia) return;
+    if (calcularNuevoCargas && typeof calcularNuevoCargas === "object") {
+      const parche = calcularNuevoCargas;
+      await persistParcialFresco((fresca) => ({
+        __parcheCarga: { dia, fechaSubida: fresca.cargasPorDia?.[dia]?.fechaSubida ?? null, ...parche },
+      }));
+      return;
+    }
     await persistParcialFresco((fresca) => {
       const actual = fresca.cargasPorDia || {};
       const cargaExistente = actual[dia] || { dia, fechaReferencia: null, fechaSubida: null, bloqueado: false, items: [], enviosPorRuta: {} };
-      return { cargasPorDia: { ...actual, [dia]: calcularNuevoCargas(cargaExistente) } };
+      return { __soloCargaDia: dia, cargasPorDia: { ...actual, [dia]: calcularNuevoCargas(cargaExistente) } };
     });
   }
 
@@ -2034,7 +2114,7 @@ export default function App() {
     // espera su resultado real antes de avisarle a Gerente que ya quedó.
     setCargasStatus(`Archivo descargado (${filas.length} filas). Confirmando el bloqueo de la carga con el servidor...`);
     try {
-      await persistCargas(diaActivo, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+      await persistCargas(diaActivo, { campos: { bloqueado: true, bloqueadoPor: staffUsername || puesto || "?", bloqueadoEn: new Date().toISOString() } });
       setBloqueoPendiente(false);
       setCargasStatus(`✅ Archivo descargado (${filas.length} filas) y carga bloqueada correctamente — los vendedores ya no pueden modificarla.`);
     } catch (err) {
@@ -2053,7 +2133,7 @@ export default function App() {
     if (!dia) return;
     setCargasStatus("Reintentando confirmar el bloqueo de la carga...");
     try {
-      await persistCargas(dia, (cargasFrescas) => ({ ...cargasFrescas, bloqueado: true }));
+      await persistCargas(dia, { campos: { bloqueado: true, bloqueadoPor: staffUsername || puesto || "?", bloqueadoEn: new Date().toISOString() } });
       setBloqueoPendiente(false);
       setCargasStatus("✅ Carga bloqueada correctamente — los vendedores ya no pueden modificarla.");
     } catch (err) {
