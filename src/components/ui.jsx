@@ -15,13 +15,28 @@ export function RoadProgress({ pct }) {
     </div>
   );
 }
-export function KpiCard({ icon, label, value, accent }) {
+export function KpiCard({ icon, label, value, accent, onClick, activo, pista }) {
+  // Con onClick la tarjeta se puede presionar (ej. para abrir un detalle)
   return (
-    <div className="card" style={{ padding: 16, flex: "1 1 140px" }}>
+    <div
+      className="card"
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      style={{
+        padding: 16, flex: "1 1 140px",
+        ...(onClick ? { cursor: "pointer", transition: "border-color .15s, box-shadow .15s" } : {}),
+        ...(activo ? { borderColor: "#5AA9E6", boxShadow: "0 0 0 1px #5AA9E6 inset" } : {}),
+      }}
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#9AA7BD", fontSize: 12, marginBottom: 6 }}>
         {icon}<span>{label}</span>
       </div>
       <div className="mono display" style={{ fontSize: 22, color: accent || "#E8EDF5" }}>{value}</div>
+      {onClick && (
+        <div style={{ fontSize: 11, color: "#5AA9E6", marginTop: 6 }}>{pista || (activo ? "Ocultar detalle ▴" : "Ver detalle ▾")}</div>
+      )}
     </div>
   );
 }
