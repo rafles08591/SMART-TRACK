@@ -175,6 +175,36 @@ function actualizarCambiosPendiente(id, cambios) {
 // Aplica un cambio sobre el documento fresco. Los cambios de cargas vienen marcados con el día
 // (__soloCargaDia): solo se toca ESA carga, y solo si sigue siendo la misma que se subió
 // (misma fechaSubida); si ya subieron otra carga para ese día, el cambio viejo se descarta.
+// ---- Guardado ligero ----
+// Antes cada guardado subía TODO el documento (todas las pantallas juntas) y además lo volvía a bajar
+// con .select(). En celular con señal regular eso tardaba y fallaba seguido ("Conexión inestable").
+// Ahora solo se mandan las secciones que cambiaron, y Supabase las fusiona (función fusionar_app_state).
+function seccionesCambiadas(next, base) {
+  if (!base || !next) return null;
+  const set = {};
+  const quitar = [];
+  for (const k of Object.keys(next)) {
+    if (next[k] === base[k]) continue;
+    if (JSON.stringify(next[k]) !== JSON.stringify(base[k])) set[k] = next[k];
+  }
+  for (const k of Object.keys(base)) if (!(k in next)) quitar.push(k);
+  return { set, quitar };
+}
+// Corta una petición que se quedó colgada (mala señal) para reintentar en vez de esperar minutos.
+function senalTiempo(ms) {
+  try { return typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(ms) : null; } catch { return null; }
+}
+const conTiempo = (q, ms) => { const sig = senalTiempo(ms); return sig ? q.abortSignal(sig) : q; };
+// ¿El error es de señal/red (vale la pena reintentar) o es un rechazo de la base (permiso, dato inválido)?
+function esErrorDeRed(err) {
+  if (!err) return false;
+  const msg = String(err.message || err);
+  if (err.name === "AbortError" || err.name === "TimeoutError") return true;
+  if (/Failed to fetch|NetworkError|network|Load failed|timeout|timed out|aborted|ECONN|503|502|504|fetch|abort/i.test(msg)) return true;
+  // Errores de Postgres/PostgREST traen código (42501 permiso, 23xxx dato, PGRST…): no son de señal
+  return !err.code;
+}
+
 function aplicarCambiosSobreFresca(fresca, cambios) {
   if (!cambios) return null;
   // Parche de UNA carga: solo los campos que cambió esa persona (las cantidades de SU ruta, su "enviado",
@@ -541,13 +571,17 @@ export default function App() {
   // termine de guardar, y al escribir borra sin querer el primero. Con la
   // cola, cada uno espera a que el anterior termine antes de leer y guardar.
   const colaPersistenciaFrescaRef = useRef(Promise.resolve());
+  // Última versión conocida del documento en Supabase (para mandar solo lo que cambió)
+  const ultimoServidorRef = useRef(null);
+  // null = no se sabe, false = la función fusionar_app_state no existe todavía (se usa el guardado completo)
+  const fusionDisponibleRef = useRef(null);
   // Estado visible del guardado en curso: null | "guardando" | "reintentando"
   // | "sin_conexion" | "error". Se muestra como una barra fija abajo para
   // que nadie cierre la app creyendo que ya guardó cuando sigue pendiente.
   // Se inicializa revisando la cola durable: si ya había algo pendiente de
   // una sesión anterior (la app se cerró a medio guardar), el aviso
   // aparece de inmediato al abrir, no hasta que termine el primer intento.
-  const [estadoGuardado, setEstadoGuardado] = useState(() => (leerColaGuardadoPendiente().length > 0 ? "reintentando" : null));
+  const [estadoGuardado, setEstadoGuardado] = useState(() => (leerColaGuardadoPendiente().length > 0 ? "guardando" : null));
 
   // Si hay un guardado en curso (o esperando conexión), el navegador pide
   // confirmación antes de cerrar la pestaña — así nadie pierde un registro
@@ -683,6 +717,7 @@ export default function App() {
 
       if (row && row.data && Object.keys(row.data).length > 0) {
         const loaded = { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+        ultimoServidorRef.current = loaded;
         setData(loaded);
       } else {
         const initial = defaultData();
@@ -725,6 +760,7 @@ export default function App() {
           const nuevo = payload.new?.data;
           if (nuevo && typeof nuevo === "object") {
             const loaded = { ...defaultData(), ...nuevo, mesaControl: nuevo.mesaControl || [] };
+            ultimoServidorRef.current = loaded;
             setData(loaded);
           }
         }
@@ -736,27 +772,42 @@ export default function App() {
     };
   }, []);
 
-  async function persist(next) {
+  // Escribe en Supabase SOLO las secciones que cambiaron respecto a "base" (lo último que se sabe que
+  // hay en la base). Si la función de fusión aún no existe, cae al guardado completo de siempre.
+  async function escribirEstado(next, base) {
+    const dif = fusionDisponibleRef.current === false ? null : seccionesCambiadas(next, base);
+    if (dif) {
+      if (Object.keys(dif.set).length === 0 && dif.quitar.length === 0) return { error: null };
+      const { error } = await conTiempo(
+        supabase.rpc("fusionar_app_state", { p_id: STATE_ID, p_set: dif.set, p_quitar: dif.quitar }),
+        30000
+      );
+      if (!error) { fusionDisponibleRef.current = true; return { error: null }; }
+      const noExiste = error.code === "PGRST202" || error.code === "42883" || /fusionar_app_state/i.test(error.message || "");
+      if (!noExiste) return { error };
+      fusionDisponibleRef.current = false; // aún no se corrió el SQL: guardado completo
+      console.warn("Falta la función fusionar_app_state en Supabase; se usa el guardado completo.");
+    }
+    // Guardado completo (sin .select(): antes bajaba otra vez todo el documento después de subirlo)
+    const { error } = await conTiempo(
+      supabase.from("ventas_app_state").upsert({ id: STATE_ID, data: next, updated_at: new Date().toISOString() }),
+      45000
+    );
+    return { error };
+  }
+
+  async function persist(next, base = ultimoServidorRef.current) {
     setData(next);
     try {
-      const { data: saved, error } = await supabase
-        .from("ventas_app_state")
-        .upsert({
-          id: STATE_ID,
-          data: next,
-          updated_at: new Date().toISOString(),
-        })
-        .select();
-
+      const { error } = await escribirEstado(next, base);
       if (error) {
         console.error("Supabase save error:", error);
         setStatus(`Error Supabase: ${error.message} | code: ${error.code || "?"} | details: ${error.details || error.hint || "-"}`);
         return { ok: false, error };
-      } else {
-        console.log("Guardado OK en Supabase", saved);
-        setStatus("");
-        return { ok: true };
       }
+      ultimoServidorRef.current = next;
+      setStatus("");
+      return { ok: true };
     } catch (err) {
       console.error("Error de red al guardar:", err);
       setStatus(`Error de red: ${err?.message || String(err)}`);
@@ -774,14 +825,15 @@ export default function App() {
   // Devolver la copia vieja sería justo el bug que se quiere evitar: se
   // guardaría una versión desactualizada encima de la buena.
   async function obtenerDataFresca() {
-    const { data: row, error } = await supabase
-      .from("ventas_app_state")
-      .select("data")
-      .eq("id", STATE_ID)
-      .single();
-    if (error) throw new Error(error.message || "No se pudo leer el estado más reciente.");
+    const { data: row, error } = await conTiempo(
+      supabase.from("ventas_app_state").select("data").eq("id", STATE_ID).single(),
+      45000
+    );
+    if (error) throw Object.assign(new Error(error.message || "No se pudo leer el estado más reciente."), { code: error.code });
     if (!row?.data) throw new Error("El estado más reciente llegó vacío.");
-    return { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+    const fresca = { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+    ultimoServidorRef.current = fresca;
+    return fresca;
   }
 
   // Si el dispositivo está sin conexión, espera hasta que vuelva (o hasta
@@ -831,7 +883,8 @@ export default function App() {
           await esperarConexion();
         }
         try {
-          setEstadoGuardado(intento === 1 ? "guardando" : "reintentando");
+          // El aviso de "conexión inestable" solo sale si ya fallaron 2 intentos (antes salía al primer tropiezo)
+          setEstadoGuardado(intento <= 2 ? "guardando" : "reintentando");
           const fresca = await obtenerDataFresca();
           // Se recalcula en CADA intento sobre lo más reciente (antes se calculaba una sola vez y los
           // reintentos guardaban esa foto aunque alguien más ya hubiera cambiado algo).
@@ -853,7 +906,7 @@ export default function App() {
             setEstadoGuardado(null);
             return;
           }
-          const resultado = await persist(siguiente);
+          const resultado = await persist(siguiente, fresca);
           if (resultado?.ok) {
             if (idPendiente) quitarDeColaGuardadoPendiente(idPendiente);
             setEstadoGuardado(null);
@@ -862,6 +915,12 @@ export default function App() {
           ultimoError = resultado?.error;
         } catch (err) {
           ultimoError = err;
+        }
+        // Si la base RECHAZÓ el cambio (permiso, dato inválido) no es la señal: reintentar no sirve
+        if (ultimoError && !esErrorDeRed(ultimoError)) {
+          if (idPendiente) quitarDeColaGuardadoPendiente(idPendiente);
+          setEstadoGuardado(null);
+          throw new Error(`No se pudo guardar: ${ultimoError.message || ultimoError}`);
         }
         if (intento < MAX_INTENTOS) {
           // Espera creciente entre intentos (1s, 2s, 4s… hasta 15s), para no
@@ -896,7 +955,7 @@ export default function App() {
     const pendientes = leerColaGuardadoPendiente();
     if (pendientes.length === 0) return;
     const intentar = async () => {
-      setEstadoGuardado((actual) => (actual === "guardando" ? actual : "reintentando"));
+      setEstadoGuardado((actual) => actual || "guardando");
       for (const item of leerColaGuardadoPendiente()) {
         if (!pendienteVigente(item)) { // foto vieja: no se vuelve a escribir encima de lo nuevo
           console.warn("Se descartó un guardado pendiente viejo:", item.creadoEn, Object.keys(item.cambios || {}));
@@ -907,8 +966,9 @@ export default function App() {
           const fresca = await obtenerDataFresca();
           const siguiente = aplicarCambiosSobreFresca(fresca, item.cambios);
           if (!siguiente) { quitarDeColaGuardadoPendiente(item.id); continue; }
-          const resultado = await persist(siguiente);
-          if (resultado?.ok) {
+          const resultado = await persist(siguiente, fresca);
+          if (resultado?.ok || (resultado?.error && !esErrorDeRed(resultado.error))) {
+            // guardado, o rechazado por la base (no tiene caso reintentarlo para siempre)
             quitarDeColaGuardadoPendiente(item.id);
           }
         } catch (err) {
