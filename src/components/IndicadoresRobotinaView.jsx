@@ -8,6 +8,7 @@ import { MARCAS_OPEN, MARCAS_CHAMPIONS, MARCAS_DIA } from "../constants";
 //   ia      → Robotina lo conoce cuando le preguntan
 //   tercera → cuenta para el rendimiento general (Tercera Mano del Pachuco)
 //   peso    → valor del indicador dentro del rendimiento general
+//   prioridad → Robotina le hace más énfasis (retro, chispa, Tercera Mano y respuestas)
 // Deben coincidir con INDICADORES_BASE de api/wa-resumen.js.
 const BASE = [
   { clave: "venta_dia", nombre: "Venta del día", unidad: "paq", def: { retro: true, ia: true, tercera: true } },
@@ -17,8 +18,8 @@ const BASE = [
   { clave: "otc_semana", nombre: "OTC semanal", unidad: "$", def: { retro: false, ia: true, tercera: false } },
   { clave: "efectividad", nombre: "Efectividad de visitas", unidad: "%", def: { retro: false, ia: true, tercera: true } },
   // 1 pieza por cada 10 clientes visitados (piezas del OTC de hoy)
-  { clave: "swich_visitas", nombre: "Swich (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true } },
-  { clave: "vainilla_visitas", nombre: "Vualá Vainilla (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true } },
+  { clave: "swich_visitas", nombre: "Swich (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true, prioridad: true } },
+  { clave: "vainilla_visitas", nombre: "Vualá Vainilla (1 por cada 10 visitas)", unidad: "pz", def: { retro: true, ia: true, tercera: true, prioridad: true } },
 ];
 // Del periodo: Robotina los compara contra el ritmo esperado a la fecha.
 const PERIODO = [
@@ -232,6 +233,12 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
           ))}
         </table>
       </div>
+      <TableroPrioridad
+        secciones={secciones}
+        activo={(f) => !f.exclusivo && !!valor(f, "prioridad")}
+        onCambiar={(f) => cambiar(f, "prioridad")}
+        deshabilitado={!puedeEditar || guardando}
+      />
       {rallies.length === 0 && (
         <div style={{ fontSize: 11, color: "#5b6478", marginTop: 10 }}>
           No hay rallies activos. Cuando actives uno en la pestaña RALLY OTC aparecerá aquí.
@@ -256,6 +263,55 @@ export default function IndicadoresRobotinaView({ data, persistFresco, puedeEdit
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+// 🎯 Tablero de PRIORIDAD: los indicadores prendidos aquí son el foco de Robotina
+// (la retro los pone arriba, la chispa los empuja con nombre y números, y el consejo
+// para salvarse de la Tercera Mano empieza por ellos).
+function TableroPrioridad({ secciones, activo, onCambiar, deshabilitado }) {
+  const prendidos = secciones.flatMap((s) => s.filas).filter(activo);
+  return (
+    <div style={{ marginTop: 22, border: "1px solid #3b3415", background: "linear-gradient(180deg, #1b1a10, #111827)", borderRadius: 14, padding: 16 }}>
+      <div className="display" style={{ fontSize: 14, color: "#FACC15", marginBottom: 4 }}>🎯 PRIORIDAD DE ROBOTINA</div>
+      <div style={{ fontSize: 12, color: "#cbd5e1", marginBottom: 12 }}>
+        Prende los indicadores a los que Robotina les debe dar <b>más énfasis</b>: salen arriba en la retro (“Prioridad de hoy” con quién va
+        atrasado), la chispa los empuja con nombre y números, y el consejo para salvarse de la Tercera Mano empieza por ellos.
+        Cambia el foco cuando quieras y da <b>Guardar</b>.
+      </div>
+      <div style={{ fontSize: 12, color: prendidos.length ? "#FACC15" : "#9AA7BD", marginBottom: 12, fontWeight: 700 }}>
+        {prendidos.length ? `⭐ Foco actual: ${prendidos.map((f) => f.nombre.replace(/ \(1 por cada 10 visitas\)/, "")).join(" · ")}` : "Sin prioridad: Robotina trata todos los indicadores igual."}
+      </div>
+      {secciones.filter((s) => s.filas.length).map((sec) => (
+        <div key={sec.titulo} style={{ marginBottom: 12 }}>
+          <div className="display" style={{ fontSize: 11, color: "#5AA9E6", margin: "4px 0 8px" }}>{sec.titulo}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 8 }}>
+            {sec.filas.map((f) => {
+              const on = activo(f);
+              const bloqueado = !!f.exclusivo;
+              return (
+                <button
+                  key={f.clave}
+                  disabled={deshabilitado || bloqueado}
+                  onClick={() => onCambiar(f)}
+                  title={bloqueado ? "Los rallies exclusivos no se comparten con el grupo" : on ? "Quitar de la prioridad" : "Darle prioridad"}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8, textAlign: "left", padding: "10px 12px", borderRadius: 12,
+                    border: `1px solid ${on ? "#FACC15" : "#1E2A42"}`, background: on ? "rgba(250,204,21,0.14)" : "#0B1220",
+                    color: on ? "#FDE68A" : "#cbd5e1", fontWeight: on ? 800 : 500, fontSize: 13,
+                    cursor: deshabilitado || bloqueado ? "not-allowed" : "pointer", opacity: bloqueado ? 0.35 : 1,
+                    boxShadow: on ? "0 0 12px rgba(250,204,21,0.25)" : "none", transition: "all .15s",
+                  }}
+                >
+                  <span style={{ fontSize: 16 }}>{on ? "⭐" : "☆"}</span>
+                  <span>{f.nombre} <span style={{ color: on ? "#facc15aa" : "#5b6478", fontWeight: 400 }}>({f.unidad})</span></span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
