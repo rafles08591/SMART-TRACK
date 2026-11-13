@@ -96,6 +96,11 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       : '';
     const vendedores = {};
     for (const x of todos) if (x.tipo === 'vendedor' && x.activo !== false) vendedores[claveRuta(x.ruta)] = primerNombre(x.nombre || '', claveRuta(x.ruta));
+    let prioridad = [];
+    try {
+      const fp = await fechaUltimoCorte({ hasta: fechaMX() });
+      prioridad = indicadoresPrioridad(indicadoresConfig(cfg, fp ? await filasDeFecha(fp) : [])).map((i) => nombreCorto(i.nombre));
+    } catch {}
     const esJefe = c.tipo === 'equipo';
     const titulo = tratoDe(c);
     // Al jefe y a los supervisores se les habla con respeto, sin groserías ni carrilla.
@@ -110,6 +115,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       'Usa SOLO los números del JSON de datos; nunca inventes cifras, premios, promociones ni cambies objetivos. Las cantidades son paquetes salvo OTC que es dinero.',
       'En los indicadores del periodo (MAX/OPEN/CHAMPIONS y marcas), "ritmo" es el % contra lo que ya debería llevar a la fecha (100 = en ritmo) y "necesita_por_dia" lo que le toca vender diario para llegar.',
       'Si preguntan algo que no está en los datos, dilo y sugiere los comandos: avance, hoy, marcas, ranking, clientes.',
+      prioridad.length ? `PRIORIDAD DE HOY (lo pidió el gerente): ${prioridad.join(', ')}. Cuando des consejos o digas qué le falta a alguien, hazle énfasis a estos indicadores primero, con sus números.` : '',
       'RALLY OTC: usa SOLO "rallies_otc". Cada rally trae su "ranking" ya ordenado (lugar 1 = el que va MEJOR; el último lugar = el más abajo), con "hoy"/"meta_hoy"/"pct_hoy" (lo de hoy) y "acumulado"/"meta_final"/"pct_final" (todo el rally). No mezcles lo de hoy con el acumulado: dilo siempre con su etiqueta ("hoy" o "acumulado"). Unidad: piezas = pz, pesos = $. Si preguntan por el avance del rally da: total del equipo, los de arriba y los de abajo con sus números. Si no hay rallies en los datos, di que no hay rally activo con datos cargados.',
       'TOTALES: nunca sumes ni restes tú. Para totales usa los ya calculados ("totales_del_dia" por ruta, o los indicadores del día como "OTC del día" y "Venta del día"). Los "top" son solo los artículos principales, NO el total de la ruta.',
       'DETALLE POR PRODUCTO: si "venta_por_producto" trae "tipo_consulta": "detalle general por producto", da lo más vendido del equipo y por ruta sus artículos principales (cantidad con su unidad y pesos). Sí tienes ese detalle: nunca digas que no lo tienes. Si es mucho, resume y ofrece el detalle de una ruta.',
@@ -126,7 +132,7 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       ...(grupo && ultimaRetro ? [`Tu último mensaje de retro en el GRUPO fue: «${ultimaRetro.slice(0, 1500)}». Si te contestan sobre eso, usa ese contexto.`] : []),
       `Vendedores (ruta: nombre): ${JSON.stringify(vendedores)}`,
       `Datos (JSON): ${JSON.stringify(datos)}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
     const r = await fetchIA({
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
@@ -894,15 +900,22 @@ async function datosRetro(fecha, cfg) {
   // Tercera Mano del Pachuco (castigo): los 3 con el RENDIMIENTO GENERAL más bajo (todos los indicadores
   // con su valor). Se salvan las 3 mejores y quien pase de 60%.
   let pachuco = [];
+  const prioridad = indicadoresPrioridad(indsCfg).map((i) => ({ clave: i.clave, nombre: nombreCorto(i.nombre), unidad: i.unidad }));
   try {
     const t = await tablaIndicadores(fecha, cfg, { filas, todos });
+    // Lo que le falta a cada ruta en los indicadores en prioridad
+    const valoresDe = Object.fromEntries(t.rutas.map((x) => [x.ruta, x.valores]));
+    for (const r of rutas) {
+      const v = valoresDe[claveRuta(r.ruta)] || {};
+      r.prioridad = prioridad.map((p) => (v[p.clave] ? { indicador: p.nombre, unidad: p.unidad, lleva: v[p.clave].avance, meta: v[p.clave].meta, falta: v[p.clave].falta } : null)).filter(Boolean);
+    }
     const rend = rendimientoGeneral(t, false);
     const conRend = rutas.filter((r) => rend[claveRuta(r.ruta)]);
     for (const r of conRend) Object.assign(r, rend[claveRuta(r.ruta)]);
     pachuco = marcarTercera(conRend).expuestos.slice(0, 3);
   } catch (e) { console.error('tercera mano retro', e); }
 
-  return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, pachuco, rutas };
+  return { fecha, hora: `${h}:00`, lider_dia: lider, en_cero: enCero, pachuco, rutas, prioridad };
 }
 
 // Retro en formato "tarjetas" por ruta: lo VENDIDO HOY / meta del día, con semáforo como la app
@@ -922,6 +935,13 @@ function textoRetroFijo(d) {
   L.push(d.en_cero.length ? `🥶 En cero: ${d.en_cero.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '✅ Ninguna ruta en cero');
   const sinVuala = d.rutas.filter((r) => !r.vuala);
   L.push(sinVuala.length ? `🥤 Sin vender Vuala: ${sinVuala.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '🥤 ¡Todas las rutas ya vendieron Vuala!');
+  if (d.prioridad?.length) {
+    const faltan = d.prioridad.map((p) => {
+      const quien = d.rutas.filter((r) => r.prioridad?.some((x) => x.indicador === p.nombre && x.meta && x.falta > 0));
+      return `⭐ *${p.nombre}:* ${quien.length ? `les falta a ${quien.map((r) => `${tag(r)} (${ruta(r)})`).join(', ')}` : '¡todas cumplen! ✅'}`;
+    });
+    L.push('', '🎯 *PRIORIDAD DE HOY*', ...faltan);
+  }
   if (d.pachuco.length) {
     L.push('', '🖐️ *En riesgo de la Tercera Mano del Pachuco:*');
     d.pachuco.forEach((r, i) => {
@@ -967,15 +987,17 @@ async function chispaRetro(d, cfg) {
     en_cero: d.en_cero.map(r),
     sin_vender_vuala: d.rutas.filter((x) => !x.vuala).map((x) => claveRuta(x.ruta)),
     // 1 Swich y 1 Vualá Vainilla por cada 10 clientes visitados
-    les_falta_swich: d.rutas.filter((x) => x.swich?.meta && x.swich.avance < x.swich.meta).map((x) => ({ ruta: claveRuta(x.ruta), lleva: x.swich.avance, deberia: x.swich.meta })),
-    les_falta_vainilla: d.rutas.filter((x) => x.vainilla?.meta && x.vainilla.avance < x.vainilla.meta).map((x) => ({ ruta: claveRuta(x.ruta), lleva: x.vainilla.avance, deberia: x.vainilla.meta })),
+    // ⭐ Lo que el gerente prendió como PRIORIDAD: ahí va el énfasis
+    prioridad_de_hoy: (d.prioridad || []).map((p) => p.nombre),
+    les_falta_en_prioridad: d.rutas.flatMap((x) => (x.prioridad || []).filter((y) => y.meta && y.falta > 0)
+      .map((y) => ({ ruta: claveRuta(x.ruta), nombre: x.nombre, indicador: y.indicador, lleva: y.lleva, meta: y.meta, le_falta: y.falta, unidad: y.unidad }))),
   };
   const sistema = [
     'Eres ROBOTINA, la compañera bot del equipo de ventas de ruta de JMD (cigarros) en Puerto Vallarta.',
     tono,
     'Vas a escribir DOS partes cortas para la retro de la hora en el grupo de WhatsApp. La tabla con los números ya va aparte; tú solo pones la chispa.',
     '"intro" (2-3 líneas): saluda según la hora (buenos días / buenas tardes / buenas noches), con energía, y reconoce al líder del día. Solo FELICITA a quien ya cumplió su meta del día (100% o más); si el líder no ha llegado al 100%, reconoce que va adelante pero rétalo a cerrarla.',
-    '"cierre" (4-6 líneas): rétalos y motívalos. La Tercera Mano del Pachuco es un CASTIGO (nunca digas "alcanzar la Tercera Mano"): a los que están en riesgo dirígete con nombre y dales cómo SALVARSE con "como_salvarse" (qué vender y cuántos puntos les sube); ahorita el foco es Swich y Vualá Vainilla (1 por cada 10 visitas), menciónalos primero si les faltan; empuja a los que van cerca (80-99%) a pasar el 100%; si alguien no ha vendido Vuala, recuérdaselo. Termina con una frase de aliento que los haga crecer (actitud, disciplina, constancia). Varía las frases, nada repetitivo.',
+    '"cierre" (4-6 líneas): rétalos y motívalos. La Tercera Mano del Pachuco es un CASTIGO (nunca digas "alcanzar la Tercera Mano"): a los que están en riesgo dirígete con nombre y dales cómo SALVARSE con "como_salvarse" (qué vender y cuántos puntos les sube); el ÉNFASIS principal va en "prioridad_de_hoy": nombra a cada ruta de "les_falta_en_prioridad" con lo que lleva y lo que le falta, y en "como_salvarse" empieza por esos indicadores (si "prioridad_de_hoy" viene vacío, no inventes prioridades); empuja a los que van cerca (80-99%) a pasar el 100%; si alguien no ha vendido Vuala, recuérdaselo. Termina con una frase de aliento que los haga crecer (actitud, disciplina, constancia). Varía las frases, nada repetitivo.',
     'MENCIONES: escribe @ + la ruta y el nombre, ej. "@J203 Ana". Nunca escribas teléfonos.',
     'Usa SOLO los números de los datos; no inventes cifras ni hagas cuentas nuevas. Formato WhatsApp (*negritas*), pocos emojis.',
     'Responde SOLO con JSON: {"intro":"...","cierre":"..."}',
@@ -1148,7 +1170,7 @@ function rendimientoGeneral(t, equipo) {
         if (!v) return null;
         const comp = v.comp ?? v.pct;
         if (comp === null || comp === undefined) return null;
-        return { clave: i.clave, indicador: i.nombre, unidad: i.unidad, peso: pesoDe(i), avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
+        return { clave: i.clave, indicador: i.nombre, prioridad: !!i.prioridad, unidad: i.unidad, peso: pesoDe(i), avance: v.avance, meta: v.meta, falta: v.falta, pct: v.pct, ritmo: v.ritmo ?? null, necesita_por_dia: v.necesita_por_dia ?? null, comp };
       })
       .filter(Boolean);
     const sumP = lista.reduce((s, x) => s + x.peso, 0);
@@ -1160,7 +1182,8 @@ function rendimientoGeneral(t, equipo) {
       indicadores_medidos: lista.length,
       cumplidos: lista.filter((x) => x.comp >= 100).length,
       // Donde más gana si lo cumple (primero lo que más sube su rendimiento)
-      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => b.sube - a.sube || a.comp - b.comp),
+      // (los indicadores en prioridad van primero)
+      debajo: lista.filter((x) => x.comp < 100).sort((a, b) => (b.prioridad - a.prioridad) || b.sube - a.sube || a.comp - b.comp),
       efectividad_visitas: m?.efectividad === null || m?.efectividad === undefined ? null : Math.round(m.efectividad),
     };
   }
@@ -1205,6 +1228,7 @@ async function candidatosTercera(cfg, equipo) {
   const candidatos = expuestos.slice(0, 3).map((r) => ({ ...r, debajo: r.debajo.slice(0, 6) }));
   return {
     fecha,
+    prioridad_de_hoy: indicadoresPrioridad(t.inds).map((i) => nombreCorto(i.nombre)),
     que_es: 'La Tercera Mano del Pachuco es un CASTIGO para las rutas con el rendimiento general más bajo (no es premio ni meta). Se salvan las 3 mejores y cualquiera con rendimiento general mayor a 60%.',
     regla: 'rendimiento general = promedio ponderado del cumplimiento de cada indicador (cada uno con su "peso", tope 100%); del día contra su meta, del periodo contra el ritmo esperado. "sube" = puntos de rendimiento que gana si cumple ese indicador.',
     salvados_por_rendimiento: rutas.filter((r) => r.salvado_por_rendimiento && !r.salvado_por_top).map((r) => ({ ruta: r.ruta, nombre: r.nombre, rendimiento: r.indice })),
@@ -1246,7 +1270,7 @@ async function respuestaTerceraMano(c, cfg, { historial = [], pregunta = '' } = 
     'Te piden los candidatos a "La Tercera Mano del Pachuco": es un CASTIGO (no un premio ni una meta) para las rutas con el RENDIMIENTO GENERAL más bajo: todos los indicadores juntos, cada uno con su valor (ver "regla"). Se salvan las 3 mejores y cualquiera con rendimiento general mayor a 60% (ver "salvados_por_rendimiento"). Nunca digas "alcanzar la Tercera Mano": se trata de SALVARSE de ella. "Efectividad" aquí es el rendimiento general, no las visitas.',
     'Para CADA uno de los candidatos, en este orden:',
     '  a) Encabezado: su mención exacta (@ + campo "mencion"), ruta, nombre y su rendimiento general (indice %).',
-    '  b) CÓMO SALVARSE: los "puntos_para_salvarse" que le faltan y, de "como_salvarse", qué vender de cada indicador (avance de meta, lo que falta con su unidad) y cuántos puntos le sube ("sube"). Empieza por los que más suben; ahorita el foco es Swich y Vualá Vainilla (1 por cada 10 visitas). En los del periodo usa "ritmo" y "necesita_por_dia".',
+    '  b) CÓMO SALVARSE: los "puntos_para_salvarse" que le faltan y, de "como_salvarse", qué vender de cada indicador (avance de meta, lo que falta con su unidad) y cuántos puntos le sube ("sube"). Empieza por los indicadores en "prioridad_de_hoy" (el énfasis que pidió el gerente) y luego los que más suben. En los del periodo usa "ritmo" y "necesita_por_dia".',
     'Formato WhatsApp, *negritas*, sin tablas, máximo 22 líneas en total. Al final una línea corta que motive.',
     'Usa SOLO los números del JSON; no inventes cifras ni premios. paq = paquetes, pz = piezas, $ = pesos. No felicites a nadie.',
     'Límites: nada humillante ni sobre físico, familia, género, orientación, religión u origen.',
@@ -1628,8 +1652,8 @@ const INDICADORES_BASE = {
   otc_semana:  { nombre: 'OTC semanal',            unidad: '$',   def: { retro: false, ia: true, tercera: false } },
   efectividad: { nombre: 'Efectividad de visitas', unidad: '%',   def: { retro: false, ia: true, tercera: true } },
   // Producto por visitas: por cada 10 clientes visitados debe salir 1 pieza (piezas del OTC de hoy)
-  swich_visitas:    { nombre: 'Swich (1 por cada 10 visitas)',          unidad: 'pz', def: { retro: true, ia: true, tercera: true } },
-  vainilla_visitas: { nombre: 'Vualá Vainilla (1 por cada 10 visitas)', unidad: 'pz', def: { retro: true, ia: true, tercera: true } },
+  swich_visitas:    { nombre: 'Swich (1 por cada 10 visitas)',          unidad: 'pz', def: { retro: true, ia: true, tercera: true, prioridad: true } },
+  vainilla_visitas: { nombre: 'Vualá Vainilla (1 por cada 10 visitas)', unidad: 'pz', def: { retro: true, ia: true, tercera: true, prioridad: true } },
   // Del periodo (mes): se comparan contra el ritmo esperado a la fecha, no contra la meta completa
   mes_max:       { nombre: 'MAX del periodo',       unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
   mes_open:      { nombre: 'OPEN del periodo',      unidad: 'paq', def: { retro: false, ia: true, tercera: false } },
@@ -1662,7 +1686,7 @@ function ralliesDe(filas) {
 function indicadoresConfig(cfg, filas) {
   const conf = cfg?.indicadores || {};
   const lista = Object.entries(INDICADORES_BASE).map(([clave, b]) => ({
-    clave, nombre: b.nombre, unidad: b.unidad, exclusivo: false, ...b.def, ...(conf[clave] || {}),
+    clave, nombre: b.nombre, unidad: b.unidad, exclusivo: false, prioridad: false, ...b.def, ...(conf[clave] || {}),
   }));
   // Marcas: OPEN, CHAMPIONS y del día
   const marcas = { open: {}, champ: {}, dia: {} };
@@ -1675,18 +1699,23 @@ function indicadoresConfig(cfg, filas) {
   for (const tipo of ['open', 'champ', 'dia']) {
     for (const [k, nom] of Object.entries(marcas[tipo])) {
       const clave = `${tipo}_${k}`;
-      lista.push({ clave, nombre: prefijo[tipo] + (tipo === 'champ' ? nomChamp(nom) : nom), unidad: 'paq', exclusivo: false, ...DEF_MARCA, ...(conf[clave] || {}) });
+      lista.push({ clave, nombre: prefijo[tipo] + (tipo === 'champ' ? nomChamp(nom) : nom), unidad: 'paq', exclusivo: false, prioridad: false, ...DEF_MARCA, ...(conf[clave] || {}) });
     }
   }
   for (const r of ralliesDe(filas)) {
     const clave = `rally_${r.id}`;
     lista.push({
       clave, nombre: `Rally ${r.nombre || 'OTC'}`, unidad: r.unidad === 'piezas' ? 'pz' : '$', exclusivo: !!r.exclusivo,
-      ...DEF_RALLY, ...(conf[clave] || {}),
+      prioridad: false, ...DEF_RALLY, ...(conf[clave] || {}),
     });
   }
   return lista;
 }
+
+// ⭐ Prioridad de Robotina: indicadores a los que les hace más énfasis (se prenden en SMART-TRACK).
+// Nunca entra un rally exclusivo de Supervisor-1 (no sale al grupo ni a vendedores).
+const indicadoresPrioridad = (inds) => inds.filter((i) => i.prioridad && !i.exclusivo);
+const nombreCorto = (nom) => String(nom || '').replace(/ \(1 por cada 10 visitas\)/, '');
 
 const r0 = (v) => (v === null || v === undefined ? null : Math.round(v)); // enteros, igual que la tabla de la app
 
