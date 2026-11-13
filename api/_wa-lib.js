@@ -150,8 +150,25 @@ export async function ultimosPorRuta({ antesDe = null, hasta = null } = {}) {
   return porRuta;
 }
 
+// Una sola fila por ruta: si la misma ruta quedó guardada con dos nombres ("RUTA J201" y otro),
+// se queda la que trae datos (más venta del día, luego del mes, luego la más reciente).
+function unaPorRuta(filas) {
+  const peso = (f) => [Number(f.venta_dia) || 0, Number(f.clientes_visitados) || 0, Number(f.venta_mes) || 0, String(f.actualizado_en || '')];
+  const mejor = (a, b) => {
+    const x = peso(a), y = peso(b);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i] ? a : b;
+    return a;
+  };
+  const porRuta = new Map();
+  for (const f of filas || []) {
+    const k = claveRuta(f.ruta);
+    porRuta.set(k, porRuta.has(k) ? mejor(porRuta.get(k), f) : f);
+  }
+  return [...porRuta.values()];
+}
+
 export async function filasDeFecha(fecha) {
-  return sb(`resumen_vendedores?select=*&fecha=eq.${fecha}`);
+  return unaPorRuta(await sb(`resumen_vendedores?select=*&fecha=eq.${fecha}`));
 }
 
 // ---------------------------------------------------------------- Configuración del bot
