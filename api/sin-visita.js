@@ -16,9 +16,11 @@
 //          rutas: { J201: [ { cliente, nombre, direccion, colonia, potencial, municipio, localidad } ], ... },
 //          errores: { J204: "no cargó el reporte" },   // opcional: rutas que no se pudieron leer
 //          enviar: true, forzar: false, por: "robot" | "staff: correo" }
-//   → { ok, guardadas, mensajes: [{ numero, texto, mencionados }] }
+//          formato: "texto" }                          // opcional: sin tabla, solo texto
+//   → { ok, guardadas, mensajes: [{ numero, imagen, caption, texto, mencionados }] }
+//      imagen = URL de la tabla (/api/sin-visita-tabla); texto = respaldo si la imagen no sale
 
-import { autorizado, fechaMX, claveRuta, primerNombre, configBot, listaContactos, leerEstado, guardarEstado } from './_wa-lib.js';
+import { autorizado, firmar, fechaMX, claveRuta, primerNombre, numeroEnvio, configBot, listaContactos, leerEstado, guardarEstado } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -35,7 +37,6 @@ function headers(extra = {}) {
   return h;
 }
 
-const mencion = (tel) => (tel ? `521${String(tel).replace(/\D/g, '').slice(-10)}` : null);
 const esFecha = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 const fechaLarga = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
 const diaCorto = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -53,9 +54,12 @@ function cliente(c) {
 }
 
 // Arma los mensajes:
-//   · Al GRUPO: solo el resumen — cuántos clientes le faltan a cada ruta (con mención).
-//   · A cada VENDEDOR (a su WhatsApp): la lista de SUS clientes que le faltan.
-function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
+//   · Al GRUPO: la TABLA (imagen) con cuántos clientes le faltan a cada ruta.
+//   · A cada VENDEDOR (a su WhatsApp): la TABLA con SUS clientes que le faltan.
+// Cada mensaje lleva "imagen" (URL de /api/sin-visita-tabla) + "caption", y también "texto":
+// el robot manda la imagen y, solo si la imagen falla, manda el texto.
+// urlTabla(ruta) → URL firmada de la tabla, o null para mandar solo texto.
+async function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla }) {
   const codigos = [...new Set([...Object.keys(rutas), ...Object.keys(errores)])];
   const total = Object.values(rutas).reduce((s, l) => s + l.length, 0);
   const periodo = tipo === 'dia' ? `hoy · ${fechaLarga(hasta)}` : `semana · ${diaCorto(desde)} al ${fechaLarga(hasta)}`;
@@ -83,7 +87,11 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
     G.push(n ? `🔴 ${e.txt} · faltan *${n}*` : `✅ ${e.txt} · sin clientes pendientes`);
   }
   G.push('', total ? '_A cada vendedor le llegó su lista. El detalle por ruta está en SMART-TRACK → Sin visita._' : '_El detalle por ruta está en SMART-TRACK → Sin visita._');
-  const mensajes = [{ numero: GRUPO, texto: G.join('\n'), mencionados: [...new Set(mencionados)] }];
+  const imgGrupo = await urlTabla('GRUPO');
+  const mensajes = [{
+    numero: GRUPO, texto: G.join('\n'), mencionados: [...new Set(mencionados)],
+    ...(imgGrupo ? { imagen: imgGrupo, caption: G.slice(0, 2).join('\n') } : {}),
+  }];
 
   // ── Cada vendedor: su lista ──
   for (const [ruta, lista] of Object.entries(rutas)) {
@@ -101,8 +109,11 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
       if (dir) V.push(`    ${dir}`);
     });
     V.push('', `_Ruta ${ruta} · datos de PowerStreet ${horaMX()}_`);
-    // Evolution (WhatsApp Web) necesita el celular de México como 521 + 10 dígitos
-    mensajes.push({ numero: mencion(v.telefono), texto: V.join('\n'), mencionados: [] });
+    const img = await urlTabla(ruta);
+    mensajes.push({
+      numero: numeroEnvio(v.telefono), texto: V.join('\n'), mencionados: [],
+      ...(img ? { imagen: img, caption: V.slice(0, 2).join('\n') } : {}),
+    });
   }
   return mensajes;
 }
@@ -115,7 +126,7 @@ export default async function handler(req) {
     const vigente = p?.en && !p.atendido && Date.now() - Date.parse(p.en) < 30 * 60 * 1000;
     if (!vigente) return json({ pendiente: false });
     await guardarEstado('sin_visita_pedido', { ...p, atendido: true, tomado_en: new Date().toISOString() });
-    return json({ pendiente: true, por: p.por, desdeDia: p.desdeDia || null, hastaDia: p.hastaDia || null });
+    return json({ pendiente: true, por: p.por, desdeDia: p.desdeDia || null, hastaDia: p.hastaDia || null, enviar: p.enviar !== false });
   }
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
@@ -166,7 +177,12 @@ export default async function handler(req) {
   }
   const vendedores = {};
   for (const c of await listaContactos(cfg)) if (c.tipo === 'vendedor' && c.activo !== false && c.ruta) vendedores[claveRuta(c.ruta)] = c;
-  const mensajes = armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores });
+  // Tabla (imagen) de /api/sin-visita-tabla, con URL firmada. formato:"texto" → solo texto.
+  const base = (process.env.PUBLIC_BASE_URL || new URL(req.url).origin).replace(/\/+$/, '');
+  const sello = Date.now();
+  const urlTabla = async (ruta) => (b.formato === 'texto' ? null
+    : `${base}/api/sin-visita-tabla?ruta=${ruta}&t=${tipo}&d=${desde}&h=${hasta}&s=${await firmar(`SV:${ruta}:${tipo}:${desde}`, hasta)}&v=${sello}`);
+  const mensajes = await armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla });
   await guardarEstado('sin_visita_envio', { marca, en: ahora });
   return json({ ok: true, guardadas: filas.length, mensajes });
 }
