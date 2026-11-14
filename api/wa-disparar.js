@@ -57,6 +57,41 @@ async function huellaAvance(fecha) {
   return `${fecha}#${filas.length}#${h.toString(16)}`;
 }
 
+// ---- Sin visita a petición del staff ----
+// El botón de la pantalla "Sin visita" le pide al ROBOT de PowerStreet que corra ya: baja las
+// visitas, las pega en SMART-TRACK y manda el aviso al grupo. Variable en Vercel: ROBOT_URL
+// (la URL pública del robot en Easypanel, ej. https://pwst-robot.xxxx.easypanel.host).
+async function pedirSinVisita(req, user, interna) {
+  if (!interna) {
+    // Solo staff (gerente, supervisores…), no vendedores
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,username`, {
+      headers: SERVICE_KEY.startsWith('sb_') ? { apikey: SERVICE_KEY } : { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+    });
+    const perfil = r.ok ? (await r.json())[0] : null;
+    if (!perfil || perfil.role === 'vendedor') return json({ ok: false, error: 'Solo el staff puede pedir el aviso de sin visita' }, 403);
+  }
+  const robot = (process.env.ROBOT_URL || '').replace(/\/+$/, '');
+  if (!robot) return json({ ok: false, error: 'Falta la variable ROBOT_URL en Vercel' }, 500);
+  const previo = await leerEstado('sin_visita_peticion');
+  if (previo?.en && Date.now() - Date.parse(previo.en) < MIN_ENTRE_ENVIOS) {
+    return json({ ok: true, enviado: false, motivo: 'Ya se pidió hace menos de 3 minutos; el robot ya está en eso.' });
+  }
+  const por = interna ? 'sistema' : (user.email || user.id);
+  await guardarEstado('sin_visita_peticion', { en: new Date().toISOString(), por });
+  try {
+    const r = await fetch(`${robot}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
+      body: JSON.stringify({ sinVisita: true, por }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return json({ ok: false, error: d.error || `El robot respondió ${r.status}` }, 502);
+    return json({ ok: true, enviado: true, enCola: !!d.yaCorriendo });
+  } catch (e) {
+    return json({ ok: false, error: `No se pudo contactar al robot: ${e.message || e}` }, 502);
+  }
+}
+
 export default async function handler(req) {
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
@@ -66,6 +101,7 @@ export default async function handler(req) {
 
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
+  if (body.tipo === 'sin_visita') return await pedirSinVisita(req, user, interna);
   if (body.tipo !== 'dia') return json({ error: 'tipo inválido' }, 400);
 
   const cfg = await configBot();
