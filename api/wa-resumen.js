@@ -574,6 +574,114 @@ async function recordar(numero, historial, pregunta, respuesta) {
   await guardarEstado(claveChat(numero), { t: Date.now(), msgs });
 }
 
+
+// ------------------------------------------------------------------ 📍 SIN VISITA POR CHAT
+// "clientes sin visita de lunes a viernes", "sin visita de la semana", "actualiza clientes sin visita"…
+// Los datos los baja el robot de PowerStreet (tabla sin_visita_pwst). Si el staff pide "actualiza"
+// (o pregunta por un rango que no hay / ya está viejo), se le pide al robot que vaya por ellos.
+const DIAS_SV_TXT = [['lunes', 1], ['martes', 2], ['miercoles', 3], ['jueves', 4], ['viernes', 5], ['sabado', 6]];
+const NOMBRE_DIA_SV = ['', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const normSV = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+function pideSinVisita(texto) {
+  return /sin\s*visita|no\s*visitad|sin\s*visitar|faltan?\s*(de\s*|por\s*)?visitar|clientes\s*pendientes/.test(normSV(texto));
+}
+const quiereActualizarSV = (texto) => /actualiz|refresc|manda|envia|mandales|pide|pidele|baja|descarga|corre\b|ve por/.test(normSV(texto));
+
+// → { desdeDia, hastaDia } (1 = lunes … 6 = sábado)
+function rangoSinVisitaTexto(texto) {
+  const t = normSV(texto);
+  const d = new Date(`${fechaMX()}T12:00:00Z`).getUTCDay();
+  const hoyDia = d === 0 ? 6 : Math.min(d, 6);
+  const encontrados = DIAS_SV_TXT.map(([n, i]) => ({ i, pos: t.search(new RegExp(`\\b${n}\\b`)) })).filter((x) => x.pos >= 0).sort((a, b) => a.pos - b.pos);
+  if (encontrados.length >= 2) {
+    const a = encontrados[0].i, b = encontrados[encontrados.length - 1].i;
+    return { desdeDia: Math.min(a, b), hastaDia: Math.max(a, b) };
+  }
+  if (encontrados.length === 1) {
+    const x = encontrados[0].i;
+    return /\bdesde\b/.test(t) ? { desdeDia: Math.min(x, hoyDia), hastaDia: Math.max(x, hoyDia) } : { desdeDia: x, hastaDia: x };
+  }
+  if (/\bayer\b/.test(t)) return { desdeDia: Math.max(hoyDia - 1, 1), hastaDia: Math.max(hoyDia - 1, 1) };
+  if (/semana/.test(t)) return { desdeDia: 1, hastaDia: hoyDia };
+  return { desdeDia: hoyDia, hastaDia: hoyDia };
+}
+function fechasDeRango({ desdeDia, hastaDia }) {
+  const hoy = fechaMX();
+  const d = new Date(`${hoy}T12:00:00Z`).getUTCDay();
+  const lunes = new Date(Date.parse(`${hoy}T12:00:00Z`) - (d === 0 ? 6 : d - 1) * 86400000);
+  const f = (n) => new Date(lunes.getTime() + (n - 1) * 86400000).toISOString().slice(0, 10);
+  return { desde: f(desdeDia), hasta: f(hastaDia) };
+}
+const textoRangoSV = ({ desdeDia, hastaDia }) => (desdeDia === hastaDia ? `del ${NOMBRE_DIA_SV[desdeDia]}` : `de ${NOMBRE_DIA_SV[desdeDia]} a ${NOMBRE_DIA_SV[hastaDia]}`);
+
+// Le pide al robot de PowerStreet que vaya por ellos (mismo mecanismo que el botón de SMART-TRACK)
+async function pedirSinVisitaRobot(por, rango) {
+  await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: false, ...rango });
+  const robot = (process.env.ROBOT_URL || '').trim().replace(/\/+$/, '');
+  if (!robot) return;
+  try {
+    const sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined;
+    const r = await fetch(`${robot}/run`, {
+      method: 'POST', signal: sig,
+      headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
+      body: JSON.stringify({ sinVisita: true, por, ...rango }),
+    });
+    if (r.ok) await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: true, directo: true, ...rango });
+  } catch { /* el robot lo toma en su revisión de cada 30 s */ }
+}
+
+async function respuestaSinVisita(c, texto) {
+  const rango = rangoSinVisitaTexto(texto);
+  const { desde, hasta } = fechasDeRango(rango);
+  const esEquipo = c.tipo === 'equipo';
+  const cual = textoRangoSV(rango);
+  const hoyDia = (() => { const d = new Date(`${fechaMX()}T12:00:00Z`).getUTCDay(); return d === 0 ? 6 : d; })();
+  const aviso = rango.hastaDia > hoyDia ? '\n_Ojo: incluye días que todavía no pasan; esos clientes salen todos sin visita._' : '';
+
+  if (quiereActualizarSV(texto)) {
+    if (!esEquipo) return { texto: '🔒 Solo el jefe o un supervisor me pueden pedir que actualice los clientes sin visita.' };
+    await pedirSinVisitaRobot(`${tratoDe(c)} (WhatsApp)`, rango);
+    return { texto: `A la orden, ${tratoDe(c)} 🫡\n\n🤖 Ya mandé al robot a PowerStreet por los clientes sin visita ${cual} (PM0${rango.desdeDia}${rango.desdeDia !== rango.hastaDia ? `–PM0${rango.hastaDia}` : ''}). En unos 5 min llega el resumen al grupo y su lista a cada vendedor.${aviso}` };
+  }
+
+  // Lo último guardado para ESE rango
+  let filas = [];
+  try {
+    const ruta = c.tipo === 'vendedor' && c.ruta ? `&ruta=eq.${encodeURIComponent(claveRuta(c.ruta))}` : '';
+    filas = await sb(`sin_visita_pwst?select=*&desde=eq.${desde}&hasta=eq.${hasta}${ruta}&order=actualizado_en.desc&limit=50`);
+  } catch { filas = []; }
+  const lote = filas.length ? filas.filter((f) => f.actualizado_en === filas[0].actualizado_en) : [];
+  const viejo = lote.length && Date.now() - Date.parse(lote[0].actualizado_en) > 90 * 60000 && hasta === fechaMX();
+
+  if (!lote.length || viejo) {
+    if (esEquipo) {
+      await pedirSinVisitaRobot(`${tratoDe(c)} (WhatsApp)`, rango);
+      return { texto: `A la orden, ${tratoDe(c)} 🫡\n\n${lote.length ? 'Lo que tengo ya está viejo' : `Todavía no tengo los clientes sin visita ${cual}`}, así que mandé al robot a PowerStreet por ellos. En unos 5 min llega el resumen al grupo y su lista a cada vendedor.${aviso}` };
+    }
+    return { texto: `Todavía no tengo tus clientes sin visita ${cual}. Se actualizan a las 5 pm y 7 pm (L–V) y el sábado desde las 3 pm; también los puede pedir tu supervisor.` };
+  }
+
+  const hora = horaMXCorta(new Date(lote[0].actualizado_en));
+  if (c.tipo === 'vendedor') {
+    const f = lote[0];
+    const lista = Array.isArray(f.clientes) ? f.clientes : [];
+    if (!lista.length) return { texto: `✅ ¡No te falta ningún cliente ${cual}! (PowerStreet, ${hora})` };
+    const L = [`📍 Te faltan *${lista.length}* clientes por visitar ${cual} (PowerStreet, ${hora}):`, ''];
+    lista.forEach((x, i) => {
+      L.push(`${i + 1}. *${x.nombre}*${x.potencial ? ` (${x.potencial})` : ''}`);
+      const dir = [x.cliente, x.direccion, x.colonia].filter(Boolean).join(' · ');
+      if (dir) L.push(`    ${dir}`);
+    });
+    return { texto: L.join('\n') };
+  }
+  const total = lote.reduce((sum, f) => sum + (f.total || 0), 0);
+  const L = [`A la orden, ${tratoDe(c)} 🫡`, '', `📍 *Clientes sin visita ${cual}* (PowerStreet, ${hora})`, total ? `Faltan *${total}* en total` : '✅ ¡Ninguna ruta tiene pendientes!', ''];
+  for (const f of [...lote].sort((a, b) => (b.total || 0) - (a.total || 0))) L.push(f.total ? `🔴 ${f.ruta} · faltan *${f.total}*` : `✅ ${f.ruta} · completo`);
+  L.push('', '_El detalle está en SMART-TRACK → Sin visita. Para traerlo fresco dime "actualiza sin visita"._');
+  return { texto: L.join('\n') };
+}
+
 async function modoBot(req) {
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
@@ -626,6 +734,11 @@ async function modoBot(req) {
 
   const cmd = comando(body.texto);
   const textoOriginal = body.texto || '';
+
+  if (pideSinVisita(textoOriginal)) {
+    const r = await respuestaSinVisita(c, textoOriginal);
+    return responder({ tipo: 'texto', texto: r.texto });
+  }
 
   if (pideOTC(textoOriginal)) {
     const hoy = fechaMX();
