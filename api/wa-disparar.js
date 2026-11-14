@@ -66,7 +66,7 @@ async function pedirSinVisita(req, user, interna, body = {}) {
   const dia = (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 6 ? Number(v) : null);
   let desdeDia = dia(body.desdeDia), hastaDia = dia(body.hastaDia);
   if (desdeDia && hastaDia && desdeDia > hastaDia) [desdeDia, hastaDia] = [hastaDia, desdeDia];
-  const rango = desdeDia && hastaDia ? { desdeDia, hastaDia } : {};
+  const rango = { ...(desdeDia && hastaDia ? { desdeDia, hastaDia } : {}), enviar: body.enviar !== false };
   if (!interna) {
     // Solo staff (gerente, supervisores…), no vendedores
     const r = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,username`, {
@@ -103,7 +103,7 @@ async function pedirSinVisita(req, user, interna, body = {}) {
       console.warn('no se pudo llamar al robot directo:', e?.message || e);
     }
   }
-  return json({ ok: true, enviado: true, motivo: '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min llega al grupo y se actualiza aquí.' });
+  return json({ ok: true, enviado: true, motivo: rango.enviar ? '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min llega al grupo y se actualiza aquí.' : '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min se actualiza aquí (sin mandar WhatsApp).' });
 }
 
 export default async function handler(req) {
