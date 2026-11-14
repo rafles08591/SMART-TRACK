@@ -32,6 +32,7 @@ function lunesDe(iso) {
 const fechaCorta = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const horaCorta = (ts) => (ts ? new Date(ts).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "numeric", minute: "2-digit" }) : "");
 const nombreRuta = (r) => NOMBRES[`RUTA ${r}`] || NOMBRES[r] || "";
+const DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]; // 1 … 6 (PM01 … PM06)
 
 export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   const esVendedor = rol === "vendedor";
@@ -45,6 +46,11 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   const [abierta, setAbierta] = useState(esVendedor ? rutaPropia : null);
   const [pidiendo, setPidiendo] = useState(false);
   const [aviso, setAviso] = useState("");
+  // Rango de días para pedir el reporte (1 = lunes … 6 = sábado). Por defecto: hoy.
+  const diaHoy = Math.min(Math.max(new Date(`${hoy}T12:00:00Z`).getUTCDay() || 6, 1), 6);
+  const [desdeDia, setDesdeDia] = useState(diaHoy);
+  const [hastaDia, setHastaDia] = useState(diaHoy);
+  const ponerRango = (a, b) => { setDesdeDia(a); setHastaDia(b); };
 
   async function cargar() {
     try {
@@ -78,8 +84,11 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   // Lo más reciente de cada tipo: "dia" = el de HOY; "semana" = el último de esta semana
   const vista = useMemo(() => {
     const lista = (filas || []).filter((f) => f.tipo === pestana && (pestana === "semana" || f.fecha === hoy));
-    const fecha = lista.map((f) => f.fecha).sort().pop() || null;
-    const rutas = lista.filter((f) => f.fecha === fecha).sort((a, b) => (b.total || 0) - (a.total || 0) || a.ruta.localeCompare(b.ruta));
+    // Lo último que se bajó (cada rango pedido es un "lote": misma fecha + desde + hasta)
+    const ultimo = [...lista].sort((a, b) => String(b.actualizado_en).localeCompare(String(a.actualizado_en)))[0];
+    const fecha = ultimo?.fecha || null;
+    const rutas = lista.filter((f) => ultimo && f.fecha === ultimo.fecha && f.desde === ultimo.desde && f.hasta === ultimo.hasta)
+      .sort((a, b) => (b.total || 0) - (a.total || 0) || a.ruta.localeCompare(b.ruta));
     const actualizado = rutas.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || null;
     const total = rutas.reduce((s, f) => s + (f.total || 0), 0);
     return { fecha, rutas, actualizado, total, desde: rutas[0]?.desde, hasta: rutas[0]?.hasta, por: rutas[0]?.actualizado_por };
@@ -93,10 +102,11 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
       const r = await fetch("/api/wa-disparar", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.session?.access_token || ""}` },
-        body: JSON.stringify({ tipo: "sin_visita" }),
+        body: JSON.stringify({ tipo: "sin_visita", desdeDia, hastaDia }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) throw new Error(d.error || `Error ${r.status}`);
+      setPestana(desdeDia === hastaDia && desdeDia === diaHoy ? "dia" : "semana");
       setAviso(d.motivo || (d.enCola
         ? "🤖 El robot está terminando otra carga; en cuanto acabe baja las visitas y lo manda al grupo (unos 5–8 min)."
         : "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí y llega al grupo."));
@@ -130,16 +140,44 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
               Datos de PowerStreet · L–V 5 pm y 7 pm (ruta del día) · sábado desde las 3 pm cada hora (toda la semana)
             </div>
           </div>
-          {!esVendedor && (
-            <button className="btn" onClick={pedirActualizacion} disabled={pidiendo} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <RefreshCw size={14} className={pidiendo ? "spin" : ""} /> {pidiendo ? "Pidiendo…" : "Actualizar ahora y mandar al grupo"}
-            </button>
-          )}
         </div>
+        {!esVendedor && (
+          <div style={{ marginTop: 12, border: `1px solid ${T.border}`, borderRadius: 12, padding: 12, background: T.soft }}>
+            <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 700 }}>¿Qué días de esta semana? (el robot pone ese rango de rutas y fechas en PowerStreet)</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {[["Hoy", diaHoy, diaHoy], ["Lun–Vie", 1, 5], ["Lun–Sáb", 1, 6], ["Lun a ayer", 1, Math.max(diaHoy - 1, 1)]].map(([txt, a, b]) => (
+                <button key={txt} onClick={() => ponerRango(a, b)}
+                  style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    border: `1px solid ${desdeDia === a && hastaDia === b ? T.primary : T.border}`,
+                    background: desdeDia === a && hastaDia === b ? "rgba(242,177,52,0.14)" : "transparent",
+                    color: desdeDia === a && hastaDia === b ? T.primary : T.muted }}>{txt}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 13, color: T.ink }}>
+              <label>Desde{" "}
+                <select value={desdeDia} onChange={(e) => { const v = Number(e.target.value); setDesdeDia(v); if (hastaDia < v) setHastaDia(v); }}
+                  style={{ background: T.card, color: T.ink, border: `1px solid ${T.border}`, borderRadius: 8, padding: "5px 8px" }}>
+                  {DIAS.map((d, i) => <option key={d} value={i + 1}>{d}</option>)}
+                </select>
+              </label>
+              <label>Hasta{" "}
+                <select value={hastaDia} onChange={(e) => { const v = Number(e.target.value); setHastaDia(v); if (desdeDia > v) setDesdeDia(v); }}
+                  style={{ background: T.card, color: T.ink, border: `1px solid ${T.border}`, borderRadius: 8, padding: "5px 8px" }}>
+                  {DIAS.map((d, i) => <option key={d} value={i + 1}>{d}</option>)}
+                </select>
+              </label>
+              <span style={{ fontSize: 11.5, color: T.muted }}>PM0{desdeDia}{desdeDia !== hastaDia ? `–PM0${hastaDia}` : ""}</span>
+            </div>
+            {hastaDia > diaHoy && <div style={{ fontSize: 11.5, color: T.bad, marginBottom: 8 }}>Ojo: incluye días que todavía no pasan; esos clientes van a salir todos como sin visita.</div>}
+            <button className="btn" onClick={pedirActualizacion} disabled={pidiendo} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <RefreshCw size={14} className={pidiendo ? "spin" : ""} /> {pidiendo ? "Pidiendo…" : `Actualizar ${desdeDia === hastaDia ? DIAS[desdeDia - 1] : `${DIAS[desdeDia - 1]} a ${DIAS[hastaDia - 1]}`} y mandar al grupo`}
+            </button>
+          </div>
+        )}
         {aviso && <div style={{ fontSize: 12.5, color: aviso.startsWith("⚠️") ? T.bad : T.ok, marginTop: 10 }}>{aviso}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           {btnPestana("dia", "Hoy")}
-          {btnPestana("semana", "Semana")}
+          {btnPestana("semana", "Semana / rango")}
         </div>
       </div>
 
@@ -159,7 +197,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
         <>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div className="card" style={{ padding: 14, flex: "1 1 160px" }}>
-              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "dia" ? "Sin visita hoy" : "Sin ninguna visita en la semana"}</div>
+              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "dia" ? "Sin visita hoy" : "Sin ninguna visita en el periodo"}</div>
               <div className="mono display" style={{ fontSize: 24, color: vista.total ? T.bad : T.ok }}>{vista.total}</div>
             </div>
             <div className="card" style={{ padding: 14, flex: "2 1 220px" }}>
