@@ -290,11 +290,25 @@ function textoRiesgo(cfg, rk, c) {
   return llenarPlantilla(plantilla(cfg, 'riesgo'), v);
 }
 
+// OTC del día: vive en la tabla otc_dia (una fila por fecha). Si la tabla no existe todavía, se usa
+// lo que haya en el documento general (data.otcDia). fecha = 'YYYY-MM-DD' o null para los últimos 30 días.
+async function otcRegistros(fecha = null) {
+  try {
+    const hace30 = new Date(Date.parse(`${fechaMX()}T12:00:00Z`) - 30 * 86400000).toISOString().slice(0, 10);
+    const filtro = fecha ? `fecha=eq.${fecha}` : `fecha=gte.${hace30}`;
+    const filas = await sb(`otc_dia?select=registros&${filtro}`);
+    return filas.flatMap((f) => (Array.isArray(f.registros) ? f.registros : []));
+  } catch {
+    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
+    const otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+    return fecha ? otc.filter((x) => x.fecha === fecha) : otc;
+  }
+}
+
 async function textoOTCDesglose(fecha, todos, soloRuta = null) {
   try {
     const RUTAS_LOCALES = new Set(['J201', 'J202', 'J203', 'J204', 'J205', 'J206', 'J207']);
-    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
-    const otc = (r[0]?.otc || []).filter(x => x.fecha === fecha);
+    const otc = await otcRegistros(fecha);
     if (!otc.length) return '';
 
     const porVend = {};
@@ -352,13 +366,14 @@ const VUALA_DEFAULT = [
 // → { J201: { piezas, pesos, articulos: { nombre: piezas } }, ... } solo rutas del equipo
 async function vualaPorRuta(fecha, todos) {
   try {
-    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia,cat:data->otcVuala');
+    const r = await sb('ventas_app_state?id=eq.main&select=cat:data->otcVuala');
+    const otcFecha = await otcRegistros(fecha);
     const cat = Array.isArray(r[0]?.cat) ? r[0].cat : VUALA_DEFAULT;
     const codigos = new Set(cat.map((x) => String(x.codigo || '').trim()).filter(Boolean));
     const nombres = new Set(cat.map((x) => String(x.articulo || '').trim().toUpperCase()).filter(Boolean));
     const mias = new Set((todos || []).filter((c) => c.tipo === 'vendedor').map((c) => claveRuta(c.ruta)));
     const out = {};
-    for (const x of (r[0]?.otc || [])) {
+    for (const x of otcFecha) {
       if (x.fecha !== fecha) continue;
       const ruta = claveRuta(x.vendedor);
       if (mias.size && !mias.has(ruta)) continue;
@@ -836,8 +851,7 @@ async function datosRetro(fecha, cfg) {
 
   let otcPorRuta = {};
   try {
-    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
-    const otc = (r[0]?.otc || []).filter(x => x.fecha === fecha);
+    const otc = await otcRegistros(fecha);
     for (const x of otc) {
       const ruta = claveRuta(x.vendedor);
       if (!otcPorRuta[ruta]) otcPorRuta[ruta] = 0;
@@ -1470,11 +1484,15 @@ async function ventasPorProducto(texto, cfg) {
   if (!palabras.length && !porApodo && !general) return null;
   // Si nombran rutas (J203, j 205), solo esas
   const rutasPedidas = new Set((normTxt(texto).match(/\bj\s?-?\d{3}\b/g) || []).map((x) => claveRuta(x.toUpperCase())));
-  let av = [], otc = [];
+  let av = [], otc = [], otcUltimaFecha = null;
   try {
-    const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia,otc:data->otcDia');
+    const r = await sb('ventas_app_state?id=eq.main&select=av:data->avanceDia');
     av = Array.isArray(r?.[0]?.av) ? r[0].av : [];
-    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+    otc = await otcRegistros(fechaMX());
+    // Si hoy no hay OTC, solo se busca la fecha del último que se cargó (para avisar que no se actualizó)
+    if (!otc.length) {
+      try { otcUltimaFecha = (await sb('otc_dia?select=fecha&order=fecha.desc&limit=1'))?.[0]?.fecha || null; } catch { /* sin tabla */ }
+    }
   } catch { return null; }
   // El reporte de OTC trae todas las rutas del país: solo se cuentan las del equipo
   // (las rutas dadas de alta en Contactos de WhatsApp y las que salen en el resumen del día).
@@ -1490,7 +1508,7 @@ async function ventasPorProducto(texto, cfg) {
   // Cada reporte con SU fecha más reciente: el de avance y el de OTC no siempre se cargan el mismo día
   // (antes se tomaba la más nueva de los dos y el OTC de un día antes se quedaba fuera).
   const fechaAv = av.map((x) => x.fecha).filter(Boolean).sort().pop() || null;
-  const fechaOtc = otc.map((x) => x.fecha).filter(Boolean).sort().pop() || null;
+  const fechaOtc = otc.map((x) => x.fecha).filter(Boolean).sort().pop() || otcUltimaFecha;
   // Solo se usa el detalle de HOY: si un reporte no se ha actualizado hoy, no se dan datos de otro día
   const hoyMx = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
   const avHoy = fechaAv === hoyMx, otcHoy = fechaOtc === hoyMx;
@@ -1748,8 +1766,7 @@ const PRODUCTO_POR_VISITAS = {
 async function piezasPorVisitasHoy(fecha, cfg) {
   let otc = [];
   try {
-    const r = await sb('ventas_app_state?id=eq.main&select=otc:data->otcDia');
-    otc = Array.isArray(r?.[0]?.otc) ? r[0].otc : [];
+    otc = await otcRegistros(fecha);
   } catch { return null; }
   const hoy = otc.filter((x) => x.fecha === fecha);
   if (!hoy.length) return null;
