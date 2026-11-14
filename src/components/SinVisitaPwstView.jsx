@@ -51,6 +51,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   const [desdeDia, setDesdeDia] = useState(diaHoy);
   const [hastaDia, setHastaDia] = useState(diaHoy);
   const ponerRango = (a, b) => { setDesdeDia(a); setHastaDia(b); };
+  const [enviarWhats, setEnviarWhats] = useState(true); // false = solo actualizar SMART-TRACK
 
   async function cargar() {
     try {
@@ -102,14 +103,14 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
       const r = await fetch("/api/wa-disparar", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.session?.access_token || ""}` },
-        body: JSON.stringify({ tipo: "sin_visita", desdeDia, hastaDia }),
+        body: JSON.stringify({ tipo: "sin_visita", desdeDia, hastaDia, enviar: enviarWhats }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) throw new Error(d.error || `Error ${r.status}`);
       setPestana(desdeDia === hastaDia && desdeDia === diaHoy ? "dia" : "semana");
       setAviso(d.motivo || (d.enCola
         ? "🤖 El robot está terminando otra carga; en cuanto acabe baja las visitas y lo manda al grupo (unos 5–8 min)."
-        : "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí y llega al grupo."));
+        : (enviarWhats ? "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí y llega al grupo." : "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí (sin mandar WhatsApp).")));
     } catch (e) {
       setAviso(`⚠️ ${e.message || e}`);
     } finally {
@@ -169,8 +170,12 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
               <span style={{ fontSize: 11.5, color: T.muted }}>PM0{desdeDia}{desdeDia !== hastaDia ? `–PM0${hastaDia}` : ""}</span>
             </div>
             {hastaDia > diaHoy && <div style={{ fontSize: 11.5, color: T.bad, marginBottom: 8 }}>Ojo: incluye días que todavía no pasan; esos clientes van a salir todos como sin visita.</div>}
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.ink, marginBottom: 10, cursor: "pointer" }}>
+              <input type="checkbox" checked={enviarWhats} onChange={(e) => setEnviarWhats(e.target.checked)} style={{ width: 16, height: 16, accentColor: T.primary }} />
+              Mandar al grupo y a los vendedores por WhatsApp
+            </label>
             <button className="btn" onClick={pedirActualizacion} disabled={pidiendo} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <RefreshCw size={14} className={pidiendo ? "spin" : ""} /> {pidiendo ? "Pidiendo…" : `Actualizar ${desdeDia === hastaDia ? DIAS[desdeDia - 1] : `${DIAS[desdeDia - 1]} a ${DIAS[hastaDia - 1]}`} y mandar al grupo`}
+              <RefreshCw size={14} className={pidiendo ? "spin" : ""} /> {pidiendo ? "Pidiendo…" : `Actualizar ${desdeDia === hastaDia ? DIAS[desdeDia - 1] : `${DIAS[desdeDia - 1]} a ${DIAS[hastaDia - 1]}`}${enviarWhats ? " y mandar al grupo" : " (solo SMART-TRACK)"}`}
             </button>
           </div>
         )}
