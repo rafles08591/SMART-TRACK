@@ -8,7 +8,7 @@
 //
 // Variables de entorno en Vercel: N8N_WEBHOOK_DIA (Production URL del webhook del flujo 4), BOT_TOKEN
 
-import { configBot } from './_wa-lib.js';
+import { configBot, leerEstado, guardarEstado, filasDeFecha, fechaMX, claveRuta } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -40,6 +40,23 @@ function esLlamadaInterna(req) {
   return mismoToken(req.headers.get('x-bot-token') || '', process.env.BOT_TOKEN || '');
 }
 
+// ---- Anti-duplicado ----
+// Si el avance se carga dos veces (robot + manual, un reintento, dos equipos…) llegaban dos mensajes
+// iguales al grupo. Ahora solo se manda si los NÚMEROS cambiaron desde el último envío, y nunca
+// dos envíos con menos de 3 minutos entre sí. Con { forzar: true } se manda de todos modos.
+const MIN_ENTRE_ENVIOS = 3 * 60 * 1000;
+
+async function huellaAvance(fecha) {
+  const filas = await filasDeFecha(fecha);
+  const partes = filas
+    .map((f) => [claveRuta(f.ruta), f.venta_dia, f.clientes_visitados, f.venta_mes, JSON.stringify(f.extra ?? null)].join(':'))
+    .sort();
+  // hash corto (FNV-1a) del contenido
+  let h = 0x811c9dc5;
+  for (const ch of partes.join('|')) { h ^= ch.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `${fecha}#${filas.length}#${h.toString(16)}`;
+}
+
 export default async function handler(req) {
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
@@ -58,6 +75,17 @@ export default async function handler(req) {
   if (!destino) return json({ ok: false, error: 'Falta la variable N8N_WEBHOOK_DIA en Vercel' }, 500);
 
   const por = interna ? String(body.por || 'sistema').slice(0, 60) : (user.email || user.id);
+
+  if (!body.forzar) {
+    const previo = await leerEstado('ultimo_disparo_dia');
+    let huella = null;
+    try { huella = await huellaAvance(fechaMX()); } catch { /* si no se puede calcular, solo aplica el tiempo */ }
+    const hace = previo?.en ? Date.now() - Date.parse(previo.en) : Infinity;
+    if (hace < MIN_ENTRE_ENVIOS) return json({ ok: true, enviado: false, motivo: 'ya se mandó hace menos de 3 minutos' });
+    if (huella && previo?.huella === huella) return json({ ok: true, enviado: false, motivo: 'el avance no cambió desde el último envío' });
+    // Se aparta ANTES de mandar, para que dos llamadas casi juntas no salgan las dos
+    await guardarEstado('ultimo_disparo_dia', { en: new Date().toISOString(), huella, por });
+  }
 
   const r = await fetch(destino, {
     method: 'POST',
