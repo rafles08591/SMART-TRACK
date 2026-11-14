@@ -59,11 +59,11 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
   const codigos = [...new Set([...Object.keys(rutas), ...Object.keys(errores)])];
   const total = Object.values(rutas).reduce((s, l) => s + l.length, 0);
   const periodo = tipo === 'dia' ? `hoy · ${fechaLarga(hasta)}` : `semana · ${diaCorto(desde)} al ${fechaLarga(hasta)}`;
+  // Se escribe la ruta y el nombre (no la mención con número, que en WhatsApp se ve como teléfono)
   const etiqueta = (ruta) => {
     const v = vendedores[ruta];
-    const m = mencion(v?.telefono);
     const nom = v?.nombre ? ` ${primerNombre(v.nombre, ruta)}` : '';
-    return { m, txt: m ? `@${m} (${ruta}${nom})` : `${ruta}${nom}`, nom: nom.trim() };
+    return { m: null, txt: `*${ruta}${nom}*`, nom: nom.trim() };
   };
 
   // ── Grupo: resumen ──
@@ -80,7 +80,7 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
     if (e.m) mencionados.push(e.m);
     if (errores[ruta] && !rutas[ruta]) { G.push(`⚠️ ${e.txt} · no se pudo leer su reporte`); continue; }
     const n = rutas[ruta].length;
-    G.push(n ? `🔴 ${e.txt} · faltan *${n}*` : `✅ ${e.txt} · completo`);
+    G.push(n ? `🔴 ${e.txt} · faltan *${n}*` : `✅ ${e.txt} · sin clientes pendientes`);
   }
   G.push('', total ? '_A cada vendedor le llegó su lista. El detalle por ruta está en SMART-TRACK → Sin visita._' : '_El detalle por ruta está en SMART-TRACK → Sin visita._');
   const mensajes = [{ numero: GRUPO, texto: G.join('\n'), mencionados: [...new Set(mencionados)] }];
@@ -132,9 +132,14 @@ export default async function handler(req) {
     const k = claveRuta(r);
     if (k) rutas[k] = (Array.isArray(lista) ? lista : []).map(cliente).filter((c) => c.cliente || c.nombre);
   }
+  // Si el reporte de una ruta no trajo nada es porque no tiene clientes pendientes (PowerStreet
+  // lo muestra vacío): se toma como 0 en lugar de error.
+  for (const r of Object.keys(b.errores || {})) {
+    const k = claveRuta(r);
+    if (k && !rutas[k]) rutas[k] = [];
+  }
   const errores = {};
-  for (const [r, e] of Object.entries(b.errores || {})) if (claveRuta(r)) errores[claveRuta(r)] = String(e || 'error').slice(0, 200);
-  if (!Object.keys(rutas).length && !Object.keys(errores).length) return json({ error: 'sin rutas' }, 400);
+  if (!Object.keys(rutas).length) return json({ error: 'sin rutas' }, 400);
 
   // 1) Guardar (una fila por fecha + tipo + ruta). Las rutas con error no pisan lo último bueno.
   const ahora = new Date().toISOString();
