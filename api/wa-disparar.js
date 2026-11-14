@@ -70,26 +70,35 @@ async function pedirSinVisita(req, user, interna) {
     const perfil = r.ok ? (await r.json())[0] : null;
     if (!perfil || perfil.role === 'vendedor') return json({ ok: false, error: 'Solo el staff puede pedir el aviso de sin visita' }, 403);
   }
-  const robot = (process.env.ROBOT_URL || '').replace(/\/+$/, '');
-  if (!robot) return json({ ok: false, error: 'Falta la variable ROBOT_URL en Vercel' }, 500);
-  const previo = await leerEstado('sin_visita_peticion');
-  if (previo?.en && Date.now() - Date.parse(previo.en) < MIN_ENTRE_ENVIOS) {
-    return json({ ok: true, enviado: false, motivo: 'Ya se pidió hace menos de 3 minutos; el robot ya está en eso.' });
+  const previo = await leerEstado('sin_visita_pedido');
+  if (previo?.en && !previo.atendido && Date.now() - Date.parse(previo.en) < MIN_ENTRE_ENVIOS) {
+    return json({ ok: true, enviado: false, motivo: 'Ya se pidió hace un momento; el robot ya está en eso.' });
   }
   const por = interna ? 'sistema' : (user.email || user.id);
-  await guardarEstado('sin_visita_peticion', { en: new Date().toISOString(), por });
-  try {
-    const r = await fetch(`${robot}/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
-      body: JSON.stringify({ sinVisita: true, por }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) return json({ ok: false, error: d.error || `El robot respondió ${r.status}` }, 502);
-    return json({ ok: true, enviado: true, enCola: !!d.yaCorriendo });
-  } catch (e) {
-    return json({ ok: false, error: `No se pudo contactar al robot: ${e.message || e}` }, 502);
+  // 1) Se deja el pedido guardado: el robot lo revisa cada 30 s (no depende de poder llamarlo directo)
+  await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: false });
+  // 2) Además se intenta avisarle directo para que arranque al instante (si ROBOT_URL está y responde)
+  const robot = (process.env.ROBOT_URL || '').trim().replace(/\/+$/, '');
+  if (robot) {
+    try {
+      const sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined;
+      const r = await fetch(`${robot}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
+        body: JSON.stringify({ sinVisita: true, por }),
+        signal: sig,
+      });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: true, directo: true });
+        return json({ ok: true, enviado: true, enCola: !!d.yaCorriendo });
+      }
+      console.warn('robot respondió', r.status);
+    } catch (e) {
+      console.warn('no se pudo llamar al robot directo:', e?.message || e);
+    }
   }
+  return json({ ok: true, enviado: true, motivo: '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min llega al grupo y se actualiza aquí.' });
 }
 
 export default async function handler(req) {
