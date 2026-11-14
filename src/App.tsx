@@ -532,6 +532,9 @@ export default function App() {
   // OTC del día vive en su propia tabla (otc_dia). null = todavía no se lee / la tabla no existe
   // (en ese caso se sigue usando lo que haya en el documento general).
   const [otcDiaTabla, setOtcDiaTabla] = useState(null);
+  // true cuando ya se leyó el OTC de su tabla. Hasta entonces NO se guarda el resumen para WhatsApp
+  // (si no, se guardaba OTC $0 y Sin Vuala 0 porque el OTC ya no está en el documento general).
+  const [otcListo, setOtcListo] = useState(false);
   const otcTablaListaRef = useRef(false);
   // Visitas por semana viven en su propia tabla (visitas_semana). null = aún no se leen / no existe.
   const [visitasTabla, setVisitasTabla] = useState(null);
@@ -742,6 +745,7 @@ export default function App() {
       if (error) throw error;
       otcTablaListaRef.current = true;
       setOtcDiaTabla((filas || []).flatMap((f) => (Array.isArray(f.registros) ? f.registros : [])));
+      setOtcListo(true);
     } catch (err) {
       // Si la tabla no existe todavía (no se ha corrido el SQL) se queda con el documento general
       console.warn("No se pudo leer otc_dia; se usa el OTC del documento general:", err?.message || err);
@@ -1827,7 +1831,7 @@ export default function App() {
   useSnapshotWhatsApp({
     supabase,
     filas: filasWhatsApp,
-    habilitado: role === "staff" && ["gerente", "supervisor", "supervisor2"].includes(puesto),
+    habilitado: otcListo && role === "staff" && ["gerente", "supervisor", "supervisor2"].includes(puesto),
     quien: staffUsername,
     onGuardado: enviarAvisoDia,
   });
