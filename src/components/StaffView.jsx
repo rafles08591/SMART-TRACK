@@ -37,6 +37,7 @@ import FacturasView from "./FacturasView";
 import FacturasAdminView from "./FacturasAdminView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
+import SinVisitaPwstView from "./SinVisitaPwstView";
 import ActividadView from "./ActividadView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
@@ -689,7 +690,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
           ) : objTab === "nomina" ? (
             <NominaView data={data} persistFresco={persistFresco} rol="staff" puesto={puesto} identidad={revisorNombre} rutaPropia={null} />
           ) : objTab === "sin_visita" ? (
-            <SinVisitaView data={data} rol="staff" puesto={puesto} rutaPropia={null} />
+            <SinVisitaPwstView rol="staff" puesto={puesto} rutaPropia={null} />
           ) : objTab === "escalera" ? (
             esSupervisor2 ? (
               <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
