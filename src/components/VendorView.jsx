@@ -27,6 +27,7 @@ import KmView from "./KmView";
 import FacturasView from "./FacturasView";
 import NominaView from "./NominaView";
 import SinVisitaView from "./SinVisitaView";
+import SinVisitaPwstView from "./SinVisitaPwstView";
 import RelojChecadorView from "./RelojChecadorView";
 import PanelFondoPersonalizado, { useFondoPersonalizado, FondoDeFondo } from "./FondoPersonalizado";
 import EscaleraView from "./EscaleraView";
@@ -230,7 +231,7 @@ export default function VendorView({ vendedor, porVendedor, periodo, restantes, 
       ) : tab === "nomina" ? (
         <NominaView data={data} persistFresco={persistFresco} rol="vendedor" puesto={null} identidad={nombre || vendedor.name} rutaPropia={rutaCodigo} />
       ) : tab === "sin_visita" ? (
-        <SinVisitaView data={data} rol="vendedor" puesto={null} rutaPropia={rutaCodigo} persistFresco={persistFresco} />
+        <SinVisitaPwstView rol="vendedor" puesto={null} rutaPropia={rutaCodigo} />
       ) : tab === "reloj_checador" ? (
         <RelojChecadorView puedeSubir={false} rutaPropia={rutaCodigo} puedeVerBono={false} />
       ) : tab === "mi_fondo" ? (
