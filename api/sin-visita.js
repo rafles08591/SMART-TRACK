@@ -18,7 +18,7 @@
 //          enviar: true, forzar: false, por: "robot" | "staff: correo" }
 //   → { ok, guardadas, mensajes: [{ numero, texto, mencionados }] }
 
-import { autorizado, fechaMX, claveRuta, primerNombre, numeroEnvio, configBot, listaContactos, leerEstado, guardarEstado } from './_wa-lib.js';
+import { autorizado, fechaMX, claveRuta, primerNombre, configBot, listaContactos, leerEstado, guardarEstado } from './_wa-lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -101,7 +101,8 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
       if (dir) V.push(`    ${dir}`);
     });
     V.push('', `_Ruta ${ruta} · datos de PowerStreet ${horaMX()}_`);
-    mensajes.push({ numero: numeroEnvio(v.telefono), texto: V.join('\n'), mencionados: [] });
+    // Evolution (WhatsApp Web) necesita el celular de México como 521 + 10 dígitos
+    mensajes.push({ numero: mencion(v.telefono), texto: V.join('\n'), mencionados: [] });
   }
   return mensajes;
 }
