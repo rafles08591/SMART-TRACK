@@ -68,9 +68,10 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
 
   // ── Grupo: resumen ──
   const G = [`📍 *CLIENTES SIN VISITA* · ${periodo} · ${horaMX()}`];
-  G.push(total
-    ? (tipo === 'dia' ? `Faltan *${total}* clientes de la ruta de hoy por visitar` : `Quedan *${total}* clientes sin NINGUNA visita esta semana`)
-    : (tipo === 'dia' ? '✅ ¡Todas las rutas visitaron a todos sus clientes de hoy!' : '✅ ¡Todos los clientes de la semana tienen visita!'));
+  const conError = Object.keys(errores).filter((r) => !rutas[r]).length;
+  if (total) G.push(tipo === 'dia' ? `Faltan *${total}* clientes de la ruta de hoy por visitar` : `Quedan *${total}* clientes sin NINGUNA visita esta semana`);
+  else if (!conError) G.push(tipo === 'dia' ? '✅ ¡Todas las rutas visitaron a todos sus clientes de hoy!' : '✅ ¡Todos los clientes de la semana tienen visita!');
+  if (conError) G.push(`⚠️ ${conError} ruta${conError === 1 ? '' : 's'} sin dato: no se pudo leer su reporte en PowerStreet`);
   G.push('');
   const mencionados = [];
   const orden = codigos.sort((a, b) => (rutas[b]?.length ?? -1) - (rutas[a]?.length ?? -1) || a.localeCompare(b));
@@ -81,7 +82,7 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
     const n = rutas[ruta].length;
     G.push(n ? `🔴 ${e.txt} · faltan *${n}*` : `✅ ${e.txt} · completo`);
   }
-  G.push('', '_A cada vendedor le llegó su lista. El detalle por ruta está en SMART-TRACK → Sin visita._');
+  G.push('', total ? '_A cada vendedor le llegó su lista. El detalle por ruta está en SMART-TRACK → Sin visita._' : '_El detalle por ruta está en SMART-TRACK → Sin visita._');
   const mensajes = [{ numero: GRUPO, texto: G.join('\n'), mencionados: [...new Set(mencionados)] }];
 
   // ── Cada vendedor: su lista ──
