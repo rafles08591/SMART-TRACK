@@ -106,8 +106,16 @@ function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores }) {
 }
 
 export default async function handler(req) {
-  if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
+  // GET ?accion=pendiente → el robot pregunta (cada 30 s) si el staff pidió el aviso; si sí, lo toma
+  if (req.method === 'GET' && new URL(req.url).searchParams.get('accion') === 'pendiente') {
+    const p = await leerEstado('sin_visita_pedido');
+    const vigente = p?.en && !p.atendido && Date.now() - Date.parse(p.en) < 30 * 60 * 1000;
+    if (!vigente) return json({ pendiente: false });
+    await guardarEstado('sin_visita_pedido', { ...p, atendido: true, tomado_en: new Date().toISOString() });
+    return json({ pendiente: true, por: p.por });
+  }
+  if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
   let b = {};
   try { b = await req.json(); } catch { return json({ error: 'JSON inválido' }, 400); }
