@@ -631,7 +631,9 @@ async function pedirSinVisitaRobot(por, rango) {
   } catch { /* el robot lo toma en su revisión de cada 30 s */ }
 }
 
-async function respuestaSinVisita(c, texto) {
+// Regresa { texto } o, cuando ya hay datos, { imagen, caption, texto }: la TABLA de
+// /api/sin-visita-tabla (del grupo para el staff, la de su ruta para el vendedor).
+async function respuestaSinVisita(c, texto, req) {
   const rango = rangoSinVisitaTexto(texto);
   const { desde, hasta } = fechasDeRango(rango);
   const esEquipo = c.tipo === 'equipo';
@@ -663,6 +665,12 @@ async function respuestaSinVisita(c, texto) {
   }
 
   const hora = horaMXCorta(new Date(lote[0].actualizado_en));
+  // URL firmada de la tabla (misma firma que usa /api/sin-visita)
+  const tablaUrl = async (rutaImg) => {
+    const t = lote[0].tipo === 'dia' ? 'dia' : 'semana';
+    const s = await firmar(`SV:${rutaImg}:${t}:${desde}`, hasta);
+    return `${baseUrl(req)}/api/sin-visita-tabla?ruta=${rutaImg}&t=${t}&d=${desde}&h=${hasta}&s=${s}&v=${Date.parse(lote[0].actualizado_en) || Date.now()}`;
+  };
   if (c.tipo === 'vendedor') {
     const f = lote[0];
     const lista = Array.isArray(f.clientes) ? f.clientes : [];
@@ -673,13 +681,17 @@ async function respuestaSinVisita(c, texto) {
       const dir = [x.cliente, x.direccion, x.colonia].filter(Boolean).join(' · ');
       if (dir) L.push(`    ${dir}`);
     });
-    return { texto: L.join('\n') };
+    return { texto: L.join('\n'), imagen: req ? await tablaUrl(claveRuta(c.ruta)) : null, caption: L[0] };
   }
   const total = lote.reduce((sum, f) => sum + (f.total || 0), 0);
   const L = [`A la orden, ${tratoDe(c)} 🫡`, '', `📍 *Clientes sin visita ${cual}* (PowerStreet, ${hora})`, total ? `Faltan *${total}* en total` : '✅ ¡Ninguna ruta tiene pendientes!', ''];
   for (const f of [...lote].sort((a, b) => (b.total || 0) - (a.total || 0))) L.push(f.total ? `🔴 ${f.ruta} · faltan *${f.total}*` : `✅ ${f.ruta} · completo`);
   L.push('', '_El detalle está en SMART-TRACK → Sin visita. Para traerlo fresco dime "actualiza sin visita"._');
-  return { texto: L.join('\n') };
+  return {
+    texto: L.join('\n'),
+    imagen: req ? await tablaUrl('GRUPO') : null,
+    caption: `A la orden, ${tratoDe(c)} 🫡\n\n📍 *Clientes sin visita ${cual}* (PowerStreet, ${hora}) · ${total ? `faltan *${total}*` : 'ninguna ruta tiene pendientes ✅'}\n_Para traerlo fresco dime "actualiza sin visita"._`,
+  };
 }
 
 async function modoBot(req) {
@@ -736,7 +748,9 @@ async function modoBot(req) {
   const textoOriginal = body.texto || '';
 
   if (pideSinVisita(textoOriginal)) {
-    const r = await respuestaSinVisita(c, textoOriginal);
+    const r = await respuestaSinVisita(c, textoOriginal, req);
+    // Con datos → la tabla (imagen); sin datos o al pedir "actualiza" → texto
+    if (r.imagen) return responder({ tipo: 'imagen', caption: r.caption, tarjeta_url: r.imagen });
     return responder({ tipo: 'texto', texto: r.texto });
   }
 
