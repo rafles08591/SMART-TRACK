@@ -179,15 +179,22 @@ function actualizarCambiosPendiente(id, cambios) {
 // Antes cada guardado subía TODO el documento (todas las pantallas juntas) y además lo volvía a bajar
 // con .select(). En celular con señal regular eso tardaba y fallaba seguido ("Conexión inestable").
 // Ahora solo se mandan las secciones que cambiaron, y Supabase las fusiona (función fusionar_app_state).
+// Secciones que YA NO viven en el documento general sino en su propia tabla de Supabase.
+// Nunca se escriben (ni se borran) desde aquí: se guardan con su propia función.
+//   otcDia → tabla otc_dia (una fila por fecha)
+const SECCIONES_EXTERNAS = new Set(["otcDia"]);
+const OTC_DIAS_A_CONSERVAR = 30;
+
 function seccionesCambiadas(next, base) {
   if (!base || !next) return null;
   const set = {};
   const quitar = [];
   for (const k of Object.keys(next)) {
+    if (SECCIONES_EXTERNAS.has(k)) continue;
     if (next[k] === base[k]) continue;
     if (JSON.stringify(next[k]) !== JSON.stringify(base[k])) set[k] = next[k];
   }
-  for (const k of Object.keys(base)) if (!(k in next)) quitar.push(k);
+  for (const k of Object.keys(base)) if (!(k in next) && !SECCIONES_EXTERNAS.has(k)) quitar.push(k);
   return { set, quitar };
 }
 // Corta una petición que se quedó colgada (mala señal) para reintentar en vez de esperar minutos.
@@ -520,7 +527,15 @@ function useChequeoDeVersion() {
 
 export default function App() {
   useChequeoDeVersion();
-  const [data, setData] = useState(null);
+  const [dataBase, setData] = useState(null);
+  // OTC del día vive en su propia tabla (otc_dia). null = todavía no se lee / la tabla no existe
+  // (en ese caso se sigue usando lo que haya en el documento general).
+  const [otcDiaTabla, setOtcDiaTabla] = useState(null);
+  const otcTablaListaRef = useRef(false);
+  const data = useMemo(
+    () => (dataBase && otcDiaTabla ? { ...dataBase, otcDia: otcDiaTabla } : dataBase),
+    [dataBase, otcDiaTabla]
+  );
   const [showSplash, setShowSplash] = useState(true);
   const [role, setRole] = useState(null); // 'staff' | 'vendedor'
   const [puesto, setPuesto] = useState(null); // 'supervisor' | 'gerente' (solo aplica cuando role === 'staff')
@@ -700,6 +715,66 @@ export default function App() {
     return () => { detenido = true; clearInterval(intervaloRevision); clearInterval(intervaloAviso); };
   }, []);
 
+  // ---- OTC del día (tabla otc_dia: una fila por fecha con sus registros) ----
+  async function cargarOtcDiaTabla() {
+    try {
+      const desde = sumarDiasISO(fechaHoyISO(), -OTC_DIAS_A_CONSERVAR);
+      const { data: filas, error } = await conTiempo(
+        supabase.from("otc_dia").select("fecha, registros").gte("fecha", desde).order("fecha"),
+        45000
+      );
+      if (error) throw error;
+      otcTablaListaRef.current = true;
+      setOtcDiaTabla((filas || []).flatMap((f) => (Array.isArray(f.registros) ? f.registros : [])));
+    } catch (err) {
+      // Si la tabla no existe todavía (no se ha corrido el SQL) se queda con el documento general
+      console.warn("No se pudo leer otc_dia; se usa el OTC del documento general:", err?.message || err);
+    }
+  }
+
+  // Guarda el OTC de las fechas que trae el archivo (reemplaza esas fechas, las demás se quedan)
+  // y borra lo que tenga más de 30 días.
+  async function guardarOtcDiaTabla(registros) {
+    const porFecha = {};
+    for (const r of registros) (porFecha[r.fecha] ||= []).push(r);
+    const filas = Object.entries(porFecha).map(([fecha, regs]) => ({ fecha, registros: regs, actualizado_en: new Date().toISOString() }));
+    let ultimoError = null;
+    for (let intento = 1; intento <= 4; intento++) {
+      const { error } = await conTiempo(supabase.from("otc_dia").upsert(filas, { onConflict: "fecha" }), 45000);
+      if (!error) { ultimoError = null; break; }
+      ultimoError = error;
+      if (!esErrorDeRed(error)) break;
+      await new Promise((r) => setTimeout(r, 1500 * intento));
+    }
+    if (ultimoError) throw new Error(ultimoError.message || "No se pudo guardar el OTC.");
+    const limite = sumarDiasISO(fechaHoyISO(), -OTC_DIAS_A_CONSERVAR);
+    supabase.from("otc_dia").delete().lt("fecha", limite).then(() => {}, () => {});
+    // Al momento en esta pantalla (los demás equipos se enteran por tiempo real)
+    setOtcDiaTabla((actual) => {
+      const fechas = new Set(Object.keys(porFecha));
+      const quedan = (actual || []).filter((r) => !fechas.has(r.fecha) && (!r.fecha || r.fecha >= limite));
+      return [...quedan, ...registros];
+    });
+  }
+
+  useEffect(() => {
+    cargarOtcDiaTabla();
+    // Cuando alguien (o el robot) sube OTC, se vuelve a leer — con pausa, por si llegan varias fechas juntas
+    let temporizador = null;
+    const canal = supabase
+      .channel("otc_dia_cambios")
+      .on("postgres_changes", { event: "*", schema: "public", table: "otc_dia" }, () => {
+        clearTimeout(temporizador);
+        temporizador = setTimeout(cargarOtcDiaTabla, 1500);
+      })
+      .subscribe();
+    // Al volver a la app después de un rato, se refresca (el tiempo real se pierde con el celular dormido)
+    const alVolver = () => { if (document.visibilityState === "visible") cargarOtcDiaTabla(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { clearTimeout(temporizador); supabase.removeChannel(canal); document.removeEventListener("visibilitychange", alVolver); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function loadData() {
     try {
       const { data: row, error } = await supabase
@@ -788,9 +863,15 @@ export default function App() {
       fusionDisponibleRef.current = false; // aún no se corrió el SQL: guardado completo
       console.warn("Falta la función fusionar_app_state en Supabase; se usa el guardado completo.");
     }
-    // Guardado completo (sin .select(): antes bajaba otra vez todo el documento después de subirlo)
+    // Guardado completo (sin .select(): antes bajaba otra vez todo el documento después de subirlo).
+    // El OTC del día ya vive en su tabla: no se vuelve a meter al documento general.
+    let completo = next;
+    if (otcTablaListaRef.current && next && "otcDia" in next) {
+      const { otcDia: _fuera, ...resto } = next;
+      completo = base && "otcDia" in base ? { ...resto, otcDia: base.otcDia } : resto;
+    }
     const { error } = await conTiempo(
-      supabase.from("ventas_app_state").upsert({ id: STATE_ID, data: next, updated_at: new Date().toISOString() }),
+      supabase.from("ventas_app_state").upsert({ id: STATE_ID, data: completo, updated_at: new Date().toISOString() }),
       45000
     );
     return { error };
@@ -3285,10 +3366,20 @@ export default function App() {
     // hay duplicados si se vuelve a subir el mismo día). El resto de fechas
     // que ya estaban guardadas se conservan.
     const fechasNuevas = new Set(registros.map((r) => r.fecha).filter(Boolean));
-    await persistParcialFresco((fresca) => {
-      const anteriores = (fresca.otcDia || []).filter((r) => !fechasNuevas.has(r.fecha));
-      return { otcDia: podarOtcDiaAntiguo([...anteriores, ...registros]) };
-    });
+    if (otcTablaListaRef.current) {
+      // Tabla propia otc_dia (ya no pesa en el documento general)
+      try {
+        await guardarOtcDiaTabla(registros);
+      } catch (err) {
+        setOtcDiaStatus(`No se pudo guardar el OTC: ${err?.message || err}`);
+        return;
+      }
+    } else {
+      await persistParcialFresco((fresca) => {
+        const anteriores = (fresca.otcDia || []).filter((r) => !fechasNuevas.has(r.fecha));
+        return { otcDia: podarOtcDiaAntiguo([...anteriores, ...registros]) };
+      });
+    }
     await registrarUltimaCarga("otcDia");
     const fechas = [...fechasNuevas].sort();
     setOtcDiaStatus(`OTC cargado: ${registros.length} registros para ${fechas.join(", ")} (se acumula; no se borran días anteriores).`);
