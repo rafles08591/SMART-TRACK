@@ -61,7 +61,12 @@ async function huellaAvance(fecha) {
 // El botón de la pantalla "Sin visita" le pide al ROBOT de PowerStreet que corra ya: baja las
 // visitas, las pega en SMART-TRACK y manda el aviso al grupo. Variable en Vercel: ROBOT_URL
 // (la URL pública del robot en Easypanel, ej. https://pwst-robot.xxxx.easypanel.host).
-async function pedirSinVisita(req, user, interna) {
+async function pedirSinVisita(req, user, interna, body = {}) {
+  // Rango de días de esta semana (1 = lunes … 6 = sábado). Si no viene, el robot usa el de hoy.
+  const dia = (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 6 ? Number(v) : null);
+  let desdeDia = dia(body.desdeDia), hastaDia = dia(body.hastaDia);
+  if (desdeDia && hastaDia && desdeDia > hastaDia) [desdeDia, hastaDia] = [hastaDia, desdeDia];
+  const rango = desdeDia && hastaDia ? { desdeDia, hastaDia } : {};
   if (!interna) {
     // Solo staff (gerente, supervisores…), no vendedores
     const r = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,username`, {
@@ -76,7 +81,7 @@ async function pedirSinVisita(req, user, interna) {
   }
   const por = interna ? 'sistema' : (user.email || user.id);
   // 1) Se deja el pedido guardado: el robot lo revisa cada 30 s (no depende de poder llamarlo directo)
-  await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: false });
+  await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: false, ...rango });
   // 2) Además se intenta avisarle directo para que arranque al instante (si ROBOT_URL está y responde)
   const robot = (process.env.ROBOT_URL || '').trim().replace(/\/+$/, '');
   if (robot) {
@@ -85,12 +90,12 @@ async function pedirSinVisita(req, user, interna) {
       const r = await fetch(`${robot}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
-        body: JSON.stringify({ sinVisita: true, por }),
+        body: JSON.stringify({ sinVisita: true, por, ...rango }),
         signal: sig,
       });
       if (r.ok) {
         const d = await r.json().catch(() => ({}));
-        await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: true, directo: true });
+        await guardarEstado('sin_visita_pedido', { en: new Date().toISOString(), por, atendido: true, directo: true, ...rango });
         return json({ ok: true, enviado: true, enCola: !!d.yaCorriendo });
       }
       console.warn('robot respondió', r.status);
@@ -110,7 +115,7 @@ export default async function handler(req) {
 
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
-  if (body.tipo === 'sin_visita') return await pedirSinVisita(req, user, interna);
+  if (body.tipo === 'sin_visita') return await pedirSinVisita(req, user, interna, body);
   if (body.tipo !== 'dia') return json({ error: 'tipo inválido' }, 400);
 
   const cfg = await configBot();
