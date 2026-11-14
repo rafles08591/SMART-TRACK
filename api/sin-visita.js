@@ -115,7 +115,7 @@ export default async function handler(req) {
     const vigente = p?.en && !p.atendido && Date.now() - Date.parse(p.en) < 30 * 60 * 1000;
     if (!vigente) return json({ pendiente: false });
     await guardarEstado('sin_visita_pedido', { ...p, atendido: true, tomado_en: new Date().toISOString() });
-    return json({ pendiente: true, por: p.por });
+    return json({ pendiente: true, por: p.por, desdeDia: p.desdeDia || null, hastaDia: p.hastaDia || null });
   }
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
