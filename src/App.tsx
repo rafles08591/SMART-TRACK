@@ -179,22 +179,23 @@ function actualizarCambiosPendiente(id, cambios) {
 // Antes cada guardado subía TODO el documento (todas las pantallas juntas) y además lo volvía a bajar
 // con .select(). En celular con señal regular eso tardaba y fallaba seguido ("Conexión inestable").
 // Ahora solo se mandan las secciones que cambiaron, y Supabase las fusiona (función fusionar_app_state).
-// Secciones que YA NO viven en el documento general sino en su propia tabla de Supabase.
-// Nunca se escriben (ni se borran) desde aquí: se guardan con su propia función.
-//   otcDia → tabla otc_dia (una fila por fecha)
-const SECCIONES_EXTERNAS = new Set(["otcDia"]);
+// Secciones que YA NO viven en el documento general sino en su propia tabla de Supabase
+// (solo cuando su tabla ya respondió; si no existe, siguen en el documento como antes):
+//   otcDia        → tabla otc_dia (una fila por fecha)
+//   visitasSemana → tabla visitas_semana (una fila por "RUTA|semana")
+// Nunca se escriben ni se borran del documento general: se guardan con su propia función.
 const OTC_DIAS_A_CONSERVAR = 30;
 
-function seccionesCambiadas(next, base) {
+function seccionesCambiadas(next, base, externas = new Set()) {
   if (!base || !next) return null;
   const set = {};
   const quitar = [];
   for (const k of Object.keys(next)) {
-    if (SECCIONES_EXTERNAS.has(k)) continue;
+    if (externas.has(k)) continue;
     if (next[k] === base[k]) continue;
     if (JSON.stringify(next[k]) !== JSON.stringify(base[k])) set[k] = next[k];
   }
-  for (const k of Object.keys(base)) if (!(k in next) && !SECCIONES_EXTERNAS.has(k)) quitar.push(k);
+  for (const k of Object.keys(base)) if (!(k in next) && !externas.has(k)) quitar.push(k);
   return { set, quitar };
 }
 // Corta una petición que se quedó colgada (mala señal) para reintentar en vez de esperar minutos.
@@ -532,10 +533,25 @@ export default function App() {
   // (en ese caso se sigue usando lo que haya en el documento general).
   const [otcDiaTabla, setOtcDiaTabla] = useState(null);
   const otcTablaListaRef = useRef(false);
-  const data = useMemo(
-    () => (dataBase && otcDiaTabla ? { ...dataBase, otcDia: otcDiaTabla } : dataBase),
-    [dataBase, otcDiaTabla]
-  );
+  // Visitas por semana viven en su propia tabla (visitas_semana). null = aún no se leen / no existe.
+  const [visitasTabla, setVisitasTabla] = useState(null);
+  const visitasRef = useRef(null); // copia al día de lo que hay en la tabla
+  // Primera lectura de las tablas propias: los guardados esperan a que termine (así un guardado justo
+  // al abrir la app —como el del robot— no se va al documento general por no saber que existe la tabla)
+  const primeraLecturaRef = useRef(null);
+  const externasActivas = () => {
+    const s = new Set();
+    if (otcTablaListaRef.current) s.add("otcDia");
+    if (visitasRef.current) s.add("visitasSemana");
+    return s;
+  };
+  const data = useMemo(() => {
+    if (!dataBase) return dataBase;
+    let d = dataBase;
+    if (otcDiaTabla) d = { ...d, otcDia: otcDiaTabla };
+    if (visitasTabla) d = { ...d, visitasSemana: visitasTabla };
+    return d;
+  }, [dataBase, otcDiaTabla, visitasTabla]);
   const [showSplash, setShowSplash] = useState(true);
   const [role, setRole] = useState(null); // 'staff' | 'vendedor'
   const [puesto, setPuesto] = useState(null); // 'supervisor' | 'gerente' (solo aplica cuando role === 'staff')
@@ -757,8 +773,69 @@ export default function App() {
     });
   }
 
+  // ---- Visitas por semana (tabla visitas_semana: una fila por "RUTA|lunes de la semana") ----
+  function ponerVisitas(obj) {
+    visitasRef.current = obj;
+    setVisitasTabla(obj);
+  }
+  async function cargarVisitasTabla(claves = null) {
+    try {
+      let q = supabase.from("visitas_semana").select("clave, entrada");
+      if (claves) q = q.in("clave", claves);
+      const { data: filas, error } = await conTiempo(q, 45000);
+      if (error) throw error;
+      const nuevo = claves ? { ...(visitasRef.current || {}) } : {};
+      if (claves) for (const k of claves) delete nuevo[k];
+      for (const f of filas || []) if (f.entrada) nuevo[f.clave] = f.entrada;
+      ponerVisitas(nuevo);
+    } catch (err) {
+      console.warn("No se pudo leer visitas_semana; se usan las visitas del documento general:", err?.message || err);
+    }
+  }
+  // Guarda SOLO las semanas (ruta|semana) que cambiaron y borra las que se podaron.
+  async function guardarVisitasTabla(nuevo) {
+    const antes = visitasRef.current || {};
+    const filas = [];
+    for (const [clave, entrada] of Object.entries(nuevo || {})) {
+      if (entrada === antes[clave]) continue;
+      if (JSON.stringify(entrada) !== JSON.stringify(antes[clave])) filas.push({ clave, entrada, actualizado_en: new Date().toISOString() });
+    }
+    const borrar = Object.keys(antes).filter((k) => !(k in (nuevo || {})));
+    if (filas.length) {
+      const { error } = await conTiempo(supabase.from("visitas_semana").upsert(filas, { onConflict: "clave" }), 45000);
+      if (error) return { error };
+    }
+    if (borrar.length) {
+      const { error } = await conTiempo(supabase.from("visitas_semana").delete().in("clave", borrar), 30000);
+      if (error) return { error };
+    }
+    ponerVisitas(nuevo || {});
+    return { error: null };
+  }
+
   useEffect(() => {
-    cargarOtcDiaTabla();
+    primeraLecturaRef.current = Promise.all([cargarVisitasTabla(), cargarOtcDiaTabla()]).catch(() => {});
+    // Tiempo real: solo se vuelven a leer las semanas que cambiaron
+    let pendientes = new Set();
+    let temporizador = null;
+    const canal = supabase
+      .channel("visitas_semana_cambios")
+      .on("postgres_changes", { event: "*", schema: "public", table: "visitas_semana" }, (payload) => {
+        const clave = payload.new?.clave || payload.old?.clave;
+        if (!clave) return;
+        pendientes.add(clave);
+        clearTimeout(temporizador);
+        temporizador = setTimeout(() => { const c = [...pendientes]; pendientes = new Set(); cargarVisitasTabla(c); }, 1200);
+      })
+      .subscribe();
+    const alVolver = () => { if (document.visibilityState === "visible") cargarVisitasTabla(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { clearTimeout(temporizador); supabase.removeChannel(canal); document.removeEventListener("visibilitychange", alVolver); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // (la primera lectura de otc_dia se hace junto con la de visitas, arriba)
     // Cuando alguien (o el robot) sube OTC, se vuelve a leer — con pausa, por si llegan varias fechas juntas
     let temporizador = null;
     const canal = supabase
@@ -850,7 +927,13 @@ export default function App() {
   // Escribe en Supabase SOLO las secciones que cambiaron respecto a "base" (lo último que se sabe que
   // hay en la base). Si la función de fusión aún no existe, cae al guardado completo de siempre.
   async function escribirEstado(next, base) {
-    const dif = fusionDisponibleRef.current === false ? null : seccionesCambiadas(next, base);
+    const externas = externasActivas();
+    // Visitas por semana: van a su tabla (solo las semanas que cambiaron)
+    if (externas.has("visitasSemana") && next && next.visitasSemana && next.visitasSemana !== visitasRef.current) {
+      const { error } = await guardarVisitasTabla(next.visitasSemana);
+      if (error) return { error };
+    }
+    const dif = fusionDisponibleRef.current === false ? null : seccionesCambiadas(next, base, externas);
     if (dif) {
       if (Object.keys(dif.set).length === 0 && dif.quitar.length === 0) return { error: null };
       const { error } = await conTiempo(
@@ -866,9 +949,11 @@ export default function App() {
     // Guardado completo (sin .select(): antes bajaba otra vez todo el documento después de subirlo).
     // El OTC del día ya vive en su tabla: no se vuelve a meter al documento general.
     let completo = next;
-    if (otcTablaListaRef.current && next && "otcDia" in next) {
-      const { otcDia: _fuera, ...resto } = next;
-      completo = base && "otcDia" in base ? { ...resto, otcDia: base.otcDia } : resto;
+    for (const k of externas) {
+      if (completo && k in completo) {
+        const { [k]: _fuera, ...resto } = completo;
+        completo = base && k in base ? { ...resto, [k]: base[k] } : resto;
+      }
     }
     const { error } = await conTiempo(
       supabase.from("ventas_app_state").upsert({ id: STATE_ID, data: completo, updated_at: new Date().toISOString() }),
@@ -906,6 +991,7 @@ export default function App() {
   // Devolver la copia vieja sería justo el bug que se quiere evitar: se
   // guardaría una versión desactualizada encima de la buena.
   async function obtenerDataFresca() {
+    if (primeraLecturaRef.current) await primeraLecturaRef.current;
     const { data: row, error } = await conTiempo(
       supabase.from("ventas_app_state").select("data").eq("id", STATE_ID).single(),
       45000
@@ -913,6 +999,8 @@ export default function App() {
     if (error) throw Object.assign(new Error(error.message || "No se pudo leer el estado más reciente."), { code: error.code });
     if (!row?.data) throw new Error("El estado más reciente llegó vacío.");
     const fresca = { ...defaultData(), ...row.data, mesaControl: row.data.mesaControl || [] };
+    // Las visitas ya no están en el documento: se usa la copia al día de su tabla (tiempo real)
+    if (visitasRef.current) fresca.visitasSemana = visitasRef.current;
     ultimoServidorRef.current = fresca;
     return fresca;
   }
@@ -3366,6 +3454,7 @@ export default function App() {
     // hay duplicados si se vuelve a subir el mismo día). El resto de fechas
     // que ya estaban guardadas se conservan.
     const fechasNuevas = new Set(registros.map((r) => r.fecha).filter(Boolean));
+    if (primeraLecturaRef.current) await primeraLecturaRef.current;
     if (otcTablaListaRef.current) {
       // Tabla propia otc_dia (ya no pesa en el documento general)
       try {
