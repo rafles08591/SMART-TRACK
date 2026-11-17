@@ -1201,6 +1201,10 @@ async function textoRetroIA(d, cfg) {
   }
 }
 
+// Minutos máximos desde la última carga del Avance para que salga la retro (el robot carga en punto
+// y la retro sale a los :20; si la carga de esa hora falló, la última tendrá más de 50 min → no sale).
+const RETRO_MAX_MIN_CARGA = 50;
+
 async function modoRetroGrupo(req) {
   const url = new URL(req.url);
   const forzar = url.searchParams.get('forzar') === '1';
@@ -1219,6 +1223,26 @@ async function modoRetroGrupo(req) {
     return json({ total: 0, mensajes: [], nota: 'sin avance nuevo desde la última retro' });
   }
 
+  // La retro SOLO sale si el Avance del día se CARGÓ (robot de PowerStreet o a mano) hace poco y
+  // después de la última retro. El resumen se vuelve a guardar cada vez que el staff abre la app,
+  // así que su hora no basta: se usa la hora de la última carga real del Avance (ultimaCarga.avanceDia).
+  let cargaAvance = null;
+  try {
+    const rc = await sb('ventas_app_state?id=eq.main&select=uc:data->ultimaCarga->avanceDia');
+    cargaAvance = rc?.[0]?.uc?.fecha || null;
+  } catch { /* si no se puede leer, se decide solo con lo de arriba */ }
+  if (!forzar && cargaAvance) {
+    const diaCarga = new Date(cargaAvance).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const minutos = Math.round((Date.now() - Date.parse(cargaAvance)) / 60000);
+    if (diaCarga !== hoy) return json({ total: 0, mensajes: [], nota: 'el Avance de hoy todavía no se carga' });
+    if (minutos > RETRO_MAX_MIN_CARGA) {
+      return json({ total: 0, mensajes: [], nota: `el Avance no se ha actualizado (última carga hace ${minutos} min, ${horaMXCorta(new Date(cargaAvance))})` });
+    }
+    if (previo?.fecha === hoy && previo?.cargaAvance && Date.parse(cargaAvance) <= Date.parse(previo.cargaAvance)) {
+      return json({ total: 0, mensajes: [], nota: 'sin carga nueva del Avance desde la última retro' });
+    }
+  }
+
   const d = await datosRetro(hoy, cfg);
   if (!d.rutas.length) return json({ total: 0, mensajes: [], nota: 'sin rutas con vendedor activo' });
   // Formato fijo (tabla por ruta): los números salen directo de los datos, sin pasar por la IA
@@ -1234,7 +1258,7 @@ async function modoRetroGrupo(req) {
   }
   const mencionados = [...new Set(d.rutas.map((r) => r.mencion).filter((m) => m && texto.includes(`@${m}`)))];
 
-  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, texto });
+  await guardarEstado('retro_grupo', { fecha: hoy, actualizado: ultimo, cargaAvance, texto });
   return json({ fecha: hoy, total: 1, mensajes: [{ numero: GRUPO_RETRO, texto, mencionados }] });
 }
 
