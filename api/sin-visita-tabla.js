@@ -84,11 +84,17 @@ const ALTO_FILA_GRUPO = 88;
 const altoGrupo = (n) => 52 + 64 + 92 + 46 + 26 + 168 + 26 + (24 + 40 + 44 + n * ALTO_FILA_GRUPO + 24) + 62 + 52;
 
 function tarjetaGrupo({ rutas, desde, hasta, tipo, actualizado }) {
+  if (tipo === 'objetivo') return tarjetaObjetivoGrupo({ rutas, hasta, actualizado });
   const total = rutas.reduce((s, r) => s + r.total, 0);
   const completas = rutas.filter((r) => r.total === 0).length;
   const max = Math.max(1, ...rutas.map((r) => r.total));
   const hora = horaMX(actualizado);
   const orden = [...rutas].sort((a, b) => b.total - a.total || a.ruta.localeCompare(b.ruta));
+  // Con objetivo de las 7:30: cuántos visitó cada ruta contra su objetivo
+  const conObj = rutas.filter((r) => r.objetivo);
+  const objTotal = conObj.reduce((s, r) => s + r.objetivo, 0);
+  const visTotal = conObj.reduce((s, r) => s + Math.max(r.objetivo - r.total, 0), 0);
+  const subRuta = (r) => (r.objetivo ? `${corta(r.nombre, 12)} · ${Math.max(r.objetivo - r.total, 0)} de ${r.objetivo}` : corta(r.nombre, 20));
   return marco('SIN VISITA', C.ambar,
     h('div', { fontSize: 56, fontWeight: 800, marginTop: 22, height: 70 }, 'Clientes sin visita'),
     h('div', { fontSize: 27, color: C.gris, marginTop: 6, height: 40 },
@@ -96,7 +102,9 @@ function tarjetaGrupo({ rutas, desde, hasta, tipo, actualizado }) {
 
     h('div', { marginTop: 26, gap: 14 },
       caja('SIN VISITA', String(total), total === 1 ? 'cliente' : 'clientes', total ? C.rojo : C.verde),
-      caja('RUTAS COMPLETAS', `${completas} de ${rutas.length}`, 'sin clientes pendientes', completas === rutas.length ? C.verde : C.texto),
+      objTotal
+        ? caja('VISITADOS', `${visTotal} de ${objTotal}`, `${Math.round((visTotal / objTotal) * 100)}% del objetivo de hoy`, visTotal >= objTotal ? C.verde : C.cian)
+        : caja('RUTAS COMPLETAS', `${completas} de ${rutas.length}`, 'sin clientes pendientes', completas === rutas.length ? C.verde : C.texto),
     ),
 
     h('div', {
@@ -114,7 +122,7 @@ function tarjetaGrupo({ rutas, desde, hasta, tipo, actualizado }) {
       },
         h('div', { width: 300, flexDirection: 'column' },
           h('div', { fontSize: 32, fontWeight: 800 }, r.ruta),
-          h('div', { fontSize: 22, color: C.gris }, corta(r.nombre, 20)),
+          h('div', { fontSize: 22, color: C.gris }, subRuta(r)),
         ),
         h('div', { flex: 1, height: 22, borderRadius: 11, background: 'rgba(255,255,255,0.08)' },
           r.total ? h('div', { width: `${Math.max(4, Math.round((r.total / max) * 100))}%`, height: 22, borderRadius: 11, background: C.rojo }) : null,
@@ -133,22 +141,62 @@ function tarjetaGrupo({ rutas, desde, hasta, tipo, actualizado }) {
   );
 }
 
+// ───────────────────────── 🎯 OBJETIVO de visitas (7:30 am) — grupo ─────────────────────────
+function tarjetaObjetivoGrupo({ rutas, hasta, actualizado }) {
+  const total = rutas.reduce((s, r) => s + r.total, 0);
+  const max = Math.max(1, ...rutas.map((r) => r.total));
+  const hora = horaMX(actualizado);
+  const orden = [...rutas].sort((a, b) => a.ruta.localeCompare(b.ruta));
+  return marco('OBJETIVO', C.cian,
+    h('div', { fontSize: 56, fontWeight: 800, marginTop: 22, height: 70 }, 'Objetivo de visitas'),
+    h('div', { fontSize: 27, color: C.gris, marginTop: 6, height: 40 }, `Ruta del día · ${periodoTxt(hasta, hasta)}${hora ? ` · ${hora}` : ''} · PowerStreet`),
+    h('div', { marginTop: 26, gap: 14 },
+      caja('CLIENTES A VISITAR', String(total), 'entre todas las rutas', C.cian),
+      caja('RUTAS', String(rutas.length), 'en ruta hoy', C.texto),
+    ),
+    h('div', { flexDirection: 'column', marginTop: 26, padding: '24px 28px', borderRadius: 28, background: C.panel, border: `2px solid ${C.borde}` },
+      h('div', { fontSize: 23, color: C.gris, letterSpacing: 3, height: 40 }, 'POR RUTA · CLIENTES QUE LE TOCAN HOY'),
+      h('div', { height: 44, alignItems: 'center', fontSize: 20, color: C.gris, letterSpacing: 2, borderBottom: `2px solid ${C.borde}` },
+        h('div', { width: 300 }, 'RUTA'), h('div', { flex: 1 }, ''), h('div', { width: 210, justifyContent: 'flex-end' }, 'OBJETIVO'),
+      ),
+      ...orden.map((r, i) => h('div', { height: ALTO_FILA_GRUPO, alignItems: 'center', ...(i < orden.length - 1 ? { borderBottom: `1px solid ${C.borde}` } : {}) },
+        h('div', { width: 300, flexDirection: 'column' },
+          h('div', { fontSize: 32, fontWeight: 800 }, r.ruta),
+          h('div', { fontSize: 22, color: C.gris }, corta(r.nombre, 20)),
+        ),
+        h('div', { flex: 1, height: 22, borderRadius: 11, background: 'rgba(255,255,255,0.08)' },
+          r.total ? h('div', { width: `${Math.max(4, Math.round((r.total / max) * 100))}%`, height: 22, borderRadius: 11, background: C.cian }) : null,
+        ),
+        h('div', { width: 210, justifyContent: 'flex-end', fontSize: 46, fontWeight: 800, color: C.cian }, String(r.total)),
+      )),
+    ),
+    h('div', { fontSize: 22, color: C.gris, marginTop: 22, height: 40 }, 'A cada vendedor le llega su lista · a las 2, 5 y 7 pm se revisa cuántos faltan'),
+  );
+}
+
 // ───────────────────────── Tabla del VENDEDOR: sus clientes ─────────────────────────
 const ALTO_FILA_VEND = 64;
 const altoVendedor = (n, sobran) => 52 + 64 + 86 + 46 + 26 + (20 + 44 + Math.max(n, 1) * ALTO_FILA_VEND + 20) + (sobran ? 50 : 0) + 30 + 52;
 
-function tarjetaVendedor({ ruta, nombre, clientes, desde, hasta, tipo, actualizado }) {
+function tarjetaVendedor({ ruta, nombre, clientes, desde, hasta, tipo, actualizado, objetivo = null }) {
   const hora = horaMX(actualizado);
   const lista = clientes.slice(0, MAX_FILAS_VENDEDOR);
   const sobran = clientes.length - lista.length;
   const n = clientes.length;
-  const titulo = n
-    ? `${nombre ? `${nombre}, te ` : 'Te '}falta${n === 1 ? '' : 'n'} ${n} cliente${n === 1 ? '' : 's'}`
-    : `${nombre ? `${nombre}, sin` : 'Sin'} clientes pendientes`;
-  return marco(ruta, n ? C.ambar : C.verde,
-    h('div', { fontSize: 50, fontWeight: 800, marginTop: 22, height: 64, color: n ? C.texto : C.verde }, corta(titulo, 36)),
-    h('div', { fontSize: 27, color: C.gris, marginTop: 6, height: 40 },
-      `${tipo === 'dia' ? 'Ruta del día' : 'Sin visita en la semana'} · ${periodoTxt(desde, hasta)}${hora ? ` · corte ${hora}` : ''}`),
+  const esObj = tipo === 'objetivo';
+  const titulo = esObj
+    ? `${nombre ? `${nombre}, tu` : 'Tu'} objetivo: ${n} clientes`
+    : n
+      ? `${nombre ? `${nombre}, te ` : 'Te '}falta${n === 1 ? '' : 'n'} ${n} cliente${n === 1 ? '' : 's'}`
+      : `${nombre ? `${nombre}, sin` : 'Sin'} clientes pendientes`;
+  const sub = esObj
+    ? `Tu ruta de hoy · ${periodoTxt(hasta, hasta)}${hora ? ` · ${hora}` : ''}`
+    : objetivo
+      ? `Visitaste ${Math.max(objetivo - n, 0)} de ${objetivo} · ${periodoTxt(desde, hasta)}${hora ? ` · corte ${hora}` : ''}`
+      : `${tipo === 'dia' ? 'Ruta del día' : 'Sin visita en la semana'} · ${periodoTxt(desde, hasta)}${hora ? ` · corte ${hora}` : ''}`;
+  return marco(ruta, esObj ? C.cian : n ? C.ambar : C.verde,
+    h('div', { fontSize: 50, fontWeight: 800, marginTop: 22, height: 64, color: esObj || n ? C.texto : C.verde }, corta(titulo, 36)),
+    h('div', { fontSize: 27, color: C.gris, marginTop: 6, height: 40 }, corta(sub, 64)),
 
     h('div', {
       flexDirection: 'column', marginTop: 26, padding: '20px 26px', borderRadius: 28, background: C.panel, border: `2px solid ${C.borde}`,
@@ -180,7 +228,7 @@ function tarjetaVendedor({ ruta, nombre, clientes, desde, hasta, tipo, actualiza
 export default async function handler(req) {
   const q = new URL(req.url).searchParams;
   const ruta = String(q.get('ruta') || '').toUpperCase();
-  const tipo = q.get('t') === 'dia' ? 'dia' : 'semana';
+  const tipo = ['dia', 'objetivo'].includes(q.get('t')) ? q.get('t') : 'semana';
   const desde = q.get('d') || '';
   const hasta = q.get('h') || '';
   const esFecha = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -197,17 +245,25 @@ export default async function handler(req) {
   } catch { /* sin nombres */ }
   const nombreDe = (r) => (vendedores[r]?.nombre ? primerNombre(vendedores[r].nombre, r) : '');
   const actualizado = filas.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || null;
+  // Para el corte del día: objetivo de visitas de las 7:30 → "visitó X de N"
+  let objetivos = {};
+  if (tipo === 'dia') {
+    try {
+      const o = await sb(`sin_visita_pwst?select=ruta,total&tipo=eq.objetivo&fecha=eq.${hasta}${filtroRuta}`);
+      objetivos = Object.fromEntries(o.map((f) => [f.ruta, f.total || 0]));
+    } catch { /* sin objetivo */ }
+  }
   const fuentesOk = await cargarFuentes();
   const opciones = (alto) => ({ width: 1080, height: alto, ...(fuentesOk.length ? { fonts: fuentesOk } : {}), headers: { 'Cache-Control': 'no-store' } });
 
   if (ruta === 'GRUPO') {
-    const rutas = filas.map((f) => ({ ruta: f.ruta, nombre: nombreDe(f.ruta), total: Array.isArray(f.clientes) ? f.clientes.length : (f.total || 0) }));
+    const rutas = filas.map((f) => ({ ruta: f.ruta, nombre: nombreDe(f.ruta), total: Array.isArray(f.clientes) ? f.clientes.length : (f.total || 0), objetivo: objetivos[f.ruta] ?? null }));
     return new ImageResponse(tarjetaGrupo({ rutas, desde, hasta, tipo, actualizado }), opciones(altoGrupo(rutas.length)));
   }
   const clientes = Array.isArray(filas[0].clientes) ? filas[0].clientes : [];
   const sobran = clientes.length > MAX_FILAS_VENDEDOR;
   return new ImageResponse(
-    tarjetaVendedor({ ruta, nombre: nombreDe(ruta), clientes, desde, hasta, tipo, actualizado }),
+    tarjetaVendedor({ ruta, nombre: nombreDe(ruta), clientes, desde, hasta, tipo, actualizado, objetivo: objetivos[ruta] ?? null }),
     opciones(altoVendedor(Math.min(clientes.length, MAX_FILAS_VENDEDOR), sobran)),
   );
 }
