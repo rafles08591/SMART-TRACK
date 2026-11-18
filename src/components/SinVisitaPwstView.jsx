@@ -85,6 +85,8 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   // Lo más reciente de cada tipo: "dia" = el de HOY; "semana" = el último de esta semana
   const vista = useMemo(() => {
     const lista = (filas || []).filter((f) => f.tipo === pestana && (pestana === "semana" || f.fecha === hoy));
+    // Objetivo de visitas de hoy (7:30 am) por ruta → para "visitó X de N" en la pestaña Hoy
+    const objetivos = Object.fromEntries((filas || []).filter((f) => f.tipo === "objetivo" && f.fecha === hoy).map((f) => [f.ruta, f.total || 0]));
     // Lo último que se bajó (cada rango pedido es un "lote": misma fecha + desde + hasta)
     const ultimo = [...lista].sort((a, b) => String(b.actualizado_en).localeCompare(String(a.actualizado_en)))[0];
     const fecha = ultimo?.fecha || null;
@@ -92,7 +94,8 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
       .sort((a, b) => (b.total || 0) - (a.total || 0) || a.ruta.localeCompare(b.ruta));
     const actualizado = rutas.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || null;
     const total = rutas.reduce((s, f) => s + (f.total || 0), 0);
-    return { fecha, rutas, actualizado, total, desde: rutas[0]?.desde, hasta: rutas[0]?.hasta, por: rutas[0]?.actualizado_por };
+    const objTotal = pestana === "dia" ? rutas.reduce((s, f) => s + (objetivos[f.ruta] || 0), 0) : 0;
+    return { fecha, rutas, actualizado, total, desde: rutas[0]?.desde, hasta: rutas[0]?.hasta, por: rutas[0]?.actualizado_por, objetivos, objTotal };
   }, [filas, pestana, hoy]);
 
   async function pedirActualizacion() {
@@ -138,7 +141,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
               <MapPin size={16} color={T.primary} /> CLIENTES SIN VISITA
             </div>
             <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-              Datos de PowerStreet · L–V 5 pm y 7 pm (ruta del día) · sábado desde las 3 pm cada hora (toda la semana)
+              Datos de PowerStreet · 🎯 objetivo L–S 7:30 am · L–V 2, 5 y 7 pm (ruta del día) · sábado desde las 3 pm cada hora (toda la semana)
             </div>
           </div>
         </div>
@@ -181,6 +184,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
         )}
         {aviso && <div style={{ fontSize: 12.5, color: aviso.startsWith("⚠️") ? T.bad : T.ok, marginTop: 10 }}>{aviso}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          {btnPestana("objetivo", "🎯 Objetivo")}
           {btnPestana("dia", "Hoy")}
           {btnPestana("semana", "Semana / rango")}
         </div>
@@ -191,9 +195,11 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
 
       {filas && !vista.fecha && (
         <div className="card" style={{ padding: 16, color: T.muted, fontSize: 13 }}>
-          {pestana === "dia"
-            ? "Todavía no hay datos de hoy. El robot los baja a las 5 pm y a las 7 pm (lunes a viernes)."
-            : "Todavía no hay datos de la semana. El robot los baja el sábado desde las 3 pm."}
+          {pestana === "objetivo"
+            ? "Todavía no hay objetivo de hoy. El robot lo baja de lunes a sábado a las 7:30 am (todos los clientes de la ruta del día)."
+            : pestana === "dia"
+              ? "Todavía no hay datos de hoy. El robot los baja a las 2, 5 y 7 pm (lunes a viernes)."
+              : "Todavía no hay datos de la semana. El robot los baja el sábado desde las 3 pm."}
           {!esVendedor && " También puedes pedirlos ahora con el botón de arriba."}
         </div>
       )}
@@ -202,8 +208,11 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
         <>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div className="card" style={{ padding: 14, flex: "1 1 160px" }}>
-              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "dia" ? "Sin visita hoy" : "Sin ninguna visita en el periodo"}</div>
-              <div className="mono display" style={{ fontSize: 24, color: vista.total ? T.bad : T.ok }}>{vista.total}</div>
+              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "objetivo" ? "Objetivo de visitas de hoy" : pestana === "dia" ? "Sin visita hoy" : "Sin ninguna visita en el periodo"}</div>
+              <div className="mono display" style={{ fontSize: 24, color: pestana === "objetivo" ? T.primary : vista.total ? T.bad : T.ok }}>{vista.total}</div>
+              {pestana === "dia" && vista.objTotal > 0 && (
+                <div style={{ fontSize: 11.5, color: T.muted }}>visitados {Math.max(vista.objTotal - vista.total, 0)} de {vista.objTotal} ({Math.round((Math.max(vista.objTotal - vista.total, 0) / vista.objTotal) * 100)}%)</div>
+              )}
             </div>
             <div className="card" style={{ padding: 14, flex: "2 1 220px" }}>
               <div style={{ fontSize: 11, color: T.muted }}>Periodo</div>
@@ -227,10 +236,17 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
                 >
                   <div style={{ textAlign: "left" }}>
                     <div style={{ fontSize: 14, fontWeight: 800 }}>{f.ruta}</div>
-                    <div style={{ fontSize: 11.5, color: T.muted }}>{nombreRuta(f.ruta)}</div>
+                    <div style={{ fontSize: 11.5, color: T.muted }}>
+                      {nombreRuta(f.ruta)}
+                      {pestana === "dia" && vista.objetivos[f.ruta] ? ` · visitó ${Math.max(vista.objetivos[f.ruta] - clientes.length, 0)} de ${vista.objetivos[f.ruta]}` : ""}
+                    </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    {clientes.length ? (
+                    {pestana === "objetivo" ? (
+                      <span style={{ display: "flex", alignItems: "center", gap: 5, color: T.primary, fontWeight: 800, fontSize: 14 }}>
+                        🎯 {clientes.length} clientes
+                      </span>
+                    ) : clientes.length ? (
                       <span style={{ display: "flex", alignItems: "center", gap: 5, color: T.bad, fontWeight: 800, fontSize: 14 }}>
                         <AlertTriangle size={14} /> {clientes.length} sin visita
                       </span>
