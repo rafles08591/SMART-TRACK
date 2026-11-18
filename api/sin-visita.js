@@ -7,9 +7,11 @@
 //   · al grupo, solo el resumen (cuántos le faltan a cada ruta);
 //   · a cada vendedor, la lista de sus clientes que le faltan.
 //
-//   · Lunes a viernes 5 pm y 7 pm → tipo "dia":    ruta PM del día (PM01 lun … PM05 vie), hoy a hoy.
+//   · Lunes a viernes 2, 5 y 7 pm → tipo "dia":    ruta PM del día (PM01 lun … PM05 vie), hoy a hoy.
 //   · Sábado de 3 pm en adelante  → tipo "semana": PM01 a PM06, del lunes a hoy.
 //   · A petición del staff (botón en Sin visita → /api/wa-disparar → robot) → el que toque ese día.
+//   · 7:30 am (L–S) → tipo "objetivo": los clientes de la ruta del día = objetivo de visitas; a las
+//     2, 5 y 7 pm el mensaje del día dice "visitó X de N" contra ese objetivo.
 //
 // POST /api/sin-visita   header x-bot-token: <BOT_TOKEN>
 //   body { tipo: "dia"|"semana", desde: "YYYY-MM-DD", hasta: "YYYY-MM-DD",
@@ -59,7 +61,8 @@ function cliente(c) {
 // Cada mensaje lleva "imagen" (URL de /api/sin-visita-tabla) + "caption", y también "texto":
 // el robot manda la imagen y, solo si la imagen falla, manda el texto.
 // urlTabla(ruta) → URL firmada de la tabla, o null para mandar solo texto.
-async function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla }) {
+async function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla, objetivos = {} }) {
+  if (tipo === 'objetivo') return armarObjetivo({ hasta, rutas, vendedores, urlTabla });
   const codigos = [...new Set([...Object.keys(rutas), ...Object.keys(errores)])];
   const total = Object.values(rutas).reduce((s, l) => s + l.length, 0);
   const periodo = tipo === 'dia' ? `hoy · ${fechaLarga(hasta)}` : `semana · ${diaCorto(desde)} al ${fechaLarga(hasta)}`;
@@ -84,7 +87,9 @@ async function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, u
     if (e.m) mencionados.push(e.m);
     if (errores[ruta] && !rutas[ruta]) { G.push(`⚠️ ${e.txt} · no se pudo leer su reporte`); continue; }
     const n = rutas[ruta].length;
-    G.push(n ? `🔴 ${e.txt} · faltan *${n}*` : `✅ ${e.txt} · sin clientes pendientes`);
+    const obj = objetivos[ruta];
+    const vs = obj ? ` (visitó ${Math.max(obj - n, 0)} de ${obj})` : '';
+    G.push(n ? `🔴 ${e.txt} · faltan *${n}*${vs}` : `✅ ${e.txt} · sin clientes pendientes${vs}`);
   }
   G.push('', total ? '_A cada vendedor le llegó su lista. El detalle por ruta está en SMART-TRACK → Sin visita._' : '_El detalle por ruta está en SMART-TRACK → Sin visita._');
   const imgGrupo = await urlTabla('GRUPO');
@@ -118,6 +123,45 @@ async function armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, u
   return mensajes;
 }
 
+// 🎯 Objetivo de visitas (7:30 am): al grupo cuántos clientes tiene cada ruta hoy;
+// a cada vendedor su lista de clientes del día.
+async function armarObjetivo({ hasta, rutas, vendedores, urlTabla }) {
+  const total = Object.values(rutas).reduce((s, l) => s + l.length, 0);
+  const G = [`🎯 *OBJETIVO DE VISITAS DE HOY* · ${fechaLarga(hasta)}`, `Hoy hay *${total}* clientes en ruta. ¡A visitarlos todos! 💪`, ''];
+  for (const ruta of Object.keys(rutas).sort()) {
+    const v = vendedores[ruta];
+    const nom = v?.nombre ? ` ${primerNombre(v.nombre, ruta)}` : '';
+    G.push(`🎯 *${ruta}${nom}* · ${rutas[ruta].length} clientes`);
+  }
+  G.push('', '_A cada vendedor le llegó su lista. A las 2, 5 y 7 pm se revisa cuántos faltan._');
+  const imgGrupo = await urlTabla('GRUPO');
+  const mensajes = [{ numero: GRUPO, texto: G.join('\n'), mencionados: [], ...(imgGrupo ? { imagen: imgGrupo, caption: G.slice(0, 2).join('\n') } : {}) }];
+  for (const [ruta, lista] of Object.entries(rutas)) {
+    const v = vendedores[ruta];
+    if (!v?.telefono || !lista.length) continue;
+    const nom = primerNombre(v.nombre || '', ruta);
+    const V = [`🎯 *${nom}, tu objetivo de hoy: visitar ${lista.length} clientes*`, '_Esta es tu ruta del día:_', ''];
+    lista.forEach((c, i) => {
+      V.push(`${i + 1}. *${c.nombre}*${c.potencial ? ` (${c.potencial})` : ''}`);
+      const dir = [c.cliente, c.direccion, c.colonia].filter(Boolean).join(' · ');
+      if (dir) V.push(`    ${dir}`);
+    });
+    V.push('', `_Ruta ${ruta} · PowerStreet ${horaMX()}_`);
+    const img = await urlTabla(ruta);
+    mensajes.push({ numero: numeroEnvio(v.telefono), texto: V.join('\n'), mencionados: [], ...(img ? { imagen: img, caption: V.slice(0, 1).join('\n') } : {}) });
+  }
+  return mensajes;
+}
+
+// Objetivo de visitas del día por ruta (lo que se bajó a las 7:30) → { J201: 38, … }
+async function objetivosDe(fecha) {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/sin_visita_pwst?select=ruta,total&tipo=eq.objetivo&fecha=eq.${fecha}`, { headers: headers() });
+    const filas = r.ok ? await r.json() : [];
+    return Object.fromEntries(filas.map((f) => [f.ruta, f.total || 0]));
+  } catch { return {}; }
+}
+
 export default async function handler(req) {
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
   // GET ?accion=pendiente → el robot pregunta (cada 30 s) si el staff pidió el aviso; si sí, lo toma
@@ -132,8 +176,9 @@ export default async function handler(req) {
 
   let b = {};
   try { b = await req.json(); } catch { return json({ error: 'JSON inválido' }, 400); }
-  const tipo = b.tipo === 'semana' ? 'semana' : b.tipo === 'dia' ? 'dia' : null;
-  if (!tipo) return json({ error: 'tipo debe ser "dia" o "semana"' }, 400);
+  // objetivo = 7:30 am: todos los clientes de la ruta del día (aún nadie visita) → objetivo de visitas
+  const tipo = ['dia', 'semana', 'objetivo'].includes(b.tipo) ? b.tipo : null;
+  if (!tipo) return json({ error: 'tipo debe ser "dia", "semana" u "objetivo"' }, 400);
   const hoy = fechaMX();
   const hasta = esFecha(b.hasta) ? b.hasta : hoy;
   const desde = esFecha(b.desde) ? b.desde : hasta;
@@ -182,7 +227,8 @@ export default async function handler(req) {
   const sello = Date.now();
   const urlTabla = async (ruta) => (b.formato === 'texto' ? null
     : `${base}/api/sin-visita-tabla?ruta=${ruta}&t=${tipo}&d=${desde}&h=${hasta}&s=${await firmar(`SV:${ruta}:${tipo}:${desde}`, hasta)}&v=${sello}`);
-  const mensajes = await armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla });
+  const objetivos = tipo === 'dia' ? await objetivosDe(hasta) : {};
+  const mensajes = await armarMensajes({ tipo, desde, hasta, rutas, errores, vendedores, urlTabla, objetivos });
   await guardarEstado('sin_visita_envio', { marca, en: ahora });
   return json({ ok: true, guardadas: filas.length, mensajes });
 }
