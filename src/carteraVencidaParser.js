@@ -271,3 +271,60 @@ export function hayCarteraVencidaGlobal(data) {
   const registros = data?.carteraVencida?.registros || [];
   return registros.some((r) => esDeEsteAno(r) && esVencido(r));
 }
+
+// ---------------------------------------------------------------------
+// TICKETS DUPLICADOS — un mismo cliente con 2 o más tickets de crédito el
+// MISMO día. Si además dos de esos tickets traen el MISMO monto, es alerta
+// (posible crédito duplicado). La ruta se muestra solo como dato informativo
+// (se agrupa por cliente + día aunque los tickets sean de rutas distintas).
+// ---------------------------------------------------------------------
+function diaClave(valor) {
+  const f = aFecha(valor);
+  if (!f) return "";
+  return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}-${String(f.getDate()).padStart(2, "0")}`;
+}
+
+export function detectarDuplicados(registros = []) {
+  const grupos = {};
+  for (const r of registros) {
+    if (r.tipoDocumento === "Factura") continue; // solo tickets de crédito
+    const cli = String(r.clienteCodigo || r.clienteNombre || "").trim();
+    const dia = diaClave(r.fecha);
+    if (!cli || !dia) continue;
+    const k = `${cli}|${dia}`;
+    const g = (grupos[k] ||= { clave: k, clienteCodigo: r.clienteCodigo, clienteNombre: r.clienteNombre, dia, docs: [], vistos: new Set() });
+    const idDoc = String(r.documento || "").trim() || `${r.hora}|${r.importe}`;
+    if (g.vistos.has(idDoc)) continue; // el mismo documento repetido en el archivo no cuenta
+    g.vistos.add(idDoc);
+    g.docs.push(r);
+  }
+  return Object.values(grupos)
+    .filter((g) => g.docs.length >= 2)
+    .map(({ vistos, ...g }) => {
+      const docs = [...g.docs].sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+      const conteo = {};
+      for (const d of docs) {
+        const m = (Math.round(Number(d.importe || 0) * 100) / 100).toFixed(2);
+        conteo[m] = (conteo[m] || 0) + 1;
+      }
+      const montosRepetidos = Object.keys(conteo).filter((m) => conteo[m] >= 2).map(Number);
+      const rutas = [...new Map(docs.map((d) => [d.rutaCodigo, { rutaCodigo: d.rutaCodigo, vendedorNombre: d.vendedorNombre }])).values()];
+      return {
+        ...g,
+        docs,
+        rutas,
+        montosRepetidos,
+        mismoMonto: montosRepetidos.length > 0,
+        importe: docs.reduce((s, d) => s + Number(d.importe || 0), 0),
+        saldo: docs.reduce((s, d) => s + Number(d.saldo || 0), 0),
+      };
+    })
+    // más recientes primero; el mismo día, primero los de mismo monto
+    .sort((a, b) => b.dia.localeCompare(a.dia) || (b.mismoMonto - a.mismoMonto) || b.docs.length - a.docs.length);
+}
+
+// ¿Es un monto repetido dentro de su grupo? (para pintarlo en rojo)
+export function esMontoRepetido(grupo, importe) {
+  const m = Math.round(Number(importe || 0) * 100) / 100;
+  return grupo.montosRepetidos.some((x) => Math.abs(x - m) < 0.005);
+}
