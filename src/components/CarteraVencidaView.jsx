@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { AlertTriangle, Clock, CreditCard, UploadCloud, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { AlertTriangle, Clock, CreditCard, UploadCloud, ChevronDown, ChevronUp, Copy, RefreshCw } from "lucide-react";
+import { supabase } from "../supabaseClient";
 import { money } from "../utils";
 import { KpiCard } from "./ui";
 import {
@@ -412,6 +413,31 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
   const [rutaExpandida, setRutaExpandida] = useState(null);
   const [verActivos, setVerActivos] = useState(false);
   const [verDuplicados, setVerDuplicados] = useState(false);
+  const [pidiendoRobot, setPidiendoRobot] = useState(false);
+  const [avisoRobot, setAvisoRobot] = useState("");
+
+  // Le pide al robot que entre a PowerStreet y baje la cartera ya (va a pedir captcha por WhatsApp)
+  async function pedirCarteraAlRobot() {
+    setPidiendoRobot(true);
+    setAvisoRobot("");
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const r = await fetch("/api/wa-disparar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.session?.access_token || ""}` },
+        body: JSON.stringify({ tipo: "cartera" }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || `Error ${r.status}`);
+      setAvisoRobot(d.motivo || (d.enCola
+        ? "🤖 El robot está terminando otra carga; al acabar baja la cartera (sin otro captcha). Unos 5–10 min."
+        : "🤖 Listo, el robot ya está entrando a PowerStreet (contesta el captcha). En unos 3–5 min se actualiza aquí."));
+    } catch (e) {
+      setAvisoRobot(`⚠️ ${e.message || e}`);
+    } finally {
+      setPidiendoRobot(false);
+    }
+  }
 
   const hoy = new Date();
   const registrosTodos = (data?.carteraVencida?.registros || []).filter((r) => esDeEsteAno(r, hoy));
@@ -579,6 +605,18 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
             <UploadCloud size={15} /> {procesando ? "Procesando…" : "Procesar y guardar"}
           </button>
         </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>El robot la baja solo a las 2:30, 5:30 y 8:30 pm.</div>
+          <button
+            onClick={pedirCarteraAlRobot}
+            disabled={pidiendoRobot}
+            className="btn-ghost"
+            style={{ display: "flex", alignItems: "center", gap: 6, opacity: pidiendoRobot ? 0.6 : 1 }}
+          >
+            <RefreshCw size={14} /> {pidiendoRobot ? "Pidiendo…" : "Actualizar desde PowerStreet"}
+          </button>
+        </div>
+        {avisoRobot && <div style={{ fontSize: 12, color: avisoRobot.startsWith("⚠️") ? COLOR_AMBAR : COLOR_VERDE, marginTop: 8, textAlign: "left" }}>{avisoRobot}</div>}
         {status && <div style={{ fontSize: 12, color: status.startsWith("Error") ? COLOR_ROJO : COLOR_VERDE, marginTop: 8 }}>{status}</div>}
       </div>
       )}
