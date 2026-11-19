@@ -6,11 +6,14 @@ import CreditosView from "./CreditosView";
 import AvisosView, { hayAvisoNuevoPara } from "./AvisosView";
 import TopBar from "./TopBar";
 import TiemposView from "./TiemposView";
+import CarteraVencidaView from "./CarteraVencidaView";
+import { hayCarteraVencidaGlobal } from "../carteraVencidaParser";
 
 export default function TabsLiquidacion({ data, persist, persistFresco, staffUsername, onLogout }) {
   const [tab, setTab] = useState("tiempos");
   const hayNuevo = hayAvisoNuevoPara(data, "liquidacion", null);
   const creditosPendiente = creditosPendientes(data);
+  const carteraAlerta = hayCarteraVencidaGlobal(data);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -21,6 +24,13 @@ export default function TabsLiquidacion({ data, persist, persistFresco, staffUse
           onClick={() => setTab("creditos")}
         >
           CRÉDITOS
+        </button>
+        <button
+          className={tab === "cartera" ? "btn" : "btn-ghost"}
+          style={{ flex: 1, ...(carteraAlerta && tab !== "cartera" ? { color: "#FF6B6B" } : {}) }}
+          onClick={() => setTab("cartera")}
+        >
+          CARTERA
         </button>
         <button
           className={`${tab === "avisos" ? "btn" : "btn-ghost"} ${hayNuevo ? "tab-aviso-nuevo" : ""}`}
@@ -45,6 +55,9 @@ export default function TabsLiquidacion({ data, persist, persistFresco, staffUse
         />
       ) : tab === "creditos" ? (
         <CreditosView data={data} persistFresco={persistFresco} rol="liquidacion" revisorNombre={NOMBRES[staffUsername] || "Sulema Ponce"} />
+      ) : tab === "cartera" ? (
+        // Liquidación ve TODA la cartera (todas las rutas, vencidos, duplicados) pero no la carga
+        <CarteraVencidaView data={data} persistFresco={persistFresco} rol="staff" soloLectura revisorNombre={NOMBRES[staffUsername] || "Sulema Ponce"} />
       ) : (
         <AvisosView data={data} persist={persist} persistFresco={persistFresco} puedeCrear={false} revisorNombre={null} viewerKey="liquidacion" />
       )}
