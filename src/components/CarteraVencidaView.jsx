@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { AlertTriangle, Clock, CreditCard, UploadCloud, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Clock, CreditCard, UploadCloud, ChevronDown, ChevronUp, Copy } from "lucide-react";
 import { money } from "../utils";
 import { KpiCard } from "./ui";
 import {
@@ -9,6 +9,8 @@ import {
   esProximoAVencer,
   diasParaVencer,
   esDeEsteAno,
+  detectarDuplicados,
+  esMontoRepetido,
 } from "../carteraVencidaParser";
 
 /* =========================================================================
@@ -314,6 +316,91 @@ function DetalleCreditosActivos({ registros, diasUmbral, hoy, porRuta, onCerrar 
   );
 }
 
+// ---------------------------------------------------------------------
+// TICKETS DUPLICADOS — mismo cliente, mismo día, 2+ tickets de crédito.
+// 🚨 si dos traen el mismo monto. La ruta es solo informativa.
+// ---------------------------------------------------------------------
+const diaHoy = (h) => `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}-${String(h.getDate()).padStart(2, "0")}`;
+const centavos = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const diaLargo = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString("es-MX", { weekday: "short", day: "2-digit", month: "short" });
+
+function DetalleDuplicados({ grupos, hoy, onCerrar }) {
+  const [periodo, setPeriodo] = useState("hoy"); // hoy | 7 | todo
+  const [soloMismo, setSoloMismo] = useState(false);
+  const dHoy = diaHoy(hoy);
+  const hace7 = diaHoy(new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - 6));
+  const enPeriodo = grupos.filter((g) => (periodo === "hoy" ? g.dia === dHoy : periodo === "7" ? g.dia >= hace7 : true));
+  const lista = enPeriodo.filter((g) => !soloMismo || g.mismoMonto);
+  const nMismo = enPeriodo.filter((g) => g.mismoMonto).length;
+
+  const chip = (activo) => ({
+    fontSize: 12, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+    border: `1px solid ${activo ? "#5AA9E6" : COLOR_BORDE}`, background: activo ? "#5AA9E622" : "transparent",
+    color: activo ? "#5AA9E6" : COLOR_MUTED,
+  });
+
+  return (
+    <div className="card" style={{ padding: 16, borderColor: nMismo ? COLOR_ROJO : COLOR_AMBAR, textAlign: "left" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div className="display" style={{ fontSize: 13, color: nMismo ? COLOR_ROJO : COLOR_AMBAR }}>TICKETS DUPLICADOS</div>
+        <button onClick={onCerrar} style={{ background: "transparent", border: "none", color: COLOR_MUTED, cursor: "pointer", fontSize: 12 }}>Cerrar ✕</button>
+      </div>
+      <div style={{ fontSize: 12, color: COLOR_MUTED, marginBottom: 10 }}>
+        Clientes con 2 o más tickets de crédito el mismo día · 🚨 = dos tickets con el <b style={{ color: COLOR_ROJO }}>mismo monto</b>. La ruta es solo informativa.
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+        {[["hoy", "Hoy"], ["7", "Últimos 7 días"], ["todo", "Todo el año"]].map(([k, t]) => (
+          <button key={k} onClick={() => setPeriodo(k)} style={chip(periodo === k)}>{t}</button>
+        ))}
+        <button onClick={() => setSoloMismo((v) => !v)} style={chip(soloMismo)}>🚨 Solo mismo monto ({nMismo})</button>
+      </div>
+
+      {lista.length === 0 && (
+        <div style={{ fontSize: 12.5, color: COLOR_MUTED }}>
+          {periodo === "hoy" ? "Hoy no hay clientes con tickets duplicados. ✅" : "No hay tickets duplicados en este periodo. ✅"}
+        </div>
+      )}
+
+      {lista.map((g) => {
+        const color = g.mismoMonto ? COLOR_ROJO : COLOR_AMBAR;
+        return (
+          <div key={g.clave} style={{ border: `1px solid ${COLOR_BORDE}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10, textAlign: "left" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#E7ECF7", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.clienteNombre}</div>
+                <div style={{ fontSize: 11, color: COLOR_MUTED, marginTop: 2 }}>
+                  {g.clienteCodigo ? `${g.clienteCodigo} · ` : ""}{diaLargo(g.dia)} · {g.docs.length} tickets · {money(g.importe)}
+                </div>
+                <div style={{ fontSize: 11, color: "#5AA9E6", marginTop: 3 }}>
+                  Ruta {g.rutas.map((x) => `${x.rutaCodigo}${x.vendedorNombre ? ` · ${x.vendedorNombre}` : ""}`).join("  |  ")}
+                </div>
+              </div>
+              <Badge color={color}>{g.mismoMonto ? "🚨 Mismo monto" : `${g.docs.length} tickets mismo día`}</Badge>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              {g.docs.map((d, i) => {
+                const rep = esMontoRepetido(g, d.importe);
+                return (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "5px 0", borderTop: i ? `1px dashed ${COLOR_BORDE}` : "none" }}>
+                    <div style={{ color: "#C9D3E6", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {d.hora ? <span className="mono" style={{ color: COLOR_MUTED }}>{String(d.hora).slice(0, 5)} · </span> : null}
+                      {d.documento}{d.rutaCodigo && g.rutas.length > 1 ? <span style={{ color: COLOR_MUTED }}> · {d.rutaCodigo}</span> : null}
+                    </div>
+                    <div className="mono" style={{ flexShrink: 0, textAlign: "right" }}>
+                      <span style={{ fontWeight: 700, color: rep ? COLOR_ROJO : "#E7ECF7" }}>{centavos(d.importe)}</span>
+                      <span style={{ color: COLOR_MUTED, fontSize: 11 }}> · saldo {centavos(d.saldo)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CarteraVencidaView({ data, persistFresco, rol, puesto, rutaPropia, identidad, revisorNombre }) {
   // Acepta tanto `identidad` (VendorView) como `revisorNombre` (StaffView),
   // según quién lo esté invocando.
@@ -324,10 +411,12 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
   const [status, setStatus] = useState("");
   const [rutaExpandida, setRutaExpandida] = useState(null);
   const [verActivos, setVerActivos] = useState(false);
+  const [verDuplicados, setVerDuplicados] = useState(false);
 
   const hoy = new Date();
   const registrosTodos = (data?.carteraVencida?.registros || []).filter((r) => esDeEsteAno(r, hoy));
   const cargadoEn = data?.carteraVencida?.cargadoEn;
+  const cargadoPor = data?.carteraVencida?.cargadoPor;
 
   const registros = rol === "vendedor" ? registrosTodos.filter((r) => r.rutaCodigo === rutaPropia) : registrosTodos;
 
@@ -344,6 +433,11 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
     }
     return { vencidos, vencidosSaldo, proximos, proximosSaldo, creditosRegistrados };
   }, [resumen]);
+
+  // Tickets duplicados (mismo cliente, mismo día) — de toda la cartera cargada
+  const duplicados = useMemo(() => detectarDuplicados(registros), [registros]);
+  const dupHoy = duplicados.filter((g) => g.dia === diaHoy(hoy));
+  const dupHoyMismo = dupHoy.filter((g) => g.mismoMonto).length;
 
   async function procesarYGuardar() {
     if (!rawInput.trim()) {
@@ -421,11 +515,22 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
         <KpiCard icon={<AlertTriangle size={14} />} label="Créditos vencidos" value={`${totales.vencidos} · ${money(totales.vencidosSaldo)}`} accent={COLOR_ROJO} />
         <KpiCard icon={<Clock size={14} />} label={`Por vencer (${diasUmbral}d)`} value={`${totales.proximos} · ${money(totales.proximosSaldo)}`} accent={COLOR_AMBAR} />
         <KpiCard icon={<CreditCard size={14} />} label="Créditos registrados" value={totales.creditosRegistrados} onClick={() => setVerActivos((v) => !v)} activo={verActivos} />
+        <KpiCard
+          icon={<Copy size={14} />}
+          label="Tickets duplicados hoy"
+          value={dupHoy.length ? `${dupHoy.length}${dupHoyMismo ? ` · 🚨${dupHoyMismo}` : ""}` : "0"}
+          accent={dupHoyMismo ? COLOR_ROJO : dupHoy.length ? COLOR_AMBAR : COLOR_VERDE}
+          onClick={() => setVerDuplicados((v) => !v)}
+          activo={verDuplicados}
+          pista={verDuplicados ? "Ocultar detalle ▴" : `${duplicados.length} en el año · Ver detalle ▾`}
+        />
       </div>
 
       {verActivos && (
         <DetalleCreditosActivos registros={registros} diasUmbral={diasUmbral} hoy={hoy} porRuta onCerrar={() => setVerActivos(false)} />
       )}
+
+      {verDuplicados && <DetalleDuplicados grupos={duplicados} hoy={hoy} onCerrar={() => setVerDuplicados(false)} />}
 
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -456,7 +561,7 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
         />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
           <div style={{ fontSize: 11.5, color: COLOR_MUTED }}>
-            {cargadoEn ? `Última carga: ${new Date(cargadoEn).toLocaleString("es-MX")}` : "Sin cargas todavía"}
+            {cargadoEn ? `Última carga: ${new Date(cargadoEn).toLocaleString("es-MX")}${cargadoPor ? ` · ${cargadoPor}` : ""}` : "Sin cargas todavía"}
           </div>
           <button
             onClick={procesarYGuardar}
