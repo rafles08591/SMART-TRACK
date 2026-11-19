@@ -172,6 +172,12 @@ export default async function handler(req) {
     await guardarEstado('sin_visita_pedido', { ...p, atendido: true, tomado_en: new Date().toISOString() });
     return json({ pendiente: true, por: p.por, desdeDia: p.desdeDia || null, hastaDia: p.hastaDia || null, enviar: p.enviar !== false });
   }
+  // GET ?accion=objetivo_hoy → ¿ya se bajó el objetivo de hoy? (el robot pregunta antes de mandarlo,
+  // así un reinicio del robot no lo vuelve a mandar)
+  if (req.method === 'GET' && new URL(req.url).searchParams.get('accion') === 'objetivo_hoy') {
+    const obj = await objetivosDe(fechaMX());
+    return json({ hecho: Object.keys(obj).length > 0, rutas: Object.keys(obj).length });
+  }
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
   let b = {};
@@ -196,6 +202,12 @@ export default async function handler(req) {
   }
   const errores = {};
   if (!Object.keys(rutas).length) return json({ error: 'sin rutas' }, 400);
+
+  // El objetivo se toma UNA vez al día (7:30, antes de que visiten). Si ya está, no se pisa (más tarde
+  // la lista sale más corta porque ya visitaron, y el "visitó X de N" quedaría mal) ni se vuelve a mandar.
+  if (tipo === 'objetivo' && !b.reenviarObjetivo && Object.keys(await objetivosDe(hasta)).length) {
+    return json({ ok: true, guardadas: 0, mensajes: [], nota: 'el objetivo de hoy ya se había mandado; no se repite' });
+  }
 
   // 1) Guardar (una fila por fecha + tipo + ruta). Las rutas con error no pisan lo último bueno.
   const ahora = new Date().toISOString();
