@@ -106,6 +106,48 @@ async function pedirSinVisita(req, user, interna, body = {}) {
   return json({ ok: true, enviado: true, motivo: rango.enviar ? '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min llega al grupo y se actualiza aquí.' : '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto y en unos 5 min se actualiza aquí (sin mandar WhatsApp).' });
 }
 
+// ---- Cartera a petición del staff ----
+// Botón "Actualizar desde PowerStreet" de Cartera Vencida: el robot entra a PowerStreet, baja
+// Resumen de cuentas por Agencia y la carga aquí (como el código CARTERA por WhatsApp).
+async function pedirCarteraRobot(user, interna) {
+  if (!interna) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${user.id}&select=role,username`, {
+      headers: SERVICE_KEY.startsWith('sb_') ? { apikey: SERVICE_KEY } : { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+    });
+    const perfil = r.ok ? (await r.json())[0] : null;
+    if (!perfil || perfil.role === 'vendedor') return json({ ok: false, error: 'Solo el staff puede actualizar la cartera' }, 403);
+  }
+  const previo = await leerEstado('cartera_pedido');
+  if (previo?.en && !previo.atendido && Date.now() - Date.parse(previo.en) < MIN_ENTRE_ENVIOS) {
+    return json({ ok: true, enviado: false, motivo: '🤖 Ya se pidió hace un momento; el robot ya está en eso.' });
+  }
+  const por = interna ? 'sistema' : (user.email || user.id);
+  // 1) Pedido guardado: el robot lo revisa cada 30 s
+  await guardarEstado('cartera_pedido', { en: new Date().toISOString(), por, atendido: false });
+  // 2) Y se le avisa directo para que arranque ya (si ROBOT_URL está y responde)
+  const robot = (process.env.ROBOT_URL || '').trim().replace(/\/+$/, '');
+  if (robot) {
+    try {
+      const sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined;
+      const r = await fetch(`${robot}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
+        body: JSON.stringify({ cartera: true, por }),
+        signal: sig,
+      });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        await guardarEstado('cartera_pedido', { en: new Date().toISOString(), por, atendido: true, directo: true });
+        return json({ ok: true, enviado: true, enCola: !!d.yaCorriendo });
+      }
+      console.warn('robot respondió', r.status);
+    } catch (e) {
+      console.warn('no se pudo llamar al robot directo:', e?.message || e);
+    }
+  }
+  return json({ ok: true, enviado: true, motivo: '🤖 Pedido registrado. El robot lo toma en menos de 1 minuto; en unos 5 min se actualiza aquí (va a pedir captcha).' });
+}
+
 export default async function handler(req) {
   if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
 
@@ -116,6 +158,7 @@ export default async function handler(req) {
   let body = {};
   try { body = await req.json(); } catch { /* vacío */ }
   if (body.tipo === 'sin_visita') return await pedirSinVisita(req, user, interna, body);
+  if (body.tipo === 'cartera') return await pedirCarteraRobot(user, interna);
   if (body.tipo !== 'dia') return json({ error: 'tipo inválido' }, 400);
 
   const cfg = await configBot();
