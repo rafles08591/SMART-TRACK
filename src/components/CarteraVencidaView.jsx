@@ -401,7 +401,7 @@ function DetalleDuplicados({ grupos, hoy, onCerrar }) {
   );
 }
 
-export default function CarteraVencidaView({ data, persistFresco, rol, puesto, rutaPropia, identidad, revisorNombre }) {
+export default function CarteraVencidaView({ data, persistFresco, rol, puesto, rutaPropia, identidad, revisorNombre, soloLectura = false }) {
   // Acepta tanto `identidad` (VendorView) como `revisorNombre` (StaffView),
   // según quién lo esté invocando.
   identidad = identidad || revisorNombre;
@@ -532,6 +532,13 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
 
       {verDuplicados && <DetalleDuplicados grupos={duplicados} hoy={hoy} onCerrar={() => setVerDuplicados(false)} />}
 
+      {soloLectura && (
+        <div style={{ fontSize: 11.5, color: COLOR_MUTED, textAlign: "left" }}>
+          {cargadoEn ? `Última carga: ${new Date(cargadoEn).toLocaleString("es-MX")}${cargadoPor ? ` · ${cargadoPor}` : ""}` : "Aún no se ha cargado la cartera."}
+        </div>
+      )}
+
+      {!soloLectura && (
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div className="display" style={{ fontSize: 13, color: COLOR_MUTED }}>CARGAR CARTERA</div>
@@ -574,6 +581,7 @@ export default function CarteraVencidaView({ data, persistFresco, rol, puesto, r
         </div>
         {status && <div style={{ fontSize: 12, color: status.startsWith("Error") ? COLOR_ROJO : COLOR_VERDE, marginTop: 8 }}>{status}</div>}
       </div>
+      )}
 
       <div>
         <div className="display" style={{ fontSize: 13, color: COLOR_MUTED, marginBottom: 10 }}>
