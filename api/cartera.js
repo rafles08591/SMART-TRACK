@@ -7,11 +7,12 @@
 // (mismo cliente, mismo día, 2+ tickets; alerta si traen el mismo monto) y le regresa al robot el
 // resumen de hoy para su aviso de WhatsApp.
 //
+// GET  /api/cartera?accion=pendiente   (el robot pregunta si la pidieron desde la app)
 // POST /api/cartera   header x-bot-token: <BOT_TOKEN>
 //   body { texto: "<CSV copiado de PowerStreet>", por: "Robot PWST" }
 //   → { ok, registros, duplicados: { total, mismoMonto, hoy, hoyMismoMonto, hoyDetalle: [ "…" ] } }
 
-import { autorizado } from './_wa-lib.js';
+import { autorizado, leerEstado, guardarEstado } from './_wa-lib.js';
 import { parseCreditosRaw, esDeEsteAno, detectarDuplicados } from '../src/carteraVencidaParser.js';
 
 export const config = { runtime: 'edge' };
@@ -33,8 +34,17 @@ const hoyMX = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico
 const pesos = (n) => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default async function handler(req) {
-  if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
   if (!autorizado(req)) return json({ error: 'no autorizado' }, 401);
+  // GET ?accion=pendiente → el robot pregunta (cada 30 s) si alguien pidió la cartera desde la app
+  // (botón "Actualizar desde PowerStreet" en Cartera Vencida); si sí, la toma.
+  if (req.method === 'GET' && new URL(req.url).searchParams.get('accion') === 'pendiente') {
+    const p = await leerEstado('cartera_pedido');
+    const vigente = p?.en && !p.atendido && Date.now() - Date.parse(p.en) < 30 * 60 * 1000;
+    if (!vigente) return json({ pendiente: false });
+    await guardarEstado('cartera_pedido', { ...p, atendido: true, tomado_en: new Date().toISOString() });
+    return json({ pendiente: true, por: p.por });
+  }
+  if (req.method !== 'POST') return json({ error: 'usa POST' }, 405);
   if (!SUPABASE_URL || !SERVICE_KEY) return json({ error: 'faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY' }, 500);
 
   let body;
