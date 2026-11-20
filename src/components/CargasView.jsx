@@ -374,7 +374,29 @@ function TablaCargaVendedor({ items, nombreRuta, bloqueado, valoresLocales, onCa
               <div style={{ fontSize: 10, color: "#9AA7BD" }}>Inicial</div>
               <div style={{ fontSize: 15, color: "#E8EDF5" }}>{porRuta.inicial}</div>
             </div>
-            <input type="number" value={valorMostrado} onChange={(e) => onCambiarLocal(i, e.target.value)} disabled={bloqueado} style={{ width: 80, padding: 6, textAlign: "center" }} />
+            <input
+              // Texto con teclado numérico (en vez de type="number"): así el número se puede SELECCIONAR
+              // completo al tocarlo, también en iPhone. Al tocar la casilla queda seleccionado y basta
+              // con escribir la nueva cantidad (no hay que borrar). Enter / "Siguiente" pasa a la de abajo.
+              type="text"
+              inputMode="decimal"
+              enterKeyHint="next"
+              autoComplete="off"
+              data-carga-input
+              value={valorMostrado}
+              onChange={(e) => onCambiarLocal(i, e.target.value.replace(/[^0-9.]/g, ""))}
+              onFocus={(e) => { const el = e.target; el.select(); setTimeout(() => { try { el.select(); } catch { /* */ } }, 0); }}
+              onMouseUp={(e) => e.preventDefault()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                const todos = [...document.querySelectorAll("input[data-carga-input]:not(:disabled)")];
+                const sig = todos[todos.indexOf(e.target) + 1];
+                if (sig) sig.focus(); else e.target.blur();
+              }}
+              disabled={bloqueado}
+              style={{ width: 80, padding: 6, textAlign: "center" }}
+            />
           </div>
         );
       })}
