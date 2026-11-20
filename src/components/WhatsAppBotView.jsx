@@ -416,7 +416,7 @@ export default function WhatsAppBotView({ data, persistFresco, puedeEditar = tru
   const deshabilitado = !puedeEditar;
 
   return (
-    <div style={S.wrap}>
+    <div className="contenedor-app" style={S.wrap}>
       <div style={S.header}>
         <div>
           <div style={S.titulo}>💬 Bot de WhatsApp</div>
