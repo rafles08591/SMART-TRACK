@@ -324,3 +324,24 @@ th {
 td {
   border-top: 1px solid rgba(30, 42, 66, 0.6) !important;
 }
+
+/* ========== PANTALLA COMPLETA EN COMPUTADORA ==========
+   La app se diseñó para celular (columna angosta). En computadora:
+   - sin franjas blancas a los lados (el fondo oscuro cubre toda la ventana)
+   - el contenido usa casi todo el ancho (hasta 1600 px) en lugar de una columna de 720–820 px.
+   En celular no cambia nada (la pantalla ya es más angosta que esos límites). */
+html {
+  background: var(--bg-deep) !important;
+}
+#root {
+  width: 100% !important;
+  max-width: 100% !important;
+  border-inline: none !important;
+}
+@media (min-width: 1100px) {
+  .contenedor-app {
+    max-width: min(96vw, 1600px) !important;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
