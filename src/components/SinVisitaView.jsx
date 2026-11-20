@@ -446,7 +446,7 @@ export default function SinVisitaView({ data, rol, puesto, rutaPropia, persistFr
   const llaveCliente = (c) => normalizarCodigo(c.codigo_cliente) || `N:${c.nombre}`;
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+    <div className="contenedor-app" style={{ maxWidth: 900, margin: "0 auto" }}>
       <style>{`
         .sv-card { background:${T.card}; border:1px solid ${T.border}; border-radius:14px; }
         .sv-select { background:${T.bg}; border:1px solid ${T.border}; color:${T.ink}; border-radius:8px; padding:7px 10px; font-size:12.5px; }
