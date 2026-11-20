@@ -51,11 +51,11 @@
 }
 
 #root {
-  width: 1126px;
+  /* Antes: columna fija de 1126 px al centro (plantilla de Vite) → franjas a los lados en computadora */
+  width: 100%;
   max-width: 100%;
   margin: 0 auto;
   text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
   display: flex;
   flex-direction: column;
@@ -108,4 +108,21 @@ code {
   line-height: 135%;
   padding: 4px 8px;
   background: var(--code-bg);
+}
+
+/* ========== PANTALLA COMPLETA EN COMPUTADORA ==========
+   La app se diseñó para celular (columna angosta). En computadora el fondo oscuro cubre toda la
+   ventana y el contenido usa casi todo el ancho (hasta 1600 px) en lugar de una columna de
+   720–820 px. En celular no cambia nada (la pantalla ya es más angosta que esos límites). */
+:root,
+html,
+body {
+  background: #070b14 !important;
+}
+@media (min-width: 1100px) {
+  .contenedor-app {
+    max-width: min(96vw, 1600px) !important;
+    width: 100%;
+    box-sizing: border-box;
+  }
 }
