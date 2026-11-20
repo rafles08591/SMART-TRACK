@@ -600,7 +600,7 @@ export default function RelojChecadorView({ puedeSubir, rutaPropia, puedeVerBono
   }
 
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+    <div className="contenedor-app" style={{ maxWidth: 800, margin: "0 auto" }}>
       <style>{`
         .rc-card { background:${T.card}; border:1px solid ${T.border}; border-radius:14px; }
         .rc-select, .rc-input { background:${T.bg}; border:1px solid ${T.border}; color:${T.ink}; border-radius:8px; padding:7px 10px; font-size:12.5px; }
