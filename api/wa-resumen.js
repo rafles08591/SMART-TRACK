@@ -80,12 +80,16 @@ async function respuestaIA(c, texto, cfg, { historial = [], grupo = null } = {})
       contextoDatos(c), grupo ? leerEstado('retro_grupo') : null, listaContactos(cfg), ventasPorProducto(texto, cfg),
     ]);
     if (porProducto) datos.venta_por_producto = porProducto;
-    {
+    // Si preguntan por un producto en específico ("vuala vainilla", "switch"), la respuesta sale SOLO de
+    // venta_por_producto. El total de Vuala (todos los sabores juntos) NO se manda: la IA lo confundía
+    // (decía que un Vualá de CHOCOLATE era de vainilla).
+    const productoEspecifico = porProducto && porProducto.tipo_consulta !== 'detalle general por producto';
+    if (!productoEspecifico) {
       const fv = await fechaUltimoCorte({ hasta: fechaMX() });
       if (fv) {
         const vu = await vualaPorRuta(fv, todos);
         datos.vuala_hoy = c.tipo === 'vendedor' ? (vu[claveRuta(c.ruta)] || { piezas: 0, pesos: 0 }) : vu;
-        datos.vuala_nota = 'Vuala = artículos marcados como Vuala en el catálogo (vainilla, chocolate, switch…). Rutas que no aparecen en vuala_hoy NO han vendido Vuala hoy.';
+        datos.vuala_nota = 'vuala_hoy = TODOS los Vuala juntos (vainilla, chocolate, switch…); "articulos" dice cuál sabor vendió cada ruta (VLACHOCO = chocolate, VLAVAINILLA = vainilla). Si preguntan por un sabor, cuenta SOLO los artículos de ese sabor. Rutas que no aparecen en vuala_hoy NO han vendido Vuala hoy.';
       }
     }
     // En la retro guardada las menciones son @número: se cambian por @ruta para que la IA no copie números
@@ -782,10 +786,16 @@ async function modoBot(req) {
       const tUlt = Math.max(ult?.t || 0, tSnap || 0);
       const reciente = tUlt && Date.now() - tUlt < MIN_FRESCO * 60000;
       if (!reciente) {
+        // El refresco ya NO depende de n8n: se guarda el pendiente, se le pide al robot directo y,
+        // cuando el robot termina, avisa a ?modo=refresco_hecho y desde aquí se manda la respuesta.
+        // (Se contesta como "texto" para que n8n solo mande el aviso y no arranque su propio refresco.)
+        await guardarEstado('refresco_pendiente', { numero, texto: body.texto, grupo: grupo || null, en: Date.now() });
+        const robot = await pedirRefrescoAlRobot(`Robotina (${tratoDe(c)})`);
         return responder({
-          tipo: 'refrescar',
-          texto: `Ok, ${tratoDe(c)} 🫡 déjame actualizar y en cuanto tenga la información fresca te la paso.`,
-          refrescar: { numero, texto: body.texto, grupo: grupo || null },
+          tipo: 'texto',
+          texto: robot.ok
+            ? `Ok, ${tratoDe(c)} 🫡 déjame actualizar y en cuanto tenga la información fresca te la paso.${robot.enCola ? ' (El robot está terminando otra carga; voy justo después.)' : ''}`
+            : `Ok, ${tratoDe(c)} 🫡 ya pedí la actualización; en cuanto el robot termine te paso la información fresca.`,
         });
       }
     }
@@ -1306,6 +1316,75 @@ async function contextoDatos(c) {
 }
 
 // ------------------------------------------------------------------ 🔄 REFRESCO ANTES DE CONTESTAR
+// Flujo (sin n8n):
+//  1) Le preguntan el avance y la info es vieja → se guarda 'refresco_pendiente' y se llama al robot
+//     (ROBOT_URL/run). Si el robot está ocupado, guarda el pedido y lo hace al terminar.
+//  2) El robot, al terminar un ciclo con Avance/OTC (bien o mal), llama ?modo=refresco_hecho
+//     con { ok }. Aquí se vuelve a contestar la pregunta guardada (ya con datos frescos) y se manda
+//     por WhatsApp (Evolution) al grupo o al número que preguntó.
+
+async function pedirRefrescoAlRobot(por) {
+  const robot = (process.env.ROBOT_URL || '').trim().replace(/\/+$/, '');
+  if (!robot) return { ok: false };
+  try {
+    const sig = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(7000) : undefined;
+    const r = await fetch(`${robot}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bot-token': process.env.BOT_TOKEN || '' },
+      body: JSON.stringify({ por }),
+      signal: sig,
+    });
+    const d = await r.json().catch(() => ({}));
+    return { ok: r.ok, enCola: !!(d.enCola || d.yaCorriendo) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function enviarWhatsApp(resp) {
+  const base = (process.env.EVOLUTION_URL || '').replace(/\/+$/, '');
+  const key = process.env.EVOLUTION_APIKEY || process.env.EVOLUTION_API_KEY || '';
+  const inst = process.env.EVOLUTION_INSTANCE || 'open';
+  if (!base || !key || !resp?.numero) return { ok: false, error: 'faltan EVOLUTION_URL / EVOLUTION_APIKEY' };
+  const menc = Array.isArray(resp.mencionados) && resp.mencionados.length ? { mentioned: resp.mencionados } : {};
+  const h = { apikey: key, 'Content-Type': 'application/json' };
+  let r;
+  if (resp.tipo === 'imagen' && resp.tarjeta_url) {
+    r = await fetch(`${base}/message/sendMedia/${inst}`, {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ number: resp.numero, mediatype: 'image', mimetype: 'image/png', media: resp.tarjeta_url, caption: resp.caption || '', fileName: 'avance.png', ...menc }),
+    });
+  } else {
+    const texto = resp.texto || resp.caption;
+    if (!texto) return { ok: false, error: 'respuesta sin texto' };
+    r = await fetch(`${base}/message/sendText/${inst}`, {
+      method: 'POST', headers: h, body: JSON.stringify({ number: resp.numero, text: texto, ...menc }),
+    });
+  }
+  return { ok: r.ok, status: r.status, error: r.ok ? undefined : (await r.text()).slice(0, 200) };
+}
+
+async function modoRefrescoHecho(req) {
+  let b = {};
+  try { b = await req.json(); } catch { /* vacío */ }
+  const ok = b.ok !== false;
+  if (ok) await guardarEstado('refresco_hecho', { t: Date.now() });
+  const p = await leerEstado('refresco_pendiente');
+  if (!p?.numero || p.atendido || Date.now() - (p.en || 0) > 40 * 60000) return json({ ok: true, pendiente: false });
+  await guardarEstado('refresco_pendiente', { ...p, atendido: true });
+  // Se vuelve a contestar la pregunta, ahora "fresca"
+  const url = new URL(req.url);
+  url.searchParams.set('modo', 'bot');
+  const r = await modoBot(new Request(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ numero: p.numero, texto: p.texto, grupo: p.grupo, fresco: true, ...(ok ? {} : { sin_refresco: true }) }),
+  }));
+  const resp = await r.json().catch(() => null);
+  if (!resp || resp.tipo === 'ninguno') return json({ ok: true, pendiente: true, enviado: false });
+  const env = await enviarWhatsApp(resp);
+  return json({ ok: true, pendiente: true, enviado: env.ok, detalle: env });
+}
 // Si el robot actualizó hace menos de MIN_FRESCO minutos, se contesta directo sin volver a refrescar.
 
 // 🖐️ La Tercera Mano del Pachuco es un CASTIGO para las rutas con el RENDIMIENTO GENERAL más bajo.
@@ -1689,7 +1768,9 @@ async function ventasPorProducto(texto, cfg) {
     }
     // Además del apodo, se busca por nombre con todas las palabras (por si el artículo vendido
     // todavía no tiene apodo, p. ej. una presentación nueva)
-    const lista = palabras;
+    // OJO: las palabras que ya sirvieron para el apodo ("vuala", "vainilla") NO se usan para buscar otros
+    // artículos: si no, "vuala" jalaba también el VLACHOCO (marca VUALA) y salía como si fuera vainilla.
+    const lista = porApodo ? palabras.filter((w) => !porApodo.usadas.has(w)) : palabras;
     if (!lista.length) return 0;
     const h = norm(campos.join(' '));
     const tokens = h.split(/[^a-z0-9]+/).filter((x) => x.length >= 3);
@@ -2053,7 +2134,7 @@ export default async function handler(req) {
       return json({ fecha, texto: textoRiesgo(cfg, rk, { nombre: 'Prueba' }), rutas: rk.rutas.map((r) => ({ ruta: r.ruta, proy: Math.round(r.pctProy ?? -1), nivel: r.nivel })) });
     }
     if (modo === 'bot' && req.method === 'POST') return await modoBot(req);
-    if (modo === 'refresco_hecho') { await guardarEstado('refresco_hecho', { t: Date.now() }); return json({ ok: true }); }
+    if (modo === 'refresco_hecho') return await modoRefrescoHecho(req);
     if (modo === 'retro_grupo') return await modoRetroGrupo(req);
     return json({ error: 'modo inválido (matutino | dia | alerta | bot | retro_grupo | diag)' }, 400);
   } catch (e) {
