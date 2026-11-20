@@ -205,7 +205,7 @@ export default function AlmacenView({ data, persistFresco, puedeEditar = true, q
   const [fechaDoc, setFechaDoc] = useState(hoyISO());
 
   return (
-    <div style={S.wrap}>
+    <div className="contenedor-app" style={S.wrap}>
       <div style={S.header}>
         <div>
           <div style={S.titulo}>📦 Almacén</div>
