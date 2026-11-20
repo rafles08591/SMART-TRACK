@@ -49,6 +49,83 @@ const aFA = (c) => {
   return d.startsWith("FA") ? d : `FA${d}`;
 };
 
+// ─────────────────────────────────────────────────────────────
+// 2ª VALIDACIÓN: POR NOMBRE (DESCRIPCIÓN)
+// Además del EAN, cada renglón se valida por su descripción ("MARLBORO RED 3.5 LS BOX 20").
+// La app aprende nombre → código FA de cada remisión guardada (data.almacen.equivNombres y el
+// historial data.almacen.remisiones). Así, si una hoja sale borrosa:
+//   • EAN y nombre dan el mismo código → ✅ doble validación
+//   • el EAN no se pudo leer pero el nombre sí → se usa el código del nombre
+//   • EAN y nombre dan códigos DISTINTOS → ⚠️ no se escribe nada hasta que elijas el correcto
+// ─────────────────────────────────────────────────────────────
+export const normNombre = (t) => String(t || "")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toUpperCase()
+  // letras que el OCR lee como número dentro de una palabra: MARLB0RO → MARLBORO, MENT1OL → MENTIOL
+  .replace(/([A-Z])0(?=[A-Z]|\b)/g, "$1O").replace(/([A-Z])1(?=[A-Z])/g, "$1I").replace(/([A-Z])5(?=[A-Z])/g, "$1S")
+  .replace(/(\d),(\d)/g, "$1.$2")
+  .replace(/[^A-Z0-9.]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+const numerosDe = (n) => (n.match(/\d+(?:\.\d+)?/g) || []).join("|");
+function bigramas(t) {
+  const s = t.replace(/\s+/g, "");
+  const m = new Map();
+  for (let i = 0; i < s.length - 1; i++) { const b = s.slice(i, i + 2); m.set(b, (m.get(b) || 0) + 1); }
+  return m;
+}
+// Parecido 0…1 entre dos nombres (aguanta letras mal leídas). Los NÚMEROS deben coincidir
+// (3.5 vs 14, BOX 20 vs 25 son productos distintos).
+export function parecido(a, b) {
+  const na = normNombre(a), nb = normNombre(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  if (numerosDe(na) !== numerosDe(nb)) return 0;
+  const A = bigramas(na), B = bigramas(nb);
+  let comun = 0, ta = 0, tb = 0;
+  for (const v of A.values()) ta += v;
+  for (const v of B.values()) tb += v;
+  for (const [k, v] of A) comun += Math.min(v, B.get(k) || 0);
+  return ta + tb ? (2 * comun) / (ta + tb) : 0;
+}
+// Diccionario nombre → FA (lo aprendido + el historial de remisiones guardadas)
+export function armarNombres(alm) {
+  const dic = {};
+  for (const rem of alm?.remisiones || []) for (const r of rem.renglones || []) {
+    const n = normNombre(r.descripcion);
+    if (n && r.codigo && n.length >= 6) dic[n] = r.codigo;
+  }
+  for (const [n, fa] of Object.entries(alm?.equivNombres || {})) if (fa) dic[n] = fa;
+  return dic;
+}
+export function codigoPorNombre(descripcion, nombres) {
+  const n = normNombre(descripcion);
+  if (!n || n.length < 6) return null;
+  if (nombres[n]) return { codigo: nombres[n], nombre: n, parecido: 1 };
+  let mejor = null;
+  for (const [k, fa] of Object.entries(nombres)) {
+    const p = parecido(n, k);
+    if (p >= 0.82 && (!mejor || p > mejor.parecido)) mejor = { codigo: fa, nombre: k, parecido: p };
+  }
+  return mejor;
+}
+// Junta las dos validaciones de un renglón
+export function validarRenglon(r, nombres) {
+  const porNombre = codigoPorNombre(r.descripcion, nombres);
+  const porEan = r.codigo || "";
+  const fn = porNombre?.codigo || "";
+  if (porEan && fn) {
+    if (porEan === fn) return { ...r, validacion: "doble", porNombre: fn };
+    return { ...r, codigo: "", codigoEan: porEan, porNombre: fn, validacion: "conflicto", origen: "⚠️ EAN y nombre no coinciden" };
+  }
+  if (!porEan && fn) return { ...r, codigo: fn, porNombre: fn, validacion: "nombre", origen: r.ean ? "por nombre" : "por nombre (EAN ilegible)" };
+  if (porEan) return { ...r, validacion: "ean" };
+  return { ...r, validacion: "ninguna" };
+}
+
+// Corrige letras que el OCR confunde en números (EAN borroso)
+const aDigitos = (t) => String(t || "").replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/\D/g, "");
+
 export function agruparFilas(palabras) {
   const ws = [...palabras].filter((p) => p.t && p.h > 0).sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2));
   const filas = [];
@@ -69,7 +146,7 @@ const numero = (t) => {
   return Number(s.replace(/,/g, ""));
 };
 
-export function leerPagina(palabras, equivalencias) {
+export function leerPagina(palabras, equivalencias, nombres = {}) {
   const texto = palabras.map((p) => p.t).join(" ");
   const pegado = texto.replace(/\s+/g, "").toUpperCase();
   const traeClaves = palabras.some((p) => /^FA\d{6}/i.test(p.t));
@@ -83,13 +160,24 @@ export function leerPagina(palabras, equivalencias) {
   const filas = agruparFilas(palabras);
   const renglones = [];
   for (const f of filas) {
-    const iEan = f.ws.findIndex((w) => /^7\d{7}$/.test(w.t.replace(/\D/g, "")) && w.t.replace(/\D/g, "").length === 8);
-    if (iEan < 0) continue;
-    const ean = f.ws[iEan].t.replace(/\D/g, "");
-    const clave = (f.ws.find((w) => /^FA\d{5,6}/i.test(w.t)) || {}).t || "";
-    const iClave = f.ws.findIndex((w) => /^FA\d{5,6}/i.test(w.t));
-    const descripcion = f.ws.slice(iClave >= 0 ? iClave + 1 : 0, iEan).map((w) => w.t).join(" ").trim();
-    const despues = f.ws.slice(iEan + 1).filter((w) => !/^pieza$/i.test(w.t));
+    // EAN: 8 dígitos que empiezan con 7 (se corrigen O→0, I/l→1, S→5, B→8 si la hoja salió borrosa)
+    let iEan = f.ws.findIndex((w) => /^7\d{7}$/.test(aDigitos(w.t)) && /\d{5}/.test(w.t));
+    const iClave = f.ws.findIndex((w) => /^FA\d{5,6}/i.test(w.t.replace(/[Oo]/g, "0")));
+    // Sin EAN legible: si el renglón trae la CLAVE de PM (FA080079.10) y la palabra PIEZA, igual es un
+    // renglón del producto (se identifica por el nombre)
+    const iPieza = f.ws.findIndex((w) => /^P[I1l]EZA$/i.test(w.t));
+    if (iEan < 0 && !(iClave >= 0 && iPieza > iClave)) continue;
+    const ean = iEan >= 0 ? aDigitos(f.ws[iEan].t) : "";
+    const clave = iClave >= 0 ? f.ws[iClave].t : "";
+    const finDesc = iEan >= 0 ? iEan : (() => {
+      // sin EAN: la descripción termina en PIEZA, o antes si justo antes viene el EAN mal leído
+      const prev = f.ws[iPieza - 1];
+      const pareceEan = prev && prev.t.length >= 6 && (prev.t.match(/\d/g) || []).length >= 3;
+      return pareceEan && iPieza - 1 > iClave ? iPieza - 1 : iPieza;
+    })();
+    const descripcion = f.ws.slice(iClave >= 0 ? iClave + 1 : 0, finDesc).map((w) => w.t).join(" ").trim();
+    const desdeCant = iEan >= 0 ? iEan + 1 : iPieza + 1;
+    const despues = f.ws.slice(desdeCant).filter((w) => !/^p[i1l]eza$/i.test(w.t));
     let aMano = "";
     const nums = [];
     for (const w of despues) {
@@ -114,17 +202,17 @@ export function leerPagina(palabras, equivalencias) {
       else if (paquetes) { cajetillas = paquetes * 10; revisar = true; }
       else { paquetes = Math.round(p10); revisar = true; }
     }
-    const fa = equivalencias[ean] || (aMano ? aFA(aMano) : "");
-    renglones.push({
+    const fa = (ean && equivalencias[ean]) || (aMano ? aFA(aMano) : "");
+    renglones.push(validarRenglon({
       ean, clave, descripcion, cajetillas, paquetes,
-      codigo: fa, origen: equivalencias[ean] ? "equivalencia" : aMano ? "escrito a mano" : "", revisar,
+      codigo: fa, origen: ean && equivalencias[ean] ? "equivalencia" : aMano ? "escrito a mano" : "", revisar,
       yaEscrito: !!aMano,
       pos: {
         x: nums.length ? nums[0].w.x + nums[0].w.w : null,
         xFin: nums.length > 1 ? nums[nums.length - 1].w.x : null,
         cy: f.cy, h: f.h,
       },
-    });
+    }, nombres));
   }
   const dudosos = renglones.filter((r) => r.revisar || r.paquetes === null);
   if (totalImpreso.paquetes && dudosos.length === 1) {
@@ -214,6 +302,16 @@ ctx.fillText(texto, x, r.pos.cy);
   return c.toDataURL("image/jpeg", 0.85);
 }
 
+function resumenValidacion(paginas) {
+  const rs = paginas.filter((p) => p.esRemision).flatMap((p) => p.renglones);
+  const c = (v) => rs.filter((r) => r.validacion === v).length;
+  const partes = [];
+  if (c("doble")) partes.push(`✅ ${c("doble")} con doble validación`);
+  if (c("nombre")) partes.push(`🔤 ${c("nombre")} por nombre`);
+  if (c("conflicto")) partes.push(`⚠️ ${c("conflicto")} donde EAN y nombre no coinciden`);
+  return partes.length ? " · " + partes.join(" · ") : "";
+}
+
 async function ocr(url) {
   const { data: s } = await supabase.auth.getSession();
   const token = s?.session?.access_token;
@@ -230,6 +328,7 @@ async function ocr(url) {
 
 export default function RemisionesView({ alm, persistFresco, puedeEditar, quien, fechaDoc, S }) {
   const [equiv, setEquiv] = useState({ ...EQUIVALENCIAS_BASE, ...(alm.equivalencias || {}) });
+  const [nombres, setNombres] = useState(() => armarNombres(alm));
   const [paginas, setPaginas] = useState([]);
   const [estado, setEstado] = useState("");
   const [trabajando, setTrabajando] = useState(false);
@@ -240,6 +339,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
   const camaraInputRef = useRef(null);
 
   useEffect(() => { setEquiv((e) => ({ ...EQUIVALENCIAS_BASE, ...(alm.equivalencias || {}), ...e })); }, [alm.equivalencias]);
+  useEffect(() => { setNombres((n) => ({ ...armarNombres(alm), ...n })); }, [alm.equivNombres, alm.remisiones]);
 
   async function procesarFotosCamara() {
     if (!fotosCamara.length) return;
@@ -254,7 +354,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
           n++;
           setEstado(`Leyendo página ${n}…`);
           const palabras = await ocr(p.url);
-          const info = leerPagina(palabras, equiv);
+          const info = leerPagina(palabras, equiv, nombres);
           nuevas.push({ ...p, ...info, nombre: file.name || `camara-${n}.jpg` });
         }
       }
@@ -267,7 +367,8 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
       const sinCod = rem.reduce((s, p) => s + p.renglones.filter((r) => !r.codigo).length, 0);
       setEstado(`✅ ${nuevas.length} páginas desde la cámara: ${rem.length} remisiones con ${rem.reduce((s, p) => s + p.renglones.length, 0)} renglones`
         + (nuevas.length - rem.length ? ` · ${nuevas.length - rem.length} otros documentos` : "")
-        + (sinCod ? ` · ⚠️ ${sinCod} sin código` : ""));
+        + (sinCod ? ` · ⚠️ ${sinCod} sin código o en conflicto` : "")
+        + resumenValidacion(nuevas));
       setFotosCamara([]);
       setModoCamara(false);
     } catch (err) {
@@ -300,7 +401,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
           n++;
           setEstado(`Leyendo página ${n}…`);
           const palabras = await ocr(p.url);
-          const info = leerPagina(palabras, equiv);
+          const info = leerPagina(palabras, equiv, nombres);
           nuevas.push({ ...p, ...info, nombre: f.name });
         }
       }
@@ -313,7 +414,8 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
       const sinCod = rem.reduce((s, p) => s + p.renglones.filter((r) => !r.codigo).length, 0);
       setEstado(`✅ ${nuevas.length} páginas leídas: ${rem.length} remisiones con ${rem.reduce((s, p) => s + p.renglones.length, 0)} renglones`
         + (nuevas.length - rem.length ? ` · ${nuevas.length - rem.length} facturas u otras (sin marcar)` : "")
-        + (sinCod ? ` · ⚠️ ${sinCod} sin código: escríbelo abajo` : ""));
+        + (sinCod ? ` · ⚠️ ${sinCod} sin código o en conflicto: revísalos abajo` : "")
+        + resumenValidacion(nuevas));
     } catch (err) {
       setEstado("❌ " + (err?.message || err));
       if (nuevas.length) setPaginas(nuevas);
@@ -322,12 +424,20 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
     }
   }
 
+  // Corregir / elegir el código de un renglón: se aprende por EAN y por nombre
   async function cambiarCodigo(ip, ir, valor) {
     const fa = valor ? aFA(valor) : "";
-    const ean = paginas[ip].renglones[ir].ean;
-    setEquiv((q) => ({ ...q, [ean]: fa }));
-    const copia = paginas.map((p) => ({ ...p, renglones: p.renglones.map((r) => (r.ean === ean ? { ...r, codigo: fa, origen: "capturado" } : r)) }));
-    for (const p of copia) if (p.esRemision && p.renglones.some((r) => r.ean === ean)) p.marcada = await marcarPagina(p);
+    const base = paginas[ip].renglones[ir];
+    const ean = base.ean;
+    const nom = normNombre(base.descripcion);
+    if (ean) setEquiv((q) => ({ ...q, [ean]: fa }));
+    if (nom && nom.length >= 6) setNombres((q) => ({ ...q, [nom]: fa }));
+    const mismo = (r) => (ean && r.ean === ean) || (nom && normNombre(r.descripcion) === nom);
+    const copia = paginas.map((p) => ({
+      ...p,
+      renglones: p.renglones.map((r) => (mismo(r) ? { ...r, codigo: fa, origen: "capturado", validacion: "capturado", codigoEan: undefined } : r)),
+    }));
+    for (const p of copia) if (p.esRemision && p.renglones.some(mismo)) p.marcada = await marcarPagina(p);
     setPaginas(copia);
   }
 
@@ -337,6 +447,12 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
     setGuardando(true);
     try {
       const nuevasEq = Object.fromEntries(Object.entries(equiv).filter(([k, v]) => v && EQUIVALENCIAS_BASE[k] !== v));
+      // nombre → FA de los renglones con código (sin los que quedaron en conflicto)
+      const nuevosNombres = {};
+      for (const p of paginas) if (p.esRemision) for (const r of p.renglones) {
+        const n = normNombre(r.descripcion);
+        if (n && n.length >= 6 && r.codigo && r.validacion !== "conflicto") nuevosNombres[n] = r.codigo;
+      }
       const registro = paginas.filter((p) => p.esRemision).map((p) => ({
         folio: p.folio, fecha: p.fecha,
         renglones: p.renglones.map(({ ean, clave, descripcion, cajetillas, paquetes, codigo }) => ({ ean, clave, descripcion, cajetillas, paquetes, codigo })),
@@ -348,11 +464,12 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
           almacen: {
             ...a,
             equivalencias: { ...(a.equivalencias || {}), ...nuevasEq },
+            equivNombres: { ...(a.equivNombres || {}), ...nuevosNombres },
             remisiones: [...registro.map((r) => ({ ...r, cargada: new Date().toISOString(), quien })), ...previas].slice(0, 200),
           },
         };
       });
-      setEstado("✅ Guardado: equivalencias y remisiones.");
+      setEstado("✅ Guardado: equivalencias (EAN y nombre) y remisiones.");
     } catch (err) {
       setEstado("❌ No se pudo guardar: " + (err?.message || err));
     } finally {
@@ -404,7 +521,8 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
         <div style={S.cardTitulo}>🧾 Remisiones con código</div>
         <div style={S.nota}>
           Sube las fotos de la remisión (o el PDF escaneado) o escanea directamente con la cámara del celular.
-          La app lee cada renglón por su EAN, le pone el <b>código FA</b> y lo escribe en la foto.
+          La app lee cada renglón por su EAN <b>y por su nombre</b> (doble validación), le pone el <b>código FA</b> y lo escribe en la foto.
+          Si la hoja sale borrosa y el EAN no se lee, usa el nombre; si no coinciden, te pide elegir.
         </div>
         <div style={S.botones}>
           {puedeEditar && (
@@ -477,6 +595,7 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
                   <th style={S.thR}>Cajetillas</th>
                   <th style={S.thR}>Paquetes</th>
                   <th style={S.thR}>Código FA</th>
+                  <th style={S.th}>Validación</th>
                 </tr>
               </thead>
               <tbody>
@@ -494,6 +613,22 @@ export default function RemisionesView({ alm, persistFresco, puedeEditar, quien,
                         onBlur={(e) => { if (aFA(e.target.value) !== r.codigo) cambiarCodigo(ip, ir, e.target.value); }}
                       />
                       <div style={{ fontSize: 10, color: "#64748b" }}>{r.origen}</div>
+                    </td>
+                    <td style={{ ...S.td, fontSize: 11.5 }}>
+                      {r.validacion === "doble" && <span style={{ color: "#4ade80" }}>✅ EAN + nombre</span>}
+                      {r.validacion === "nombre" && <span style={{ color: "#38bdf8" }}>🔤 por nombre{r.ean ? "" : " (EAN ilegible)"}</span>}
+                      {r.validacion === "ean" && <span style={{ color: "#cbd5e1" }}>🔢 solo EAN <span style={{ color: "#64748b" }}>(nombre nuevo: se aprende al guardar)</span></span>}
+                      {r.validacion === "capturado" && <span style={{ color: "#cbd5e1" }}>✍️ capturado</span>}
+                      {r.validacion === "ninguna" && <span style={{ color: "#f59e0b" }}>⚠️ sin código: escríbelo</span>}
+                      {r.validacion === "conflicto" && (
+                        <div style={{ color: "#f87171" }}>
+                          ⚠️ No coinciden. Elige:
+                          <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                            <button style={{ ...S.btnSec, padding: "3px 8px", fontSize: 11 }} disabled={!puedeEditar} onClick={() => cambiarCodigo(ip, ir, r.codigoEan)}>EAN → {codigoCorto(r.codigoEan)}</button>
+                            <button style={{ ...S.btnSec, padding: "3px 8px", fontSize: 11 }} disabled={!puedeEditar} onClick={() => cambiarCodigo(ip, ir, r.porNombre)}>Nombre → {codigoCorto(r.porNombre)}</button>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )))}
