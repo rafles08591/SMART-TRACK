@@ -1111,7 +1111,7 @@ export default function NominaView({ data, persistFresco, rol, puesto, identidad
   }
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+    <div className="contenedor-app" style={{ maxWidth: 1100, margin: "0 auto" }}>
       <style>{`
         .nm-card { background:${T.card}; border:1px solid ${T.border}; border-radius:14px; }
         .nm-mono { font-family:'IBM Plex Mono', monospace; }
