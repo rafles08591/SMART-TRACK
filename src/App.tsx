@@ -3976,13 +3976,13 @@ export default function App() {
       )}
 
       {role === "liquidacion" && (
-        <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
+        <div className="contenedor-app" style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
           <TabsLiquidacion data={data} persist={persist} persistFresco={persistParcialFresco} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
 
       {role === "merch" && (
-        <div style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
+        <div className="contenedor-app" style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
           <TabsMerch data={data} persist={persist} persistFresco={persistParcialFresco} persistRevisionUnidad={persistRevisionUnidad} persistConfigUnidades={persistConfigUnidades} staffUsername={staffUsername} onLogout={() => { setRole(null); setPuesto(null); setStaffUsername(null); }} />
         </div>
       )}
