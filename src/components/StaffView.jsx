@@ -27,6 +27,7 @@ import MesaControlView from "./MesaControlView";
 import CuponeraView from "./CuponeraView";
 import TiemposView from "./TiemposView";
 import UnidadesView, { unidadYaRegistradaHoy, CLO_PVR, CLO_TEPIC } from "./UnidadesView";
+import KmView from "./KmView";
 import CreditosView from "./CreditosView";
 import RutasView from "./RutasView";
 import ActividadesView from "./ActividadesView";
@@ -480,7 +481,7 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
                   ? OBJETIVO_TABS.filter((t) => ["dia", "mesa", "cuponera", "tiempos", "unidades", "tepic", "avisos", "reloj_checador", "mi_fondo", "scorecard", "mural_campeones", "almacen", "pedidos_otc"].includes(t.key))
                   : esSupervisor1
                   ? OBJETIVO_TABS.filter((t) => t.key !== "actividades_semana" && t.key !== "actividades_mes" && t.key !== "cotizador" && t.key !== "creditos" && t.key !== "tepic" && t.key !== "actividad" && t.key !== "km" && t.key !== "alta_cliente" && t.key !== "reset_pin" && t.key !== "permisos" && t.key !== "promociones_coach" && t.key !== "whatsapp_bot" && t.key !== "usuarios")
-                  : OBJETIVO_TABS.filter((t) => t.key !== "km" && t.key !== "alta_cliente")
+                  : OBJETIVO_TABS.filter((t) => (t.key !== "km" || puesto === "gerente") && t.key !== "alta_cliente")
               }
               estadoTabs={estadoTabsActividades}
               conteos={{ pedidos_otc: pedidosOtcNuevos }}
@@ -806,9 +807,13 @@ export default function StaffView({ data, persist, persistFresco, persistCargas,
               onActivarCarga={onActivarCarga} onEliminarCarga={onEliminarCarga}
             />
           ) : objTab === "km" ? (
-            <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
-              KM es un registro individual de cada ruta — entra a la pestaña de la ruta específica que quieras revisar para verlo.
-            </div>
+            puesto === "gerente" ? (
+              <KmView data={data} persistRevisionUnidad={persistRevisionUnidad} rutaPropia={null} identidad={revisorNombre} modoGerente />
+            ) : (
+              <div className="card" style={{ padding: 30, textAlign: "center", color: "#9AA7BD" }}>
+                KM es un registro individual de cada ruta — entra a la pestaña de la ruta específica que quieras revisar para verlo.
+              </div>
+            )
           ) : objTab === "mi_fondo" ? (
             <PanelFondoPersonalizado identidad={staffUsername} url={fondoUrl} setUrl={setFondoUrl} />
           ) : objTab === "reset_pin" ? (
