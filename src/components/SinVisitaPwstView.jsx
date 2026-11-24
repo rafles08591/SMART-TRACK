@@ -32,12 +32,19 @@ function lunesDe(iso) {
 const fechaCorta = (iso) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const horaCorta = (ts) => (ts ? new Date(ts).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "numeric", minute: "2-digit" }) : "");
 const nombreRuta = (r) => NOMBRES[`RUTA ${r}`] || NOMBRES[r] || "";
+const masDias = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]; // 1 … 6 (PM01 … PM06)
 
 export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   const esVendedor = rol === "vendedor";
   const hoy = hoyMX();
   const lunes = lunesDe(hoy);
+  // Día que se está consultando (por defecto hoy). Se puede ir a días pasados para ver cómo quedaron.
+  const [dia, setDia] = useState(hoy);
+  const esHoy = dia === hoy;
+  const semanaIni = lunesDe(dia);
+  const semanaFin = masDias(semanaIni, 6);
+  const irA = (iso) => { if (iso && iso <= hoy) { setDia(iso); setAbierta(esVendedor ? rutaPropia : null); } };
   const esSabado = new Date(`${hoy}T12:00:00Z`).getUTCDay() === 6;
 
   const [filas, setFilas] = useState(null);
@@ -55,7 +62,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
 
   async function cargar() {
     try {
-      let q = supabase.from("sin_visita_pwst").select("*").gte("fecha", lunes).order("fecha", { ascending: false });
+      let q = supabase.from("sin_visita_pwst").select("*").gte("fecha", semanaIni).lte("fecha", semanaFin).order("fecha", { ascending: false });
       if (esVendedor && rutaPropia) q = q.eq("ruta", rutaPropia);
       const { data, error: e } = await q;
       if (e) throw e;
@@ -80,13 +87,14 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
     document.addEventListener("visibilitychange", alVolver);
     return () => { clearTimeout(t); supabase.removeChannel(canal); document.removeEventListener("visibilitychange", alVolver); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lunes, rutaPropia]);
+  }, [semanaIni, rutaPropia]);
 
-  // Lo más reciente de cada tipo: "dia" = el de HOY; "semana" = el último de esta semana
+  // Lo más reciente de cada tipo: "dia" = el último corte del DÍA consultado (hoy u otro);
+  // "semana" = el último de la semana de ese día
   const vista = useMemo(() => {
-    const lista = (filas || []).filter((f) => f.tipo === pestana && (pestana === "semana" || f.fecha === hoy));
-    // Objetivo de visitas de hoy (7:30 am) por ruta → para "visitó X de N" en la pestaña Hoy
-    const objetivos = Object.fromEntries((filas || []).filter((f) => f.tipo === "objetivo" && f.fecha === hoy).map((f) => [f.ruta, f.total || 0]));
+    const lista = (filas || []).filter((f) => f.tipo === pestana && (pestana === "semana" || f.fecha === dia));
+    // Objetivo de visitas de ese día (7:30 am) por ruta → para "visitó X de N"
+    const objetivos = Object.fromEntries((filas || []).filter((f) => f.tipo === "objetivo" && f.fecha === dia).map((f) => [f.ruta, f.total || 0]));
     // Lo último que se bajó (cada rango pedido es un "lote": misma fecha + desde + hasta)
     const ultimo = [...lista].sort((a, b) => String(b.actualizado_en).localeCompare(String(a.actualizado_en)))[0];
     const fecha = ultimo?.fecha || null;
@@ -96,7 +104,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
     const total = rutas.reduce((s, f) => s + (f.total || 0), 0);
     const objTotal = pestana === "dia" ? rutas.reduce((s, f) => s + (objetivos[f.ruta] || 0), 0) : 0;
     return { fecha, rutas, actualizado, total, desde: rutas[0]?.desde, hasta: rutas[0]?.hasta, por: rutas[0]?.actualizado_por, objetivos, objTotal };
-  }, [filas, pestana, hoy]);
+  }, [filas, pestana, dia]);
 
   async function pedirActualizacion() {
     setPidiendo(true);
@@ -183,10 +191,24 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
           </div>
         )}
         {aviso && <div style={{ fontSize: 12.5, color: aviso.startsWith("⚠️") ? T.bad : T.ok, marginTop: 10 }}>{aviso}</div>}
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, flexWrap: "wrap", fontSize: 13, color: T.ink }}>
+          <span style={{ fontWeight: 700, color: T.muted, fontSize: 12 }}>Ver el día:</span>
+          <button onClick={() => irA(masDias(dia, -1))} title="Día anterior"
+            style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${T.border}`, background: "transparent", color: T.ink, cursor: "pointer", fontWeight: 800 }}>‹</button>
+          <input type="date" value={dia} max={hoy} onChange={(e) => irA(e.target.value)}
+            style={{ background: T.card, color: T.ink, border: `1px solid ${T.border}`, borderRadius: 8, padding: "5px 8px", colorScheme: "dark" }} />
+          <button onClick={() => irA(masDias(dia, 1))} disabled={esHoy} title="Día siguiente"
+            style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${T.border}`, background: "transparent", color: esHoy ? T.border : T.ink, cursor: esHoy ? "default" : "pointer", fontWeight: 800 }}>›</button>
+          {!esHoy && (
+            <button onClick={() => irA(hoy)}
+              style={{ padding: "5px 10px", borderRadius: 8, border: `1px solid ${T.primary}`, background: "rgba(242,177,52,0.14)", color: T.primary, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>Volver a hoy</button>
+          )}
+          <span style={{ fontSize: 12, color: T.muted }}>{fechaCorta(dia)}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           {btnPestana("objetivo", "🎯 Objetivo")}
-          {btnPestana("dia", "Hoy")}
-          {btnPestana("semana", "Semana / rango")}
+          {btnPestana("dia", esHoy ? "Hoy" : "Ese día")}
+          {btnPestana("semana", esHoy ? "Semana / rango" : "Su semana")}
         </div>
       </div>
 
@@ -195,12 +217,14 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
 
       {filas && !vista.fecha && (
         <div className="card" style={{ padding: 16, color: T.muted, fontSize: 13 }}>
-          {pestana === "objetivo"
-            ? "Todavía no hay objetivo de hoy. El robot lo baja de lunes a sábado a las 7:30 am (todos los clientes de la ruta del día)."
-            : pestana === "dia"
-              ? "Todavía no hay datos de hoy. El robot los baja a las 2, 5 y 7 pm (lunes a viernes)."
-              : "Todavía no hay datos de la semana. El robot los baja el sábado desde las 3 pm."}
-          {!esVendedor && " También puedes pedirlos ahora con el botón de arriba."}
+          {!esHoy
+            ? `No hay ${pestana === "objetivo" ? "objetivo" : pestana === "dia" ? "corte de sin visita" : "datos de la semana"} guardado del ${fechaCorta(dia)}.`
+            : pestana === "objetivo"
+              ? "Todavía no hay objetivo de hoy. El robot lo baja de lunes a sábado a las 7:30 am (todos los clientes de la ruta del día)."
+              : pestana === "dia"
+                ? "Todavía no hay datos de hoy. El robot los baja a las 2, 5 y 7 pm (lunes a viernes)."
+                : "Todavía no hay datos de la semana. El robot los baja el sábado desde las 3 pm."}
+          {!esVendedor && esHoy && " También puedes pedirlos ahora con el botón de arriba."}
         </div>
       )}
 
@@ -208,7 +232,7 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
         <>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div className="card" style={{ padding: 14, flex: "1 1 160px" }}>
-              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "objetivo" ? "Objetivo de visitas de hoy" : pestana === "dia" ? "Sin visita hoy" : "Sin ninguna visita en el periodo"}</div>
+              <div style={{ fontSize: 11, color: T.muted }}>{pestana === "objetivo" ? `Objetivo de visitas ${esHoy ? "de hoy" : `del ${fechaCorta(dia)}`}` : pestana === "dia" ? (esHoy ? "Sin visita hoy" : `Quedaron sin visita el ${fechaCorta(dia)}`) : "Sin ninguna visita en el periodo"}</div>
               <div className="mono display" style={{ fontSize: 24, color: pestana === "objetivo" ? T.primary : vista.total ? T.bad : T.ok }}>{vista.total}</div>
               {pestana === "dia" && vista.objTotal > 0 && (
                 <div style={{ fontSize: 11.5, color: T.muted }}>visitados {Math.max(vista.objTotal - vista.total, 0)} de {vista.objTotal} ({Math.round((Math.max(vista.objTotal - vista.total, 0) / vista.objTotal) * 100)}%)</div>
