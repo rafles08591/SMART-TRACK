@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Gauge, Check } from "lucide-react";
 
 function todayISO() {
@@ -50,7 +50,20 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
     .filter((r) => r.operativo?.kilometraje)
     .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
 
+  // Último km registrado de ESA unidad (cualquier día, de quien sea): se muestra y se deja escrito en la
+  // casilla, seleccionado, para que solo escribas el nuevo encima.
+  const ultimoKm = (data.revisionesUnidades || [])
+    .filter((r) => r.unidadId === unidadId && r.operativo?.kilometraje)
+    .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0] || null;
+  const ultimoKmNum = ultimoKm ? Number(String(ultimoKm.operativo.kilometraje).replace(/[^\d.]/g, "")) : null;
+
   const [km, setKm] = useState("");
+  const [confirmarMenor, setConfirmarMenor] = useState(false);
+  useEffect(() => {
+    setKm(ultimoKmNum ? String(ultimoKmNum) : "");
+    setConfirmarMenor(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unidadId, ultimoKm?.id]);
   const [paquetes, setPaquetes] = useState(""); // va al Kardex de rutas y equipamiento
   const ultimaConPaq = revisionesHoy
     .filter((r) => r.operativo?.paquetes != null && r.operativo.paquetes !== "")
@@ -61,6 +74,12 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
 
   async function guardar() {
     const valor = String(km).trim();
+    // Kilometraje menor que el último: casi siempre es un dedazo → pide confirmar con otro clic
+    if (valor && ultimoKmNum && Number(valor) < ultimoKmNum && !confirmarMenor) {
+      setError(`Ojo: ${Number(valor).toLocaleString("es-MX")} km es MENOR que el último registrado (${ultimoKmNum.toLocaleString("es-MX")} km). Si está bien, dale Guardar otra vez.`);
+      setConfirmarMenor(true);
+      return;
+    }
     const paq = String(paquetes).trim();
     if (!valor && !paq) {
       setError("Escribe el kilometraje y la cantidad de paquetes.");
@@ -91,7 +110,8 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
         operativo: { ...(valor ? { kilometraje: valor } : {}), ...(paq ? { paquetes: paq } : {}) },
       });
       setEnviado(true);
-      setKm("");
+      setConfirmarMenor(false);
+      setKm(valor || (ultimoKmNum ? String(ultimoKmNum) : ""));
       setPaquetes("");
     } catch (err) {
       console.error("Error guardando km:", err);
@@ -126,6 +146,19 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
         </div>
       )}
 
+      {ultimoKm && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: "#9AA7BD", textAlign: "left" }}>
+            Último km registrado{unidad?.placas ? ` de ${unidad.placas}` : ""}
+            <div style={{ fontSize: 11, marginTop: 2 }}>
+              {new Date(ultimoKm.fecha).toLocaleString("es-MX", { timeZone: "America/Mexico_City", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+              {ultimoKm.capturadoPor ? ` · ${ultimoKm.capturadoPor}` : ""}
+            </div>
+          </div>
+          <div className="mono" style={{ fontSize: 18, color: "#F2B134", fontWeight: 700 }}>{(ultimoKmNum || 0).toLocaleString("es-MX")} km</div>
+        </div>
+      )}
+
       {(ultimaConKm || ultimaConPaq) && (
         <div className="card" style={{ padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div style={{ fontSize: 12, color: "#9AA7BD" }}>Ya capturado hoy</div>
@@ -141,10 +174,12 @@ export default function KmView({ data, persistRevisionUnidad, rutaPropia, identi
           <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#9AA7BD", flex: "1 1 140px" }}>
             Kilometraje actual
             <input
-              type="number"
+              type="text"
               inputMode="numeric"
               value={km}
-              onChange={(e) => setKm(e.target.value)}
+              onChange={(e) => { setKm(e.target.value.replace(/[^\d]/g, "")); setConfirmarMenor(false); }}
+              onFocus={(e) => { const el = e.target; el.select(); setTimeout(() => { try { el.select(); } catch { /* */ } }, 0); }}
+              onMouseUp={(e) => e.preventDefault()}
               onKeyDown={(e) => { if (e.key === "Enter") guardar(); }}
               placeholder="Ej. 42150"
               style={{ width: "100%", boxSizing: "border-box" }}
