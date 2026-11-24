@@ -13,7 +13,8 @@
 ===================================================================== */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { MapPin, RefreshCw, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { MapPin, RefreshCw, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 import { NOMBRES } from "../constants";
 import { supabase } from "../supabaseClient";
 
@@ -105,6 +106,50 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
     const objTotal = pestana === "dia" ? rutas.reduce((s, f) => s + (objetivos[f.ruta] || 0), 0) : 0;
     return { fecha, rutas, actualizado, total, desde: rutas[0]?.desde, hasta: rutas[0]?.hasta, por: rutas[0]?.actualizado_por, objetivos, objTotal };
   }, [filas, pestana, dia]);
+
+  // Excel con lo que se está viendo (pestaña + día): hoja "Resumen" por ruta y hoja "Clientes"
+  function descargarExcel() {
+    if (!vista.rutas.length) return;
+    const periodo = vista.desde && vista.desde !== vista.hasta ? `${vista.desde} al ${vista.hasta}` : vista.fecha;
+    const tipoTxt = pestana === "objetivo" ? "Objetivo de visitas" : pestana === "dia" ? "Sin visita del día" : "Sin visita de la semana";
+    const resumen = vista.rutas.map((f) => {
+      const n = Array.isArray(f.clientes) ? f.clientes.length : f.total || 0;
+      const obj = vista.objetivos[f.ruta];
+      return {
+        Ruta: f.ruta,
+        Vendedor: nombreRuta(f.ruta),
+        [pestana === "objetivo" ? "Clientes objetivo" : "Clientes sin visita"]: n,
+        ...(pestana === "dia" && obj ? { Objetivo: obj, Visitados: Math.max(obj - n, 0), "% visitado": obj ? Math.round((Math.max(obj - n, 0) / obj) * 100) : "" } : {}),
+        Periodo: periodo,
+        Actualizado: f.actualizado_en ? new Date(f.actualizado_en).toLocaleString("es-MX", { timeZone: "America/Mexico_City" }) : "",
+      };
+    });
+    const clientes = vista.rutas.flatMap((f) => (Array.isArray(f.clientes) ? f.clientes : []).map((c) => ({
+      Ruta: f.ruta,
+      Vendedor: nombreRuta(f.ruta),
+      Cliente: c.cliente || "",
+      Nombre: c.nombre || "",
+      Dirección: c.direccion || "",
+      Colonia: c.colonia || "",
+      Localidad: c.localidad || "",
+      Municipio: c.municipio || "",
+      Estado: c.estado || "",
+      Potencial: c.potencial || "",
+      Periodo: periodo,
+    })));
+    const wb = XLSX.utils.book_new();
+    const totalClientes = vista.rutas.reduce((s, f) => s + (Array.isArray(f.clientes) ? f.clientes.length : f.total || 0), 0);
+    const hR = XLSX.utils.json_to_sheet(resumen);
+    XLSX.utils.sheet_add_aoa(hR, [[], ["Total", "", totalClientes], [tipoTxt, periodo]], { origin: -1 });
+    hR["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 24 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, hR, "Resumen");
+    const hC = XLSX.utils.json_to_sheet(clientes.length ? clientes : [{ Ruta: "", Nombre: "Sin clientes pendientes" }]);
+    hC["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 14 }, { wch: 34 }, { wch: 34 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 10 }, { wch: 24 }];
+    hC["!autofilter"] = { ref: `A1:K${Math.max(clientes.length, 1) + 1}` };
+    XLSX.utils.book_append_sheet(wb, hC, pestana === "objetivo" ? "Clientes objetivo" : "Clientes sin visita");
+    const nombre = `${pestana === "objetivo" ? "objetivo_visitas" : "clientes_sin_visita"}_${(vista.desde && vista.desde !== vista.hasta ? `${vista.desde}_al_${vista.hasta}` : vista.fecha)}${esVendedor && rutaPropia ? `_${rutaPropia}` : ""}.xlsx`;
+    XLSX.writeFile(wb, nombre);
+  }
 
   async function pedirActualizacion() {
     setPidiendo(true);
@@ -247,6 +292,10 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
                 Actualizado {horaCorta(vista.actualizado)}{vista.por && vista.por !== "robot" ? ` · pedido por ${vista.por.replace(/^staff: /, "")}` : " · robot"}
               </div>
             </div>
+            <button className="btn-ghost" onClick={descargarExcel}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, flex: "0 1 190px", padding: "10px 14px", border: `1px solid ${T.ok}`, borderRadius: 12, color: T.ok, background: "rgba(61,220,151,0.08)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>
+              <Download size={15} /> Descargar Excel
+            </button>
           </div>
 
           {vista.rutas.map((f) => {
