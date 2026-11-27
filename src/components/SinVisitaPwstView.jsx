@@ -93,13 +93,20 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
   // Lo más reciente de cada tipo: "dia" = el último corte del DÍA consultado (hoy u otro);
   // "semana" = el último de la semana de ese día
   const vista = useMemo(() => {
-    const lista = (filas || []).filter((f) => f.tipo === pestana && (pestana === "semana" || f.fecha === dia));
+    // Un lote de UN solo día (desde = hasta) es "del día" aunque el robot lo haya guardado como "semana"
+    // (pasa cuando el staff pide un día que no es hoy, p. ej. "Jueves" estando en viernes).
+    const unDia = (f) => (f.desde && f.hasta ? f.desde === f.hasta : f.tipo === "dia");
+    const lista = (filas || []).filter((f) => {
+      if (pestana === "objetivo") return f.tipo === "objetivo" && f.fecha === dia;
+      if (pestana === "dia") return (f.tipo === "dia" || (f.tipo === "semana" && unDia(f))) && f.fecha === dia;
+      return f.tipo === "semana" && !unDia(f); // semana / rango: solo lotes de varios días
+    });
     // Objetivo de visitas de ese día (7:30 am) por ruta → para "visitó X de N"
     const objetivos = Object.fromEntries((filas || []).filter((f) => f.tipo === "objetivo" && f.fecha === dia).map((f) => [f.ruta, f.total || 0]));
     // Lo último que se bajó (cada rango pedido es un "lote": misma fecha + desde + hasta)
     const ultimo = [...lista].sort((a, b) => String(b.actualizado_en).localeCompare(String(a.actualizado_en)))[0];
     const fecha = ultimo?.fecha || null;
-    const rutas = lista.filter((f) => ultimo && f.fecha === ultimo.fecha && f.desde === ultimo.desde && f.hasta === ultimo.hasta)
+    const rutas = lista.filter((f) => ultimo && f.tipo === ultimo.tipo && f.fecha === ultimo.fecha && f.desde === ultimo.desde && f.hasta === ultimo.hasta)
       .sort((a, b) => (b.total || 0) - (a.total || 0) || a.ruta.localeCompare(b.ruta));
     const actualizado = rutas.map((f) => f.actualizado_en).filter(Boolean).sort().pop() || null;
     const total = rutas.reduce((s, f) => s + (f.total || 0), 0);
@@ -163,7 +170,10 @@ export default function SinVisitaPwstView({ rol, puesto, rutaPropia }) {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) throw new Error(d.error || `Error ${r.status}`);
-      setPestana(desdeDia === hastaDia && desdeDia === diaHoy ? "dia" : "semana");
+      // Llevar la vista al día pedido (el "hasta" de esta semana, nunca después de hoy)
+      const fechaPedida = masDias(lunes, hastaDia - 1);
+      setDia(fechaPedida > hoy ? hoy : fechaPedida);
+      setPestana(desdeDia === hastaDia ? "dia" : "semana");
       setAviso(d.motivo || (d.enCola
         ? "🤖 El robot está terminando otra carga; en cuanto acabe baja las visitas y lo manda al grupo (unos 5–8 min)."
         : (enviarWhats ? "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí y llega al grupo." : "🤖 Listo, el robot ya está entrando a PowerStreet. En unos 3–5 min se actualiza aquí (sin mandar WhatsApp).")));
